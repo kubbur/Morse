@@ -2,7 +2,7 @@
 
 **Morse Paddle.app** is the native companion for a dual-lever paddle connected through a passive CTIA TRRS headset adapter. It is separate from the **Morse.app** trainer in [`../desktop/`](../desktop/).
 
-**[Download Morse Paddle 1.4.0](https://github.com/kubbur/Morse/releases/download/v1.4.0/Morse-Paddle-Mac.zip) · [User and integration guide](Integration.md) · [Assembly guide](../docs/assembly/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)**
+**[Download Morse Paddle 1.4.0](https://github.com/kubbur/Morse/releases/latest/download/Morse-Paddle-Mac.zip) · [Latest release — both apps and PDF](https://github.com/kubbur/Morse/releases/latest) · [User and integration guide](Integration.md) · [Assembly guide (PDF)](https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)**
 
 ## Install and connect
 
