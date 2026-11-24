@@ -1,19 +1,30 @@
-Morse for Mac
+Morse for Mac 1.1.0
 
-1. Extract the zip and move Morse.app to Applications.
-2. Open Morse. No separate Node.js or Docker installation is needed.
-3. To use a paddle, open Morse Paddle on the same Mac and link:
-   http://127.0.0.1:37473
-   Then connect from the trainer's Send tab.
+Requires macOS 13 or later. Use the arm64 ZIP for Apple Silicon or the x64 ZIP
+for Intel. Unzip the download and move Morse.app to Applications.
 
-Practice and progress work offline. The desktop app has its own save.
-Use Saved progress > Export / Import to move progress from the website.
-Public leaderboards and website device pairing are not connected to this app.
+When upgrading, export a copy of your progress from the previous version and
+quit Morse and Morse Paddle. The release opens the existing Morse profile on
+this Mac. Development builds used a separate profile. To bring across a
+development save, export it there and preview the import under Saved progress.
 
-Ad-hoc test builds are not Apple Developer ID notarized. Signing status is
-listed in darwin-build.json alongside the download. macOS may require approval
-in System Settings > Privacy & Security > Open Anyway for an ad-hoc build.
-Do not disable Gatekeeper or other system security protections.
+Open Settings → Input and choose the adapter you plugged in.
 
-On a Mac with a Developer ID certificate, the source package supports signing
-and notarization for a public release. See README.md in the source package.
+• Audio converter (3.5 mm) uses the microphone input. Allow Microphone access
+  and release both paddles during calibration. Choose your sidetone output.
+• VBand USB adapter uses left Control for dit and right Control for dah.
+  Select Swap dot and dash contacts if your paddle is wired the other way.
+
+Send → Input and speed controls speed, spacing, pitch and volume for both
+Send and Listen. Your sending shows the target outline and your marks on the
+same scale. To type into another app, enable Write in the focused app in
+Settings, allow Accessibility access and release both paddles after switching
+to the text field.
+
+Progress is saved on this Mac. Use Saved progress → Export progress to keep a
+copy elsewhere. This release has no connection to the live leaderboard or
+private sync service. Settings → Updates includes release notes and an update
+check. Automatic updates are off by default.
+
+This download is signed ad hoc and has not been notarized by Apple.
+If macOS asks for approval, see https://support.apple.com/en-us/102445.

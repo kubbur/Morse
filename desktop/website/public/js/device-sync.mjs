@@ -22,7 +22,7 @@ export class DeviceSync {
   }
   save(value) {
     try { if (value) this.storage.setItem(SYNC_KEY, JSON.stringify(value)); else this.storage.removeItem(SYNC_KEY); }
-    catch { throw new Error('Sync paused: browser storage is full. Export a backup before continuing.'); }
+    catch { throw new Error('Private sync paused because the save could not be written. Use Export progress to keep a copy.'); }
   }
   report(changes) { Object.assign(this.status, changes); this.onStatus(this.status); }
   async request(action, body = {}) {
@@ -56,6 +56,13 @@ export class DeviceSync {
   replace(reason = 'reset') {
     const meta = this.meta();
     if (!meta) return;
+    // Coalesce local resets that have not yet been sent. An in-flight request
+    // already has its own immutable sequence and snapshot.
+    if (meta.replacement && meta.replacement !== meta.pending?.replacement && reason !== 'import') {
+      const previous = meta.replacementReason;
+      if (previous === 'import' || previous === 'reset') reason = previous;
+      else if (previous && previous !== reason) reason = 'reset';
+    }
     meta.replacement = uuid();
     meta.replacementReason = reason;
     meta.force = false;
@@ -122,7 +129,7 @@ export class DeviceSync {
       if (result.erased) { this.receive(result, meta); return; }
       // A reset/import may happen while this request is in flight.
       meta = this.meta() || meta;
-      if (!result.conflict && (result.epoch === meta.epoch || pending.replace)) {
+      if (!result.conflict && (result.epoch === meta.epoch || pending.replace || result.rebased)) {
         meta.seq = result.seq;
         meta.epoch = result.epoch;
         meta.revision = result.revision;
@@ -159,12 +166,13 @@ export class DeviceSync {
       if (this.meta() && !this.disposed) this.schedule(document.hidden ? 30000 : 5000);
     }
   }
-  async start(label) {
+  async start(label, { invite = true } = {}) {
     await this.flush();
     return this.exclusive(async () => {
       this.backup();
-      const result = await this.request('start', { profile: syncProfile(this.getProfile()), label });
-      const meta = this.meta() || { version: 1, base: syncProfile(this.getProfile()), epoch: result.epoch, seq: result.seq, revision: result.revision };
+      const before=syncProfile(this.getProfile());
+      const result = await this.request('start', { profile: before, label, invite });
+      const meta = this.meta() || { version: 1, base: before, epoch: result.epoch, seq: result.seq, revision: result.revision };
       this.receive(result, meta);
       this.schedule(500);
       return result;

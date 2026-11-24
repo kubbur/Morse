@@ -24,6 +24,12 @@ static bool checkChatSpacing(double rate) {
     k.initialSettings.options=UseFarnsworth;
     keyFrames(&k,word,false); tap(&k,2,3*unit,false); keyFrames(&k,word*2,false); REQUIRE(expectText(&q,"t"));
     tap(&k,1,unit,false); keyFrames(&k,letter,false); REQUIRE(expectText(&q,"e"));
+    selectTypingDestination(&q,44); keyFrames(&k,unit,false);
+    k.initialSettings.options=UseFarnsworth|TimedWordSpaces|TrainerGapThresholds;
+    // A gap longer than five dits can still be a letter gap at slow spacing.
+    tap(&k,1,unit,false); keyFrames(&k,6*unit,false);
+    tap(&k,1,unit,false); keyFrames(&k,(UInt32)ceil(5*rate*gap/1000),false);
+    tap(&k,2,3*unit,false); keyFrames(&k,2*unit,false); REQUIRE(expectText(&q,"ee t"));
     return true;
 }
 static bool checkConfiguredTone(double rate, ToneSettings t, unsigned element) {
@@ -59,6 +65,9 @@ static bool checkControlRanges(double rate) {
         t.riseMs=(uint8_t[]){1,19,30}[i]; t.fallMs=(uint8_t[]){30,2,30}[i]; t.curve=(uint8_t)i;
         REQUIRE(checkConfiguredTone(rate,t,1)); REQUIRE(checkConfiguredTone(rate,t,2));
     }
+    ToneSettings fastest=t; fastest.wpm=MaxKeyerWPM; fastest.spacingWpm=MinSpacingWPM; fastest.options=UseFarnsworth;
+    REQUIRE(checkConfiguredTone(rate,fastest,1)); REQUIRE(checkConfiguredTone(rate,fastest,2));
+    REQUIRE(fabs(31*(1200./80)+19*spacingUnitMs(fastest)-60000)<1e-7);
     AtomicToneSettings config; atomic_init(&config,defaultToneSettings);
     Keyer k={0}; configureKeyer(&k,rate,30); k.settings=&config;
     UInt32 dot=(UInt32)lround(rate*.04); setPaddles(&k,1); keyFrames(&k,1,true);

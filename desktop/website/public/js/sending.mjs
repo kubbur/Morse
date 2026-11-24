@@ -10,12 +10,12 @@ const plus = (b = 0, l = 0, r = 0) => Math.min(1e9, r + Math.max(0, l - b));
 export const DEFAULT_SENDING_SETTINGS = Object.freeze({ wpm: 30, farnsworth: 30, keyer: 'a', reverse: false });
 export function sanitizeSendingSettings(input) {
   const s = object(input);
-  const wpm = Math.round(number(s.wpm, 5, 60, 30));
-  return { wpm, farnsworth: Math.round(number(s.farnsworth, 5, wpm, wpm)), keyer: s.keyer === 'b' ? 'b' : 'a', reverse: s.reverse === true };
+  const wpm = Math.round(number(s.wpm, 5, 80, 30));
+  return { wpm, farnsworth: Math.round(number(s.farnsworth, 1, wpm, wpm)), keyer: s.keyer === 'b' ? 'b' : 'a', reverse: s.reverse === true };
 }
 
 export function emptySending() {
-  return { version: 3, level: 1, pendingLevel: null, settings: { ...DEFAULT_SENDING_SETTINGS }, records: {}, attempts: 0, clean: 0, characters: 0, earned: 0, sounds: {} };
+  return { version: 3, level: 1, pendingLevel: null, settings: { ...DEFAULT_SENDING_SETTINGS }, records: {}, results: [], attempts: 0, clean: 0, characters: 0, earned: 0, sounds: {} };
 }
 
 export function sanitizeSending(input) {
@@ -35,6 +35,7 @@ export function sanitizeSending(input) {
   result.settings = sanitizeSendingSettings(s.settings);
   // Upgrade the original sending default once; later manual choices survive.
   if (version < 2 && result.settings.wpm === 30 && result.settings.farnsworth === 15) result.settings.farnsworth = 30;
+  result.results=Array.isArray(s.results) ? s.results.slice(-300).filter(r=>r && typeof r.id==='string' && /^[0-9a-f-]{36}$/i.test(r.id) && Number.isSafeInteger(r.at)).map(r=>({id:r.id,at:r.at,xp:count(r.xp)})) : [];
   for (const key of ['attempts', 'clean', 'characters', 'earned']) result[key] = count(s[key]);
   result.clean = Math.min(result.clean, result.attempts);
   for (let level = 1; level <= SENDING_LEVELS; level++) {
@@ -184,11 +185,15 @@ export function recordSending(sending, target, grade, { assisted = false } = {})
   }
   const xp = (passed ? 10 : 0) + (levelUp ? 30 : 0);
   sending.earned = Math.min(1e9, sending.earned + xp);
-  return { xp, levelUp, passed, nextLevel: levelUp && stage.level < SENDING_LEVELS ? stage.level + 1 : null };
+  const id=crypto.randomUUID();
+  sending.results=[...(sending.results||[]),{id,at:Date.now(),xp}].slice(-300);
+  return { id, xp, levelUp, passed, nextLevel: levelUp && stage.level < SENDING_LEVELS ? stage.level + 1 : null };
 }
 
 export function mergeSending(baseInput, localInput, remoteInput) {
   const b = sanitizeSending(baseInput), l = sanitizeSending(localInput), r = sanitizeSending(remoteInput), result = structuredClone(r);
+  const results=new Map([...r.results,...l.results].map(row=>[row.id,row]));
+  result.results=[...results.values()].sort((a,b)=>a.at-b.at).slice(-300);
   if (l.level !== b.level) { result.level = l.level; result.pendingLevel = l.pendingLevel; }
   else if (l.pendingLevel !== b.pendingLevel) result.pendingLevel = l.pendingLevel;
   for (const key of Object.keys(l.settings)) if (!same(b.settings[key], l.settings[key])) result.settings[key] = l.settings[key];

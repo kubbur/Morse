@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, extname } from 'node:path';
 import { isIP } from 'node:net';
 import { gzipSync } from 'node:zlib';
+import { practiceWorker } from './lib/offline-worker.mjs';
 import { SyncStore, SyncError, credential, syncCookie } from './lib/sync-store.mjs';
 import { parseProgressJson } from './public/js/import-validation.mjs';
 
@@ -30,9 +31,13 @@ export function configuration(source = process.env) {
   }
   const allowedOrigins = [publicOrigin, ...legacyOrigins];
   const trustedProxyIp = source.MORSE_TRUSTED_PROXY_IP || '';
-  const edgeIp = source.MORSE_EDGE_IP || '10.0.1.76';
-  if ((trustedProxyIp && !isIP(trustedProxyIp)) || !isIP(edgeIp)) throw new Error('Configure individual measured IP addresses, not networks or wildcards.');
-  return { mode, publicOrigin, publicHost: url.host, allowedOrigins, trustedProxyIp, edgeIp, syncPath: source.MORSE_SYNC_PATH || ':memory:' };
+  const edgeIp = source.MORSE_EDGE_IP || '';
+  if ((trustedProxyIp && !isIP(trustedProxyIp)) || (edgeIp && !isIP(edgeIp)) || (trustedProxyIp && !edgeIp))
+    throw new Error('Set MORSE_TRUSTED_PROXY_IP and MORSE_EDGE_IP to the two exact proxy addresses.');
+  const moveFromOrigin = source.MORSE_MOVE_FROM_ORIGIN || (legacyOrigins.length === 1 ? legacyOrigins[0] : '');
+  if (moveFromOrigin && (moveFromOrigin === publicOrigin || !legacyOrigins.includes(moveFromOrigin)))
+    throw new Error('MORSE_MOVE_FROM_ORIGIN must be a distinct origin in MORSE_LEGACY_ORIGINS.');
+  return { mode, publicOrigin, publicHost: url.host, allowedOrigins, trustedProxyIp, edgeIp, moveFromOrigin, syncPath: source.MORSE_SYNC_PATH || ':memory:' };
 }
 
 export function validateBoundary(request, config) {
@@ -55,7 +60,7 @@ export function validateBoundary(request, config) {
   if (config.mode === 'local') {
     if (!isLoopback(peer) || forwardedNames.length) return 'Local access must be direct and loopback only';
   } else {
-    if (!config.trustedProxyIp || peer !== config.trustedProxyIp) return 'Untrusted proxy peer';
+    if (!config.trustedProxyIp || !config.edgeIp || peer !== config.trustedProxyIp) return 'Untrusted proxy peer';
     if (headers['x-forwarded-host'] !== headers.host || headers['x-forwarded-proto'] !== 'https' ||
         headers['x-forwarded-port'] !== '443' || headers['x-forwarded-for'] !== config.edgeIp) return 'Incorrect canonical forwarding headers';
   }
@@ -78,8 +83,17 @@ async function loadPublic(directory = join(ROOT, 'public'), prefix = '') {
   return files;
 }
 
-export async function createApp(config = configuration(), { log = console.warn, syncStore } = {}) {
+export async function createApp(config = configuration(), { log = console.warn, syncStore, exchange } = {}) {
   const files = await loadPublic();
+  const previousHost = config.moveFromOrigin && new URL(config.moveFromOrigin).host;
+  if (previousHost) {
+    const file = files.get('/move-progress.html');
+    // Exact HTTPS origins came from server configuration. Encode both attribute values.
+    const html = file.content.toString().replace('data-move-from="" data-move-to=""', () =>
+      `data-move-from="${encodeURIComponent(config.moveFromOrigin)}" data-move-to="${encodeURIComponent(config.publicOrigin)}"`);
+    files.set('/move-progress.html', { type: file.type, content: Buffer.from(html) });
+  }
+  if (exchange) files.set('/practice-worker.mjs',{content:practiceWorker(files),type:MIME['.mjs']});
   const store = syncStore || new SyncStore(config.syncPath);
   const rates = new Map();
   let inflight = 0;
@@ -116,7 +130,12 @@ export async function createApp(config = configuration(), { log = console.warn, 
       }
       return reject(403, 'Forbidden');
     }
+    if (req.url.startsWith('/api/v2/')) {
+      if (!exchange) return reject(503, 'Staging service unavailable');
+      void exchange.handle(req,res); return;
+    }
     if (req.url.startsWith('/api/sync/')) {
+      if (exchange) return reject(410,'Use the current practice client.');
       const match = /^\/api\/sync\/(status|start|join|approve|cancel|disconnect|push|identity|leaderboard|erase)$/.exec(req.url);
       if (!match) return reject(404, 'Not found');
       if (req.method !== 'POST') return reject(405, 'Use POST');
@@ -179,6 +198,18 @@ export async function createApp(config = configuration(), { log = console.warn, 
     if (path === '/healthz') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(req.method === 'HEAD' ? undefined : '{"status":"ok","application":"morse","version":"1.0.0"}');
+    }
+    const legacyMove = !!previousHost && req.headers.host === previousHost;
+    const movePage = path === '/move-progress' || path === '/move-progress.html';
+    if (movePage && (!previousHost || (!legacyMove && req.headers.host !== config.publicHost))) return reject(404, 'Not found');
+    if (legacyMove && path === '/practice-worker.mjs') return reject(404,'Not found');
+    if (legacyMove && path === '/recover-progress') path = '/index.html';
+    else if (movePage || legacyMove && !files.has(path) || legacyMove && path === '/index.html') {
+      // Only the two transfer documents retain their cross-origin opener for
+      // the exact-origin/nonce handshake. Normal trainer pages stay isolated.
+      res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+      path = '/move-progress.html';
     }
     if (path === '/') path = '/index.html';
     const file = files.get(path);

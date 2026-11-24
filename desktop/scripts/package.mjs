@@ -1,3 +1,4 @@
+import { buildNative } from './native.mjs';
 import { packager } from '@electron/packager';
 import { flipFuses, FuseVersion, FuseV1Options, getCurrentFuseWire } from '@electron/fuses';
 import { sign } from '@electron/osx-sign';
@@ -19,13 +20,14 @@ for (const arch of architectures) {
   const [directory] = await packager({
     dir: input, out, platform, arch, name: 'Morse', executableName: 'Morse',
     appBundleId: 'digital.kubbur.morse', appCategoryType: 'public.app-category.education',
-    appVersion: pkg.version, buildVersion: pkg.version, electronVersion: pkg.devDependencies.electron,
+    appVersion: pkg.version, buildVersion: pkg.version.split('-')[0], electronVersion: pkg.devDependencies.electron,
     overwrite: true, prune: false, asar: true, icon: join(root, 'assets/icon.icns'),
-    extendInfo: { NSLocalNetworkUsageDescription: 'Connect to the Morse Paddle companion on this Mac.' },
+    extendInfo: { NSMicrophoneUsageDescription: 'Read the two paddle contacts through the wired headset adapter.' },
     download: { cacheRoot: process.env.ELECTRON_CACHE || join(root, 'build/downloads') },
   });
   const bundle = platform === 'darwin' ? join(directory, 'Morse.app') : join(directory, 'Morse');
   if (platform === 'darwin') {
+    buildNative(join(bundle,'Contents/Helpers/MorseKeyer'),[arch==='x64'?'x86_64':'arm64']);
     // Keep the download to the app and install note. Required runtime notices
     // travel inside the app, including when it is moved to Applications.
     await rename(join(directory, 'LICENSE'), join(bundle, 'Contents/Resources/LICENSE.electron.txt'));

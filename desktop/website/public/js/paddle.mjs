@@ -13,15 +13,17 @@ export function paddleSnapshot(raw) {
 }
 
 export class PaddleKeyer {
-  constructor({ wpm = 30, mode = 'a', onEdge = () => {} } = {}) {
-    this.unit = 1200 / Math.max(5, Math.min(60, wpm));
+  constructor({ wpm = 30, mode = 'a', onEdge = () => {}, onReplay = null } = {}) {
+    this.unit = 1200 / Math.max(5, Math.min(80, wpm));
     this.mode = mode === 'b' ? 'b' : 'a';
     this.onEdge = onEdge;
+    this.onReplay = typeof onReplay === 'function' ? onReplay : null;
     this.reset();
   }
   reset() {
     this.dit = this.dah = false;
     this.memory = { dit: false, dah: false };
+    this.contactHistory = []; this.contactAt = -1;
     this.phase = 'idle'; this.due = Infinity; this.last = 'dah'; this.extra = ''; this.squeezed = false; this.clock = -1;
   }
   choose() {
@@ -32,7 +34,7 @@ export class PaddleKeyer {
   }
   start(at) {
     const symbol = this.choose();
-    if (!symbol) { this.phase = 'idle'; this.due = Infinity; return; }
+    if (!symbol) { this.phase = 'idle'; this.due = Infinity; this.last = 'dah'; return; }
     this.memory[symbol] = false;
     this.extra = '';
     this.last = symbol; this.phase = 'mark'; this.due = at + this.unit * (symbol === 'dit' ? 1 : 3);
@@ -50,7 +52,17 @@ export class PaddleKeyer {
     this.clock = to;
   }
   contacts(dit, dah, at) {
-    if (typeof dit !== 'boolean' || typeof dah !== 'boolean' || !Number.isFinite(at) || at < this.clock) return false;
+    if (typeof dit !== 'boolean' || typeof dah !== 'boolean' || !Number.isFinite(at) || at < (this.onReplay ? this.contactAt : this.clock)) return false;
+    if (this.onReplay) {
+      const previous = this.contactHistory.at(-1);
+      if (!previous || previous.dit !== dit || previous.dah !== dah) {
+        if (this.contactHistory.length >= 4096) return false;
+        if (at < this.clock) return this.replayContact({ dit, dah, at });
+        this.contactHistory.push({ dit, dah, at });
+      }
+      this.contactAt = at;
+      if (at < this.clock) return true; // A late unchanged snapshot needs no correction.
+    }
     this.advance(at);
     if (dit && !this.dit) this.memory.dit = true;
     if (dah && !this.dah) this.memory.dah = true;
@@ -62,6 +74,21 @@ export class PaddleKeyer {
       this.squeezed = false;
     }
     if (this.phase === 'idle') this.start(at);
+    return true;
+  }
+  replayContact(contact) {
+    // Browser ticks predict held elements ahead of the latest SSE contact.
+    // Rebuild that prediction when a contact arrives slightly behind the tick,
+    // preserving the source timestamps rather than dropping or retiming it.
+    const history = [...this.contactHistory, contact], until = this.clock;
+    const onEdge = this.onEdge, edges = [];
+    this.onEdge = edge => edges.push(edge);
+    try {
+      this.reset();
+      for (const row of history) this.contacts(row.dit, row.dah, row.at);
+      this.advance(until);
+    } finally { this.onEdge = onEdge; }
+    this.onReplay(edges);
     return true;
   }
   get busy() { return this.phase !== 'idle'; }
