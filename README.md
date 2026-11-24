@@ -19,7 +19,7 @@ Both Mac apps require **macOS 13 or later**. In **Apple menu → About This Mac*
 ## Install Morse for Mac
 
 1. Download the ZIP for your Mac, unzip it and move **Morse.app** into **Applications**.
-2. Open **Morse**. Node.js, Docker and an internet connection are not needed for practice.
+2. Open **Morse** and start practising.
 3. Use **Saved progress → Export / Import** to back up a save or move it between the desktop app and the website.
 
 The desktop app has its own local save. It does not automatically sync with the website, public leaderboard or device-pairing service. Closing the window leaves the app in the Dock; **Morse → Quit Morse** quits it.
