@@ -1,0 +1,63 @@
+name: Build Morse for Mac
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['morse-v*']
+    paths: ['desktop/**', '.github/workflows/build-mac.yml']
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/build-mac.yml']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: desktop
+
+jobs:
+  mac:
+    name: Mac ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Package an ad-hoc test build
+        run: node scripts/package.mjs darwin ${{ matrix.architecture }}
+      - name: Check the Mac code signature
+        run: codesign --verify --deep --strict --verbose=2 build/packages/Morse-darwin-${{ matrix.architecture }}/Morse.app
+      - name: Test the packaged app
+        run: npm run test:smoke
+      - name: Create the source download
+        run: npm run source
+      - name: Check release contents
+        run: npm run verify:release
+      - name: Keep app, source and checksums
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Morse-mac-${{ matrix.architecture }}
+          path: desktop/dist/
+          if-no-files-found: error
+      - name: Keep test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Morse-tests-${{ matrix.architecture }}
+          path: desktop/build/test-results/
+          if-no-files-found: ignore

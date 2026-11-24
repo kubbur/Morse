@@ -1,0 +1,2 @@
+/* The interface uses the device's native sans serif font: no third-party requests. */
+@font-face{font-family:'Morse Sans';src:local('Avenir Next'),local('Avenir'),local('Segoe UI'),local('DejaVu Sans');font-display:swap}

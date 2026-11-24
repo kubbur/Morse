@@ -1,0 +1,19 @@
+Morse for Mac
+
+1. Extract the zip and move Morse.app to Applications.
+2. Open Morse. No separate Node.js or Docker installation is needed.
+3. To use a paddle, open Morse Paddle on the same Mac and link:
+   http://127.0.0.1:37473
+   Then connect from the trainer's Send tab.
+
+Practice and progress work offline. The desktop app has its own save.
+Use Saved progress > Export / Import to move progress from the website.
+Public leaderboards and website device pairing are not connected to this app.
+
+Ad-hoc test builds are not Apple Developer ID notarized. Signing status is
+listed in darwin-build.json alongside the download. macOS may require approval
+in System Settings > Privacy & Security > Open Anyway for an ad-hoc build.
+Do not disable Gatekeeper or other system security protections.
+
+On a Mac with a Developer ID certificate, the source package supports signing
+and notarization for a public release. See README.md in the source package.

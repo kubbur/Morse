@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101918">
+  <meta name="description" content="Learn to receive and send Morse code. 400 listening levels and 218 sending levels, with adjustable speed, Farnsworth spacing and tone.">
+  <meta property="og:title" content="Morse code trainer">
+  <meta property="og:description" content="Learn to receive and send Morse code. 400 listening levels and 218 sending levels, with adjustable speed, Farnsworth spacing and tone.">
+  <meta property="og:type" content="website">
+  <title>Morse code trainer</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/js/app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to practice</a>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h6m4 0h6M4 17h10m4 0h2"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M4 14v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="12" width="4" height="8" rx="2"/><rect x="17" y="12" width="4" height="8" rx="2"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 3c1 5 6 6 6 12a6 6 0 0 1-12 0c0-3 2-5 3-6 0 3 2 3 2 3s3-4 1-9Z"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15.5A9 9 0 0 1 8.5 4 9 9 0 1 0 20 15.5Z"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 0 5M4 4v6h6"/></symbol>
+    <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 2H9s0-1-1-2Z"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 6C8 3 3 4 3 4v15s5-1 9 2c4-3 9-2 9-2V4s-5-1-9 2Zm0 0v15"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 22V3s4-3 8 0 7 0 7 0v11s-3 3-7 0-8 0-8 0"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 10 6-10 6L2 9l10-6ZM2 14l10 6 10-6M2 19l10 6 10-6"/></symbol>
+    <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m16 8-3 5-5 3 3-5 5-3Z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 15v6h16v-6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m-5 5 5-5 5 5M4 15v6h16v-6"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5m0 3v1"/></symbol>
+  </svg>
+
+  <header class="site-header">
+    <a class="brand" href="#practice" aria-label="Morse home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>morse<span class="brand-dot">.</span></span>
+    </a>
+    <nav class="main-nav" aria-label="Main navigation">
+      <button type="button" data-view="practice" aria-current="page">Practice</button>
+      <button type="button" data-view="send">Send</button>
+      <button type="button" data-view="journey">Progress</button>
+      <button type="button" data-view="lab">Settings</button>
+    </nav>
+    <div class="header-actions">
+      <button class="icon-button theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme"><svg class="icon"><use href="#i-sun"/></svg></button>
+      <button class="icon-button progress-menu-button" id="open-progress" type="button" aria-haspopup="dialog" aria-label="Saved progress"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><span class="progress-menu-label">Saved progress</span></button>
+    </div>
+  </header>
+
+  <main id="main-content" tabindex="-1">
+    <div id="storage-warning" class="notice warning" role="status" hidden></div>
+    <section class="page-view" id="view-practice" aria-labelledby="practice-title">
+      <h1 id="practice-title" class="sr-only">Practice Morse</h1>
+
+      <div class="practice-grid">
+        <section class="receiver card" aria-labelledby="receiver-heading">
+          <div class="receiver-top"><div class="receiver-title"><h2 id="receiver-heading">Morse practice</h2><p class="signal-level" id="signal-level">Level 1</p></div><button type="button" class="learn-letters" id="learn-letters" aria-haspopup="dialog" aria-controls="guidance-dialog"><svg class="icon small" aria-hidden="true"><use href="#i-book"/></svg><span id="learn-label">Learn letters</span></button><button type="button" class="learn-letters" id="return-course" hidden>Back to course</button><button type="button" class="lesson-pill" id="choose-lesson"><span id="lesson-name">Course</span><svg class="icon small"><use href="#i-down"/></svg></button></div>
+          <div id="practice-workspace">
+          <div class="receiver-stage" id="receiver-stage">
+            <div class="receiver-status"><div class="signal-art" aria-hidden="true"><div class="signal-center"><svg class="icon"><use href="#i-headphones"/></svg></div></div><span class="status-pill" id="audio-status"><span class="live-dot"></span> Ready</span><div id="mastery-celebration" class="mastery-celebration" role="status" hidden><strong id="celebration-title">Level mastered</strong><p><b id="celebration-code">NEAT</b> · <span id="celebration-meaning">Correct copy</span></p><small class="sr-only">No answer needed. <span id="celebration-next"></span></small></div></div>
+            <div class="live-morse" id="live-morse"><p id="morse-placeholder">Listen…</p><div class="morse-symbols" id="morse-symbols" role="img" aria-label="Live Morse signal"></div></div>
+
+            <p class="training-instruction" id="practice-instruction" hidden></p>
+            <div id="reward-burst" class="reward-burst" aria-hidden="true" hidden></div>
+            <div class="signal-settings"><span id="summary-wpm">30 WPM</span><i></i><span id="summary-farnsworth">15 Farnsworth</span><i></i><span id="summary-tone">600 Hz</span><label class="morse-toggle"><input type="checkbox" id="show-morse" data-setting="showMorse" checked><span id="show-morse-label">Show Morse</span></label></div>
+          </div>
+
+          <div class="copy-area">
+            <form id="answer-form" novalidate>
+              <div class="answer-label"><label for="answer">YOUR COPY</label><button type="button" id="copy-pace" class="copy-pace" aria-haspopup="dialog" aria-controls="recall-dialog" aria-live="polite" aria-atomic="true">Goal 1.5s</button><span id="answer-length">1 character</span></div>
+              <div class="answer-row"><input id="answer" name="answer" type="text" enterkeyhint="done" placeholder="Type your answer…" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="100" aria-describedby="copy-pace answer-feedback"><button type="button" class="button primary replay-button" id="play-signal"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span class="replay-copy"><span>Play signal</span><kbd class="replay-shortcut" aria-hidden="true">Enter</kbd></span></button></div>
+            </form>
+            <div class="copy-feedback">
+              <div class="feedback" id="answer-feedback" role="status" aria-live="polite">Press Play once, then keep listening and typing.</div>
+              <div class="feedback-detail">
+                <span class="feedback-placeholder" id="feedback-placeholder">Auto-check on</span>
+                <div class="letter-feedback" id="letter-feedback" aria-label="Answer feedback" hidden></div>
+                <div class="round-result" id="round-result" hidden><div id="result-copy"></div></div>
+              </div>
+            </div>
+            <section class="practice-progress" aria-labelledby="path-title">
+              <div class="progress-caption"><h3 id="path-title">Level progress</h3></div>
+              <div class="mastery-row"><button type="button" class="mastery-info" id="mastery-info" aria-haspopup="dialog" aria-controls="mastery-dialog"><span id="mastery-copy">0/18 quick · 0/20 letters</span><svg class="icon small" aria-hidden="true"><use href="#i-help"/></svg></button><div class="mastery-dots" id="mastery-dots" aria-hidden="true"></div></div>
+              <div class="level-path" id="level-path" aria-label="Choose answer length"></div>
+            </section>
+            <div class="helper-actions"><button type="button" id="hint-button"><svg class="icon small"><use href="#i-bulb"/></svg>Help</button><button type="button" id="chart-button"><svg class="icon small"><use href="#i-book"/></svg>Morse chart</button><button type="button" id="skip-button">Skip <svg class="icon small"><use href="#i-chevron"/></svg></button></div>
+            <div class="help-panel" id="hint-panel" hidden><div class="help-panel-title"><svg class="icon"><use href="#i-bulb"/></svg><strong>Character reference</strong></div><p id="hint-copy">Tap a character to hear its sound, then try the signal again.</p><div class="character-chips" id="hint-characters"></div><div class="help-panel-actions"><button class="text-button" id="slower-button" type="button">Hear the signal slower</button><button class="text-button" id="reveal-button" type="button">Reveal this answer</button></div><small>Using help excludes this copy from mastery.</small></div>
+          </div>
+          </div>
+          <div class="empty-practice" id="empty-practice" hidden><svg class="icon"><use href="#i-sliders"/></svg><h3>No matching exercises</h3><p id="empty-copy"></p><button type="button" class="button primary" id="fix-lesson">Adjust lesson</button></div>
+        </section>
+
+      </div>
+
+    </section>
+
+    <section class="page-view" id="view-send" aria-labelledby="send-title" hidden>
+      <h1 id="send-title" class="sr-only">Morse sending course</h1>
+      <section class="card sender" id="sender" aria-labelledby="send-stage-title">
+        <div class="send-heading"><div><span class="eyebrow" id="send-chapter">KEY TIMING</span><h2 id="send-stage-title">A dot · E</h2><p class="signal-level" id="send-level-label">Sending · level 1/218</p></div><label class="sr-only" for="send-level">Sending course level</label><select id="send-level" class="send-level-select"></select></div>
+        <p id="send-instruction" class="muted"></p>
+        <div class="send-exercise" id="send-exercise">
+          <div class="send-target-label" id="send-target-label">SEND</div><div id="send-target" class="send-target">E</div>
+          <div id="send-pattern" class="send-pattern" role="img" aria-label="One dot"></div>
+          <p id="send-context" class="muted small-copy" hidden></p>
+          <div class="send-example-actions"><button type="button" class="button secondary" id="send-listen"><svg class="icon small" aria-hidden="true"><use href="#i-play"/></svg><span>Hear example</span></button><button type="button" class="text-button" id="send-help">Show pattern</button></div>
+          <div id="send-reward" class="reward-burst" aria-hidden="true" hidden></div>
+        </div>
+        <div class="send-input-bar"><div class="send-input-state"><span id="send-input-status" role="status">Connect Morse Paddle or choose keyboard practice.</span><button type="button" class="button secondary" id="send-connect">Connect Morse Paddle</button></div><span id="send-speed-label">30 WPM · standard spacing</span></div>
+        <div class="send-capture" id="send-capture" role="group" aria-label="Your transmission"><span class="eyebrow">YOUR SENDING</span><output id="send-decoded" aria-label="Decoded Morse">—</output><div id="send-marks" class="send-marks" role="img" aria-label="Your dots and dashes"></div></div>
+        <div class="send-key-controls" id="send-key-controls"><button type="button" class="button primary straight-key" id="send-key">Hold to key <kbd>Space</kbd></button><div id="send-paddles" hidden><button type="button" class="button primary" id="send-dit">Dot <kbd>Z</kbd></button><button type="button" class="button primary" id="send-dah">Dash <kbd>X</kbd></button></div></div>
+        <p id="send-feedback" class="send-feedback" role="status">Your answer is checked after you release the key and pause.</p>
+        <div class="send-metrics" id="send-metrics" hidden></div>
+        <div class="send-attempt-actions"><button type="button" class="text-button" id="send-retry">Clear · Esc</button><button type="button" class="button primary" id="send-next" hidden>Next exercise <svg class="icon small" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+        <div class="send-progress"><div class="section-heading"><strong id="send-progress-copy">0/3 clean transmissions</strong><span id="send-completed-count" class="muted small-copy">0/218 completed</span></div><div class="progress-track" id="send-progress-meter" role="progressbar" aria-label="Sending level progress" aria-valuemin="0" aria-valuemax="3" aria-valuenow="0"><div></div></div><p id="send-progress-rule" class="muted small-copy"></p></div>
+      </section>
+      <section class="card send-options" aria-label="Sending setup">
+        <details id="send-setup"><summary>Input and speed</summary><div class="send-options-grid">
+          <div class="field"><label for="send-source">Key input</label><select id="send-source"><option value="paddle">Morse Paddle · Mac companion</option><option value="straight">Straight key · Space or screen</option><option value="keyboard">Paddles · Z / X or screen</option></select><p id="send-connection" class="muted small-copy" role="status">Open Morse Paddle on this Mac, enter this site’s address, and click Link. Then connect here.</p></div>
+          <div class="field"><label for="send-wpm">Sending speed</label><div class="send-range"><input id="send-wpm" type="range" min="5" max="60" value="30"><output id="send-wpm-value" for="send-wpm">30 WPM</output></div><label for="send-farnsworth">Spacing speed</label><div class="send-range"><input id="send-farnsworth" type="range" min="5" max="30" value="30"><output id="send-farnsworth-value" for="send-farnsworth">30 WPM</output></div><small>Match both speeds for standard spacing. Lower spacing speed gives more room between letters and words.</small></div>
+          <div class="field"><label for="send-keyer">Paddle keyer</label><select id="send-keyer"><option value="a">Iambic A</option><option value="b">Iambic B</option></select><label class="morse-toggle"><input id="send-reverse" type="checkbox">Swap dot and dash contacts</label><small>Match the keyer mode and sending speed in Morse Paddle. Its sidetone is used while connected.</small></div>
+        </div></details>
+        <details id="send-plan"><summary id="send-course-count">218-level course plan</summary><div id="send-course-plan"></div><p class="muted small-copy">Choose any level above. Sending achievements are saved separately from listening. Correct timing earns 10 XP; mastering a level adds 30 XP. These are practice contacts.</p></details>
+      </section>
+      <p id="send-announcement" class="sr-only" role="status"></p>
+    </section>
+
+    <section class="page-view" id="view-journey" aria-labelledby="journey-title" hidden>
+      <div class="page-intro"><div><h1 id="journey-title">Progress</h1></div><button class="button primary" type="button" data-view="practice">Practice <svg class="icon"><use href="#i-arrow"/></svg></button></div>
+      <div class="stats-grid" id="stats-grid"></div>
+      <section class="card" id="sending-journey" aria-labelledby="sending-journey-title"><div class="section-heading"><h2 id="sending-journey-title">Sending progress</h2><button type="button" class="text-button" data-view="send">Practise sending <svg class="icon small" aria-hidden="true"><use href="#i-arrow"/></svg></button></div><p id="sending-journey-copy" class="muted small-copy"></p><div id="sending-badges" class="sending-badges" role="group" aria-label="Sending milestones"></div></section>
+      <section class="card leaderboard-card" aria-labelledby="leaderboard-title"><div class="section-heading"><h2 id="leaderboard-title">Leaderboard</h2><button type="button" class="text-button" id="refresh-leaderboard">Refresh</button></div><p class="muted small-copy">Ranked by lifetime XP · streaks count consecutive listening days.</p><p id="leaderboard-message" role="status" class="small-copy muted"></p><div class="leaderboard-table"><table><caption class="sr-only">Morse lifetime XP and daily listening streak leaderboard</caption><thead><tr><th scope="col">Rank</th><th scope="col">Callsign</th><th scope="col">XP</th><th scope="col">Streak</th></tr></thead><tbody id="leaderboard-rows"></tbody></table></div><p id="leaderboard-me" class="small-copy"></p></section>
+      <section class="card course-card" id="course-journey" aria-labelledby="course-title"><div class="section-heading"><h2 id="course-title">Learned characters</h2><strong class="accent" id="course-count">4/26 letters</strong></div><p class="muted small-copy" id="course-journey-copy"></p><div class="character-chips" id="course-journey-letters"></div></section>
+      <div class="journey-grid"><section class="card activity-card"><div class="section-heading"><h2>Weekly activity</h2><span class="small-copy muted">Copied signals</span></div><div id="weekly-chart" class="weekly-chart" role="img" aria-label="Your practice this week"></div></section><section class="goal-card card"><div class="section-heading"><h2>Daily goal</h2><svg class="icon"><use href="#i-sun"/></svg></div><div class="journey-streak"><span class="streak-icon"><svg class="icon"><use href="#i-flame"/></svg></span><div><strong id="streak-number">No streak</strong><span id="streak-caption">Consecutive practice days</span></div></div><div class="goal-numbers"><strong id="daily-count">0<span> / 10</span></strong><span>signals copied today</span></div><div class="progress-track" role="progressbar" id="daily-progress" aria-label="Daily practice goal" aria-valuemin="0" aria-valuemax="10" aria-valuenow="0"><div></div></div><p id="daily-message">10 copies to reach today’s goal.</p><div class="goal-bottom"><span><svg class="icon small"><use href="#i-spark"/></svg><strong id="xp-count">0 XP</strong> earned</span></div></section></div>
+      <section class="card listening-card"><div class="section-heading"><h2>Listening progress</h2><svg class="icon"><use href="#i-headphones"/></svg></div><p id="listening-summary" class="muted small-copy"></p><div id="listening-confidence" class="listening-confidence" aria-label="Visual help for learned sounds"></div><p class="muted small-copy">Patterns appear during playback, after your answer, or only on request, based on your accuracy.</p></section>
+      <section class="card weak-card"><div class="section-heading"><h2>Needs practice</h2><svg class="icon"><use href="#i-headphones"/></svg></div><p class="muted small-copy">Last 6 first attempts per character. Six correct in a row clears it. Replays and hints don’t count.</p><div id="weak-characters"></div><div class="confusion-pairs" id="confusion-pairs" aria-label="Recent sounds you mix up" hidden></div><button type="button" class="text-button" id="practice-weak">Practice these characters <svg class="icon small"><use href="#i-arrow"/></svg></button></section>
+      <section class="card copying-styles-card"><div class="section-heading"><h2>Copying styles</h2></div><div id="copying-styles"></div></section>
+      <section class="card copying-styles-card" id="radio-journey" hidden><div class="section-heading"><h2>Endless radio</h2></div><p id="radio-journey-progress"></p><p class="muted small-copy">Five messages complete a simulated contact. Correct copies earn Paragon XP.</p></section>
+      <section class="badges-section"><h2>Badges</h2><div class="badge-grid" id="badge-grid"></div></section>
+      <section class="card recent-card"><div class="section-heading"><h2>Practice sessions</h2><span class="small-copy muted">Latest 10 sessions</span></div><p class="session-explanation muted small-copy">First answer to last. More than 2 minutes between answers starts a new session.</p><div id="recent-sessions"></div></section>
+    </section>
+
+    <section class="page-view" id="view-lab" aria-labelledby="lab-title" hidden>
+      <div class="page-intro"><div><h1 id="lab-title">Settings</h1></div><button type="button" class="button primary" data-view="practice">Back to practice <svg class="icon"><use href="#i-arrow"/></svg></button></div>
+      <div class="lab-grid">
+        <section class="card lab-card"><div class="section-heading"><h2><svg class="icon"><use href="#i-volume"/></svg>Audio</h2><button type="button" class="text-button" id="reset-audio">Reset sound</button></div><p class="muted">Farnsworth spacing increases the gaps between characters without slowing the tones.</p>
+          <div class="lab-control"><div><label for="lab-wpm">Character speed</label><output for="lab-wpm"><span data-value="wpm">30</span> WPM</output></div><input type="range" id="lab-wpm" data-setting="wpm" min="5" max="80" step="1" value="30"><p>How fast each character is sent.</p></div>
+          <div class="lab-control"><div><label for="lab-farnsworth">Farnsworth / effective speed</label><output for="lab-farnsworth"><span data-value="farnsworth">15</span> WPM</output></div><input type="range" id="lab-farnsworth" data-setting="farnsworth" min="1" max="30" step="1" value="15"><p>Lower for more space. Match character speed for standard spacing.</p></div>
+          <div class="lab-control"><div><label for="lab-tone">Tone frequency</label><output for="lab-tone"><span data-value="tone">600</span> Hz</output></div><input type="range" id="lab-tone" data-setting="tone" min="200" max="1200" step="10" value="600"></div>
+          <div class="lab-control"><div><label for="lab-volume">Volume</label><output for="lab-volume"><span data-value="volume">55</span>%</output></div><input type="range" id="lab-volume" data-setting="volume" min="0" max="100" step="1" value="55"></div>
+          <button type="button" class="button secondary" id="lab-test"><svg class="icon"><use href="#i-play"/></svg>Preview “PARIS”</button><span class="preview-status" id="preview-status" role="status"></span>
+        </section>
+        <section class="card lab-card envelope-card"><div class="section-heading"><h2><svg class="icon"><use href="#i-sliders"/></svg>Tone envelope</h2></div><p class="muted">Set the tone’s rise and fall times.</p><div class="envelope-preview"><svg viewBox="0 0 420 140" role="img" aria-label="Preview of the tone amplitude envelope"><path class="envelope-grid" d="M20 25H400M20 75H400M20 125H400M20 15V125M115 15V125M210 15V125M305 15V125M400 15V125"/><path id="envelope-fill" d=""/><path id="envelope-line" d=""/></svg><div><span>RISE</span><span>HOLD</span><span>FALL</span></div></div><div class="preset-row" aria-label="Envelope presets"><button type="button" data-envelope="crisp">Crisp · 2 ms</button><button type="button" data-envelope="balanced" aria-pressed="true">Balanced · 5 ms</button><button type="button" data-envelope="soft">Soft · 10 ms</button></div>
+          <div class="lab-control"><div><label for="lab-rise">Rise / attack</label><output for="lab-rise"><span data-value="rise">5</span> ms</output></div><input type="range" id="lab-rise" data-setting="rise" min="1" max="30" step="1" value="5"></div><div class="lab-control"><div><label for="lab-fall">Fall / release</label><output for="lab-fall"><span data-value="fall">5</span> ms</output></div><input type="range" id="lab-fall" data-setting="fall" min="1" max="30" step="1" value="5"></div><div class="field"><label for="lab-curve">Curve shape</label><select id="lab-curve" data-setting="curve"><option value="smooth">Smooth · raised cosine</option><option value="linear">Linear</option></select></div><p class="muted small-copy">Ramps fit inside every tone, even at faster speeds.</p>
+        </section>
+        <section class="card lab-card lesson-card" id="lesson-settings"><div class="section-heading"><h2><svg class="icon"><use href="#i-book"/></svg>Lesson</h2></div><div class="fields-row"><div class="field"><label for="lab-lesson">Lesson set</label><select id="lab-lesson" data-setting="lesson"></select></div><div class="field"><label for="lab-content">Practice material</label><select id="lab-content" data-setting="content"><option value="groups">Random groups</option><option value="words">English words</option><option value="callsigns">Callsigns</option><option value="phrases">Short phrases</option></select></div></div><p class="muted small-copy" id="lesson-detail"></p><div class="lab-control" id="course-control"><div><label for="lab-course">Letters in your course</label><output for="lab-course"><span data-value="courseCount">4</span> / 26</output></div><input id="lab-course" type="range" min="4" max="26" value="4" data-setting="courseCount"><p id="course-plan">400 levels: singles → pairs → triples → mixed review → one new letter. New letters start at singles. Levels 94–100 teach practical CW phrases; digits follow through 148, then common punctuation and joined radio signals at 149–192. Levels 193–292 rebuild the alphabet by ear; 293–392 cover digits, symbols and mixed copies. Radio messages follow at 393–400. Choose any level below.</p><p>Changing this count starts at singles. Your earlier progress stays saved.</p></div><div class="lab-control" id="koch-control" hidden><div><label for="lab-koch">Characters in your Koch lesson</label><output for="lab-koch"><span data-value="kochCount">2</span></output></div><input id="lab-koch" type="range" min="2" max="41" value="2" data-setting="kochCount"><p>Start with K and M. Increase the count to add characters.</p></div><div class="field" id="custom-control" hidden><label for="lab-custom">Your characters</label><input type="text" id="lab-custom" data-setting="custom" maxlength="100" value="ETAN" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="custom-help"><small id="custom-help">Use letters, numbers, or the punctuation shown in the Morse chart.</small></div><div class="alphabet-heading"><span class="eyebrow">LESSON CHARACTERS</span><span class="muted small-copy">Tap to listen</span></div><div class="character-chips" id="lesson-characters"></div><p class="lesson-availability" id="lesson-availability" role="status"></p></section>
+        <section class="card lab-card learning-card"><div class="section-heading"><h2><svg class="icon"><use href="#i-compass"/></svg>Training</h2></div><div class="field" id="track-control"><label for="lab-track">Practice track</label><select id="lab-track" data-setting="track"><option value="course">Course</option><option value="endless" disabled>Endless radio · Paragon ranks</option></select><small id="endless-lock">Finish level 400 to unlock endless radio.</small></div><div class="field"><label for="lab-copy-mode">Copying style</label><select id="lab-copy-mode" data-setting="copyMode"><option value="flexible">Flexible · type along or head-copy</option><option value="head">Head-copy · listen first, then type</option></select><small>Head-copy has its own course progress and response timing. Your flexible progress stays saved.</small></div><div class="field"><label for="lab-visual-support">Visual help</label><select id="lab-visual-support" data-setting="visualSupport"><option value="auto">Gradual · learn, try by ear, then review</option><option value="always">Always show Morse</option><option value="off">Listening only</option></select><small>Patterns move from live teaching to feedback after your answer, then appear only when requested. Six-letter By ear checkpoints follow course milestones. Show help is always available.</small></div><div class="field" id="course-level-control"><label for="lab-course-level">Course level</label><select id="lab-course-level" data-setting="courseLevel"></select><small>All 400 levels are available.</small></div><div class="field" id="free-level-control" hidden><label for="lab-level">Answer length</label><select id="lab-level" data-setting="level"></select><small>Choose the number of characters per answer.</small></div><label class="toggle-row" for="lab-adaptive"><span><strong>Adaptive character practice</strong><small>Repeats missed characters and adds focus exercises after three recent errors with the same character.</small></span><input type="checkbox" id="lab-adaptive" data-setting="adaptive" checked><span class="toggle-track" aria-hidden="true"></span></label><div class="lab-control"><div><label for="lab-goal">Daily goal</label><output for="lab-goal"><span data-value="goal">10</span> signals</output></div><input type="range" id="lab-goal" data-setting="goal" min="5" max="50" step="1" value="10"></div><div class="lab-control timing-mode-control"><label for="lab-timing-mode">Response timing</label><select id="lab-timing-mode" data-setting="timingMode"><option value="adaptive">Adaptive · automatic timing</option><option value="fixed">Fixed · manual timing</option></select><small data-timing-description></small></div><div class="lab-control"><div><label for="lab-recall">Quick copy window</label><output for="lab-recall"><span data-value="recallSeconds">1.5</span> s per character</output></div><input type="range" id="lab-recall" data-setting="recallSeconds" min="0.5" max="4" step="0.1" value="1.5"><p>Type along: each letter has this long after its last beep. Head-copy: listen to the full group, then finish typing within this time × its length. Both count. Move the slider for a fixed goal; slower answers are always accepted.</p></div><div class="mastery-explainer"><svg class="icon"><use href="#i-spark"/></svg><p><strong>Level requirements</strong><br>18 quick, correct letters in your last 20 letter guesses earns mastery for that alphabet and length. A pair counts as two guesses; a triple counts as three. Each character must be correct on the first listen and try, without help, and within your quick copy window. The latest whole answer must also be quick and clean. In Course with Random groups, mastering singles leads to pairs, then triples; triples are followed by a mixed review, then one new letter and a return to singles. A new letter needs five quick, clean copies at each length, as well as the 20-letter mastery window. After all 26 letters, learn practical CW phrases at 94–100 and digits through 148, then punctuation and joined signals at 149–192. The alphabet restarts by ear at 193–292; digits and symbols follow at 293–392, before radio messages at 393–400. Message stages also require the indicated number of different clean copies. Other lesson sets increase length without adding letters. Every step follows a short Morse celebration. You can choose any level yourself.</p></div></section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><span class="footer-saved" id="saved-status"><span class="live-dot"></span>Progress saved on this device</span><button type="button" class="text-button" id="open-help"><svg class="icon small"><use href="#i-help"/></svg>How it works</button></footer>
+
+  <dialog id="guidance-dialog" class="guidance-dialog" aria-labelledby="guidance-title" aria-describedby="guidance-copy guidance-instruction">
+    <div class="dialog-heading"><div><p class="eyebrow" id="guidance-eyebrow">GETTING STARTED</p><h2 id="guidance-title">Learn the characters</h2></div><button type="button" class="icon-button" id="guidance-close" aria-label="Close lesson letters" hidden><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    <p class="muted" id="guidance-copy"></p>
+    <p class="guidance-basics" id="guidance-basics"><span><i></i>Dot = short</span><span><i data-symbol="-"></i>Dash = long</span></p>
+    <div class="guidance-characters" id="guidance-characters"></div>
+    <p class="dialog-note" id="guidance-instruction"></p>
+    <p class="guidance-audio-status" id="guidance-audio-status" role="status" aria-live="polite"></p>
+    <div id="guidance-examples" class="guidance-examples" hidden></div>
+    <div id="focus-practice" hidden></div>
+    <div id="focus-footer" class="focus-footer" hidden><span>Accuracy counts · <kbd>Esc</kbd> to skip</span></div>
+    <div class="guidance-typing" id="guidance-typing" hidden><label for="guidance-answer" id="guidance-answer-label">Press the letter three times</label><input type="text" id="guidance-answer" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="next" maxlength="100" aria-describedby="guidance-audio-status"></div>
+    <button type="button" class="button primary guidance-continue" id="guidance-continue"><span id="guidance-button-label">Listen to E</span><kbd>Enter</kbd></button>
+    <button type="button" class="text-button guidance-skip" id="guidance-skip">I know these · skip introduction</button>
+  </dialog>
+  <dialog id="chart-dialog" aria-labelledby="chart-title"><div class="dialog-heading"><div><p class="eyebrow">LEARN THE SOUND</p><h2 id="chart-title">Morse chart</h2></div><button class="icon-button" data-close="chart-dialog" type="button" aria-label="Close Morse chart"><svg class="icon"><use href="#i-close"/></svg></button></div><p class="muted">Tap a character to hear it.</p><div id="chart-content"></div><p class="dialog-note">Using the chart marks the current copy as assisted.</p></dialog>
+  <dialog id="recall-dialog" class="recall-dialog" aria-labelledby="recall-title" aria-describedby="recall-description">
+    <div class="dialog-heading"><h2 id="recall-title">Response timing</h2><button class="icon-button" data-close="recall-dialog" type="button" aria-label="Close response time"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    <div class="recall-details">
+      <p id="recall-description" class="muted">Type along, or listen to the whole group and then type. Head-copy gets this time × the number of letters, starting at the final beep ending.</p>
+      <div class="timing-mode-control"><label for="practice-timing-mode">Timing mode</label><select id="practice-timing-mode" data-setting="timingMode"><option value="adaptive">Adaptive · automatic timing</option><option value="fixed">Fixed · manual timing</option></select><small data-timing-description></small></div>
+      <div class="lab-control recall-control"><div><label for="practice-recall">Time per letter</label><output for="practice-recall"><span data-value="recallSeconds">1.5</span> s</output></div><input type="range" id="practice-recall" data-setting="recallSeconds" min="0.5" max="4" step="0.1" value="1.5"><div class="recall-scale" aria-hidden="true"><span>0.5s · Faster</span><span>4s · More time</span></div></div>
+    </div>
+    <button type="button" class="button primary recall-done" data-close="recall-dialog">Done</button>
+  </dialog>
+  <dialog id="mastery-dialog" class="mastery-dialog" aria-labelledby="mastery-title">
+    <div class="dialog-heading"><h2 id="mastery-title">How you level up</h2><button class="icon-button" data-close="mastery-dialog" type="button" aria-label="Close level-up explanation"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    <div class="mastery-details" tabindex="0" role="region" aria-label="Timing and advancement requirements">
+      <p class="muted"><strong id="mastery-timing-mode">Adaptive · 1.5s per letter</strong><br>Both ways of copying count. The clock starts at the <strong>last beep ending</strong>, and stops when your answer appears.</p>
+      <div class="timing-example" aria-label="Two ways to copy"><p><strong>Type along</strong><span aria-hidden="true">→</span><span id="mastery-along-example"></span></p><p><strong>Head-copy</strong><span aria-hidden="true">→</span><span id="mastery-head-example"></span></p></div>
+      <p class="mastery-tip" id="mastery-timing-description"></p>
+      <ul class="mastery-requirements">
+        <li id="mastery-window-rule"><strong>Letters tried <span id="mastery-window-count">0/20</span></strong><p>We check your latest 20 letter guesses. Each dot is one letter; new letters replace the oldest dots.</p></li>
+        <li id="mastery-quick-rule"><strong>Quick and correct <span id="mastery-quick-count">0/18</span></strong><p>At least 18 of those 20 letters must be correct within your current window on the first listen, without help.</p></li>
+        <li id="mastery-focus-rule" hidden><strong id="mastery-focus-label"></strong><p id="mastery-focus-description"></p></li>
+        <li id="mastery-messages-rule" hidden><strong>Different clean copies <span id="mastery-messages-count">0/3</span></strong><p>Meet the count shown with different quick, correct first-listen answers. Repeats count once.</p></li>
+        <li id="mastery-review-rule" hidden><strong>Review sounds <span id="mastery-review-count">0/0</span></strong><p id="mastery-review-description"></p></li>
+        <li id="mastery-finish-rule"><strong>Finish with a quick, clean answer <span id="mastery-finish-count">Needed</span></strong><p>The final whole answer must be correct and within the window on its first listen, without help or replay.</p></li>
+      </ul>
+      <p class="mastery-tip">Slower correct answers still earn XP. Mistakes and replays never widen the window. Hints and replays cannot create first-listen credit. Typing before a letter finishes is not timed. For head-copy, start typing after the whole group ends; we use its total entry time per letter.</p>
+    </div>
+    <button type="button" class="button primary mastery-done" id="mastery-done" data-close="mastery-dialog">Got it</button>
+  </dialog>
+  <dialog id="callsign-intro-dialog" aria-labelledby="callsign-intro-title" aria-describedby="intro-callsign-help">
+    <div class="dialog-heading"><div><p class="eyebrow">LEADERBOARD</p><h2 id="callsign-intro-title">What’s your callsign?</h2></div></div>
+    <form id="callsign-intro-form" novalidate>
+      <label for="intro-callsign">Your callsign</label>
+      <input id="intro-callsign" type="text" maxlength="16" autocomplete="off" autocapitalize="characters" autocorrect="off" enterkeyhint="go" spellcheck="false" placeholder="TF3ABC" aria-describedby="intro-callsign-help intro-callsign-message">
+      <p id="intro-callsign-help" class="muted small-copy">Your callsign, XP and daily streak will appear on the leaderboard. You can change this in Saved progress.</p>
+      <p id="intro-callsign-message" class="dialog-note" role="status"></p>
+      <button type="submit" class="button primary" id="join-leaderboard">Join leaderboard <svg class="icon"><use href="#i-arrow"/></svg></button>
+      <button type="button" class="text-button" id="skip-callsign" data-close="callsign-intro-dialog">Skip for now</button>
+    </form>
+  </dialog>
+  <dialog id="progress-dialog" aria-labelledby="progress-title">
+    <div class="dialog-heading"><h2 id="progress-title">Saved progress</h2><button class="icon-button" data-close="progress-dialog" type="button" aria-label="Close saved progress"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <p id="progress-summary" class="muted"></p>
+    <section class="callsign-settings" aria-label="Your callsign"><label for="learner-callsign">Your callsign <span class="muted small-copy">(optional)</span></label><div class="callsign-row"><input id="learner-callsign" type="text" maxlength="16" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="TF3ABC" aria-describedby="callsign-help"><button type="button" class="button secondary" id="save-callsign">Save</button></div><label class="callsign-listing"><input type="checkbox" id="list-on-leaderboard">Show my callsign, XP and daily streak on the leaderboard</label><p class="muted small-copy" id="callsign-help">Turn this off to keep your score and streak private.</p><p id="callsign-message" class="dialog-note" role="status"></p></section>
+    <section class="device-sync" aria-labelledby="device-sync-title">
+      <div class="section-heading"><h3 id="device-sync-title">Paired devices</h3><span id="sync-status" class="sync-status" role="status">Saved on this device</span></div>
+      <p class="muted small-copy" id="sync-description">Pair once. Keep your progress in sync without a login. The save with the most XP is used on both devices.</p>
+      <ul id="sync-devices" class="sync-devices" hidden></ul>
+      <button type="button" class="button secondary" id="pair-devices">Pair a device</button>
+      <div class="pair-panel" id="pair-offer" hidden>
+        <p><strong>Scan with your other device</strong></p><p class="muted small-copy">Open the link, then approve here. This link expires in 5 minutes.</p>
+        <div id="pair-qr" class="pair-qr" role="img" aria-label="Device pairing QR code"></div>
+        <label class="small-copy" for="pair-link">Or open this link on your other device</label><input id="pair-link" type="text" readonly spellcheck="false" autocomplete="off">
+        <div class="pair-actions"><button type="button" class="button secondary" id="copy-pair-link">Copy link</button><button type="button" class="text-button" id="cancel-pairing">Cancel pairing</button></div>
+      </div>
+      <div class="pair-panel" id="pair-incoming" hidden><h3>Connect these devices?</h3><p>The save with the most XP will be used on both devices. Your current save is backed up here first.</p><div class="pair-actions"><button type="button" class="button primary" id="join-pairing">Connect this device</button><button type="button" class="text-button" id="decline-pairing">Cancel</button></div></div>
+      <div class="pair-panel" id="pair-waiting" hidden><strong>Approve on your other device</strong><p class="muted small-copy">Check that both devices show this code.</p><p class="pair-code" id="pair-waiting-code"></p><button type="button" class="text-button" id="cancel-waiting">Cancel pairing</button></div>
+      <div class="pair-panel" id="pair-approval" hidden><h3 id="pair-request-title">A device wants to connect</h3><p class="pair-code" id="pair-approval-code"></p><p id="pair-score-choice"></p><p class="muted small-copy">Approve only if the code matches your other device.</p><div class="pair-actions"><button type="button" class="button primary" id="approve-pairing">Approve pairing</button><button type="button" class="text-button" id="reject-pairing">Decline</button></div></div>
+      <p id="pair-message" class="dialog-note" role="status"></p>
+    </section>
+    <div class="progress-tools"><button type="button" class="button secondary" id="export-progress"><svg class="icon small"><use href="#i-download"/></svg>Export progress</button><button type="button" class="button secondary" id="import-progress"><svg class="icon small"><use href="#i-upload"/></svg>Import progress</button><input id="import-file" type="file" accept=".json,application/json" hidden></div>
+    <div id="import-confirmation" class="help-panel" hidden><strong id="import-summary"></strong><p>Your current progress will be backed up before replacing it.</p><button type="button" class="button secondary" id="confirm-import">Restore progress</button><button type="button" class="text-button" id="cancel-import">Cancel</button></div>
+    <button type="button" class="text-button danger-text reset-progress-button" id="reset-send-progress">Reset sending levels</button>
+    <div id="reset-send-confirmation" class="help-panel" hidden><strong>Clear all sending levels?</strong><p>Returns Send to level 1 and clears its completed levels on this device and paired devices. Your XP, listening progress, sending history and settings stay saved.</p><div class="reset-progress-actions"><button type="button" class="button danger-button" id="confirm-reset-send">Reset sending levels</button><button type="button" class="button secondary" id="cancel-reset-send">Keep sending levels</button></div></div>
+    <button type="button" class="text-button danger-text reset-progress-button" id="reset-progress">Reset progress</button>
+    <div id="reset-progress-confirmation" class="help-panel" hidden><strong id="reset-progress-title">Start again from level 1?</strong><p>Clears completed listening and sending levels on this device and any paired devices. Your lifetime XP, callsign, practice history, pairing and sound settings stay saved.</p><div class="reset-progress-actions"><button type="button" class="button danger-button" id="confirm-reset-progress">Reset progress</button><button type="button" class="button secondary" id="cancel-reset-progress">Keep progress</button></div></div>
+    <button type="button" class="text-button danger-text reset-progress-button" id="delete-all-data">Delete all my data</button>
+    <div id="delete-data-confirmation" class="help-panel" hidden><strong>Delete all your Morse data?</strong><p>Permanently deletes XP, callsign, leaderboard entry, settings, progress and saved backups. All paired devices disconnect and clear their Morse data when they reconnect. Export first if you want a copy.</p><div class="reset-progress-actions"><button type="button" class="button danger-button" id="confirm-delete-data">Delete all my data</button><button type="button" class="button secondary" id="cancel-delete-data">Keep my data</button></div></div>
+    <p id="progress-message" role="status" class="dialog-note"></p>
+    <p class="dialog-note">Progress stays saved in this browser. Paired devices catch up when you reopen Morse or reconnect. Clearing site data disconnects that browser; another paired device can link it again.</p>
+  </dialog>
+  <dialog id="radio-dialog" aria-labelledby="radio-title"><div class="dialog-heading"><h2 id="radio-title">Endless radio</h2><button type="button" class="icon-button" data-close="radio-dialog" aria-label="Close Paragon progress"><svg class="icon"><use href="#i-close"/></svg></button></div><p id="radio-progress"></p><p class="muted">Correct copies earn XP toward your next Paragon rank. Five copied messages finish a simulated contact. Help and replays stay available; skipped messages do not complete a contact.</p><p class="muted">Your course achievements remain saved. Return to the course in Settings at any time.</p><button type="button" class="button primary" id="radio-done" data-close="radio-dialog">Back to practice</button></dialog>
+  <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><div><h2 id="help-title">How to practice</h2></div><button class="icon-button" type="button" data-close="help-dialog" aria-label="Close help"><svg class="icon"><use href="#i-close"/></svg></button></div><ol class="how-to"><li><strong>Learn the characters</strong><p>Start with E, T, A and N in the Course, or choose a lesson in Settings. Tap a character to hear it.</p></li><li><strong>Copy the signal</strong><p>Press Play once, then type what you hear. Correct answers are checked automatically, and the next signal follows after a short pause. The cursor stays in the answer box, including while the signal plays.</p></li><li><strong>Use help</strong><p>Replay, listen slower, open the chart, or reveal the answer. Assisted copies earn 8 XP; a clean first copy earns 20, plus 2 XP for each quick character.</p></li><li><strong>Advance levels</strong><p>Mastery requires 18 quick, correct letters in your last 20 guesses, plus the requirements shown in the progress meter. Type along or enter the group after listening. Click the time badge to adjust response timing. The Course adds characters across 400 levels, then unlocks Endless radio. Choose any level in Settings.</p></li></ol><p class="dialog-note">Enter clears a wrong answer and replays the same signal. Correct answers start the next signal automatically. Esc skips a focus level; otherwise Esc or Pause practice pauses. On a phone, tap Play once to enable sound and check device volume if needed.</p><button type="button" class="button primary" data-close="help-dialog">Start practice <svg class="icon"><use href="#i-arrow"/></svg></button></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="reward-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+  <noscript><div class="notice">Please enable JavaScript to play Morse audio and save your practice progress.</div></noscript>
+</body>
+</html>

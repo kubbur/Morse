@@ -1,3 +1,13 @@
 .DS_Store
 Source/build/
 __pycache__/
+desktop/node_modules/
+desktop/build/
+desktop/dist/
+*.log
+.env*
+*.pem
+*.key
+*.p12
+*.p8
+*.mobileprovision
