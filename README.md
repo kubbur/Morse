@@ -6,32 +6,25 @@ Morse code listening and sending practice for Mac and the web.
 
 ## Downloads
 
-| App or guide | Download |
+| File | Download |
 | --- | --- |
-| **Morse for Mac 1.0.0** | [Apple Silicon](https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-x64.zip) |
-| **Morse Paddle 1.4.0** | [Universal Mac app](https://github.com/kubbur/Morse/releases/latest/download/Morse-Paddle-Mac.zip) |
-| **Paddle and converter assembly guide** | [PDF with BOM and wiring diagrams](https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf) |
+| **Morse for Mac 1.1.0** | [Apple Silicon](https://github.com/kubbur/Morse/releases/download/morse-v1.1.0/Morse-1.1.0-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/download/morse-v1.1.0/Morse-1.1.0-mac-x64.zip) |
+| **Paddle and converter assembly guide** | [PDF with BOM and wiring diagrams](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf) |
 
-Both apps require macOS 13 or later. Unzip the download and move the app into **Applications**.
+Requires macOS 13 or later. Unzip the download and move **Morse.app** to **Applications**. These builds are signed ad hoc. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
 
-Morse works offline and saves progress locally. Use **Saved progress → Export / Import** to move a save between the Mac app and website.
-
-The apps are not notarized by Apple. If macOS blocks them, follow [Apple’s instructions for opening the app](https://support.apple.com/en-us/102445).
+Morse works offline. Open **Saved progress** to export or import a save. Version 1.1.0 keeps scores and private progress on this Mac. [Release notes](desktop/RELEASE.md)
 
 ## Using a paddle
 
-Morse Paddle is a separate app that connects a physical paddle to the trainer.
+Open Morse and go to **Settings → Input**. Choose your adapter.
 
-1. Connect the paddle and passive adapter to the Mac. Open Morse Paddle, allow Microphone access and leave both paddles released during calibration.
-2. Enter the trainer address below in Morse Paddle and click **Link**.
-3. Open **Send** in the trainer and connect.
+- **Audio converter (3.5 mm)** uses the Mac’s headset input. Quit the old Morse Paddle app if it is running, allow Microphone access and release both paddles during calibration.
+- **VBand USB adapter** uses left Control for dit and right Control for dah. Use **Swap dot and dash contacts** if needed.
 
-| Trainer | Address |
-| --- | --- |
-| Morse.app | `http://127.0.0.1:37473` |
-| Web app | `https://morse.kubbur.digital` |
+Open **Send** to practise. Enable **Write in the focused app** in Settings if you want to type in other applications.
 
-See the [Morse Paddle guide](Source/Integration.md) for calibration, sidetone and text entry settings.
+The separate Morse Paddle companion is still available for the browser trainer. [Morse Paddle 1.4.0](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/Morse-Paddle-Mac.zip) · [Companion setup](Source/Integration.md)
 
 ## Hardware
 
@@ -40,5 +33,5 @@ See the [Morse Paddle guide](Source/Integration.md) for calibration, sidetone an
 ## Source
 
 - [`desktop/`](desktop/) — trainer source, tests and Mac packaging. [Build instructions](desktop/README.md).
-- [`Source/`](Source/) — Morse Paddle companion. [Build and integration instructions](Source/README.md).
-- [Trainer source ZIP](https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-source.zip).
+- [`Source/`](Source/) — native paddle engine and standalone companion. [Companion build instructions](Source/README.md).
+- [Trainer source ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.0/Morse-1.1.0-source.zip).

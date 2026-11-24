@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { syncProfile, mergeProgress } from '../public/js/sync-data.mjs';
-import { sanitizeCallsign, dayStreak, resetSendingProgress } from '../public/js/progress.mjs';
+import { sanitizeCallsign, dayStreak, resetListeningProgress, resetSendingProgress } from '../public/js/progress.mjs';
 
 export class SyncError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -60,12 +60,13 @@ export class SyncStore {
   device(token) { return validToken(token) ? this.get('SELECT * FROM devices WHERE token = ?', hash(token)) : null; }
   save(device) { return this.get('SELECT * FROM saves WHERE id = ?', device.save_id); }
   courseResetScope(saveId, from, to) {
-    let scope = 'send';
+    const scopes = new Set();
     for (let i = 0; i < 100; i++) {
       const step = this.get('SELECT * FROM epochs WHERE save_id = ? AND old_epoch = ?', saveId, from);
-      if (!step || !['reset', 'reset-send'].includes(step.reason)) return null;
-      if (step.reason === 'reset') scope = 'all';
-      if (step.new_epoch === to) return scope;
+      if (!step || !['reset', 'reset-send', 'reset-listen'].includes(step.reason)) return null;
+      if (step.reason !== 'reset-send') scopes.add('listen');
+      if (step.reason !== 'reset-listen') scopes.add('send');
+      if (step.new_epoch === to) return scopes.size === 2 ? 'all' : [...scopes][0];
       from = step.new_epoch;
     }
     return null;
@@ -95,6 +96,10 @@ export class SyncStore {
     }
     if (incoming) result.waiting = { code: incoming.code, expiresAt: incoming.expires };
     return result;
+  }
+  pairedProfile(left, right) {
+    // Retained for the deployed v1 protocol during source comparison.
+    return right.profile.stats.xp > left.profile.stats.xp ? right.profile : left.profile;
   }
   ensure(token, profile, name) {
     const existing = this.device(token);
@@ -141,6 +146,7 @@ export class SyncStore {
       if (action === 'start') {
         const ensured = this.ensure(token, body.profile, body.label);
         device = ensured.device;
+        if (body.invite === false) return { ...this.snapshot(device), setToken: ensured.token };
         if (this.all('SELECT id FROM devices WHERE save_id = ?', device.save_id).length >= 8) fail(409, 'Disconnect a device before adding another.');
         this.run('DELETE FROM invites WHERE owner = ? OR claimant = ?', device.id, device.id);
         const invitation = secret(), expiresAt = this.now() + 300000;
@@ -163,7 +169,7 @@ export class SyncStore {
         return { ...this.snapshot(device), waiting: { code: invite.code, expiresAt: invite.expires }, setToken: ensured.token };
       }
       if (!device && action === 'erase') return { connected: false, erased: true, setToken: '' };
-      if (!device) fail(401, 'This browser is no longer paired. Your local progress is safe.');
+      if (!device) fail(401, 'This device is no longer paired. Your progress is saved locally.');
       if (action === 'approve') {
         const invite = this.get('SELECT * FROM invites WHERE owner = ? AND claimant = ?', device.id, body.claim);
         if (!invite) fail(409, 'That pairing request is no longer available.');
@@ -171,9 +177,7 @@ export class SyncStore {
         if (this.all('SELECT id FROM devices WHERE save_id = ?', joining.save_id).length !== 1) fail(409, 'That device is already paired elsewhere.');
         const left = this.save(device), right = this.save(joining);
         const a = JSON.parse(left.profile), b = JSON.parse(right.profile);
-        // XP selects one complete save, never the manually selected level.
-        // A tie keeps the device showing the QR code. Approval is atomic.
-        const winner = b.stats.xp > a.stats.xp ? b : a;
+        const winner = this.pairedProfile({ ...left, profile: a }, { ...right, profile: b });
         this.run('UPDATE saves SET profile = ?, epoch = ?, revision = revision + 1, updated = ? WHERE id = ?', JSON.stringify(winner), randomUUID(), this.now(), left.id);
         this.run('UPDATE devices SET save_id = ? WHERE save_id = ?', left.id, right.id);
         this.run('DELETE FROM invites WHERE owner IN (SELECT id FROM devices WHERE save_id = ?) OR claimant IN (SELECT id FROM devices WHERE save_id = ?)', left.id, left.id);
@@ -210,7 +214,8 @@ export class SyncStore {
         if (body.seq === device.seq + 1 && !body.replace && scope) {
           const remote = syncProfile(JSON.parse(save.profile)), merged = mergeProgress(body.base, body.profile, remote);
           const updated = scope === 'send' ? merged : { ...remote, stats: { ...merged.stats, mastery: remote.stats.mastery }, review: merged.review };
-          updated.sending = { ...merged.sending, level: remote.sending.level, pendingLevel: remote.sending.pendingLevel, records: remote.sending.records, settings: remote.sending.settings };
+          if (scope === 'listen') updated.sending = merged.sending;
+          else updated.sending = { ...merged.sending, level: remote.sending.level, pendingLevel: remote.sending.pendingLevel, records: remote.sending.records, settings: remote.sending.settings };
           this.listing(save.id, updated);
           this.run('UPDATE saves SET profile = ?, revision = revision + 1, updated = ? WHERE id = ?', JSON.stringify(updated), this.now(), save.id);
           this.run('UPDATE devices SET seq = ?, updated = ? WHERE id = ?', body.seq, this.now(), device.id);
@@ -221,11 +226,13 @@ export class SyncStore {
       if (body.seq <= device.seq) return this.snapshot(device); // committed response was lost
       if (body.seq !== device.seq + 1) fail(409, 'Sync sequence changed. Reopen this page.');
       const current = syncProfile(body.profile);
-      const sendReset = body.replace === true && body.reason === 'reset-send';
-      const updated = sendReset ? resetSendingProgress(mergeProgress(body.base, current, JSON.parse(save.profile))) : body.replace === true ? current : mergeProgress(body.base, current, JSON.parse(save.profile));
+      const reason = body.replace && body.reason;
+      const merged = () => mergeProgress(body.base, current, JSON.parse(save.profile));
+      const updated = reason === 'reset-send' ? resetSendingProgress(merged()) :
+        reason === 'reset-listen' ? resetListeningProgress(merged()) : body.replace === true ? current : merged();
       this.listing(save.id, updated);
       const epoch = body.replace === true ? randomUUID() : save.epoch;
-      if (body.replace === true) this.run('INSERT INTO epochs VALUES (?, ?, ?, ?)', save.id, save.epoch, epoch, sendReset ? 'reset-send' : body.reason === 'reset' ? 'reset' : 'import');
+      if (body.replace === true) this.run('INSERT INTO epochs VALUES (?, ?, ?, ?)', save.id, save.epoch, epoch, ['reset', 'reset-listen', 'reset-send'].includes(reason) ? reason : 'import');
       this.run('UPDATE saves SET profile = ?, epoch = ?, revision = revision + 1, updated = ? WHERE id = ?', JSON.stringify(updated), epoch, this.now(), save.id);
       this.run('UPDATE devices SET seq = ?, updated = ? WHERE id = ?', body.seq, this.now(), device.id);
       device = this.device(token);

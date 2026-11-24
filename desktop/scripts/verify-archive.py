@@ -37,7 +37,7 @@ with zipfile.ZipFile(archive_path) as archive:
         assert not any(part in {'.git', 'node_modules', '.env', '.DS_Store'} for part in path.parts), 'Private or generated files'
         assert path.suffix not in {'.sqlite', '.db', '.p12', '.p8', '.mobileprovision', '.log'}, 'Data or credentials in archive'
     if architecture == 'source':
-        expected = {'package.json', 'package-lock.json', '.gitignore', '.github', 'README.md', 'INSTALL.txt', 'src', 'assets', 'scripts', 'tests', 'website', 'website-manifest.json'}
+        expected = {'Source', 'package.json', 'package-lock.json', '.gitignore', '.github', 'README.md', 'RELEASE.md', 'INSTALL.txt', 'src', 'assets', 'scripts', 'tests', 'website', 'website-manifest.json'}
         assert {PurePosixPath(name).parts[0] for name in names} == {'Morse'}
         assert {PurePosixPath(name).parts[1] for name in names} == expected
         assert not any(stat.S_ISLNK(item.external_attr >> 16) for item in archive.infolist())
@@ -116,6 +116,9 @@ with zipfile.ZipFile(archive_path) as archive:
             helper_name = prefix + f'Frameworks/{helper}.app/Contents/MacOS/{helper}'
             assert archive.getinfo(helper_name).external_attr >> 16 & stat.S_IXUSR
             assert allows_jit(archive.read(helper_name)), 'Electron helper JIT entitlement missing'
+        helper = prefix + 'Helpers/MorseKeyer'
+        assert info.get('NSMicrophoneUsageDescription') and archive.getinfo(helper).external_attr >> 16 & stat.S_IXUSR
+        assert struct.unpack_from('<II',archive.read(helper)) == (0xFEEDFACF,cpu), 'Wrong native paddle architecture'
         assert prefix + '_CodeSignature/CodeResources' in names
         assert prefix + 'Resources/LICENSE.electron.txt' in names
         assert prefix + 'Resources/LICENSES.chromium.html' in names

@@ -82,18 +82,23 @@ export function timeline(text, settings = {}, { trailingWordGap = false } = {}) 
   return { tones, duration: cursor, timing: time, text: normalized };
 }
 
+export function rampGain(x, shape) {
+  if (shape === 'linear') return x;
+  if (shape === 'exponential') return Math.expm1(3 * x) / Math.expm1(3);
+  return (1 - Math.cos(Math.PI * x)) / 2;
+}
+
 export function envelopeAt(time, duration, riseMs = 5, fallMs = 5, shape = 'smooth') {
   let rise = clamp(riseMs, 1, 30, 5) / 1000;
   let fall = clamp(fallMs, 1, 30, 5) / 1000;
-  if (rise + fall > duration * 0.9) {
-    const scale = duration * 0.9 / (rise + fall);
+  if (rise + fall > duration) {
+    const scale = duration / (rise + fall);
     rise *= scale;
     fall *= scale;
   }
-  const curve = t => shape === 'linear' ? t : (1 - Math.cos(Math.PI * t)) / 2;
   if (time <= 0 || time >= duration) return 0;
-  if (time < rise) return curve(time / rise);
-  if (time > duration - fall) return curve((duration - time) / fall);
+  if (time < rise) return rampGain(time / rise, shape);
+  if (time > duration - fall) return rampGain((duration - time) / fall, shape);
   return 1;
 }
 

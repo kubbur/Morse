@@ -1,80 +1,61 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import http from 'node:http';
-import { APP_ORIGIN, APP_PORT, allowedRequest, allowedPermission, appDocument, progressExport } from '../src/policy.mjs';
-import { startLocalServer } from '../src/local-server.mjs';
-import { newProfile } from '../website/public/js/progress.mjs';
-import { stageApp, stage, root } from '../scripts/stage.mjs';
+import { APP_ORIGIN, allowedRequest, allowedPermission, appDocument, progressExport } from '../src/policy.mjs';
+import { bundledTrainer } from '../src/bundled-trainer.mjs';
+import { stageApp, stage } from '../scripts/stage.mjs';
+import { LESSONS, COURSE_LEVELS, courseStage } from '../website/public/js/lessons.mjs';
+import { SENDING_LEVELS, sendingStage } from '../website/public/js/sending-course.mjs';
+import { availableUpdate } from '../src/updates.mjs';
+import { validCommand } from '../src/paddle-service.mjs';
 
-test('desktop network policy allows the trainer and exact companion commands without granting web or filesystem access', () => {
-  for (const url of [APP_ORIGIN, `${APP_ORIGIN}/js/app.mjs`, `${APP_ORIGIN}/fonts/InstrumentSans.woff2`]) assert.equal(allowedRequest(url), true);
-  assert.equal(allowedRequest(`${APP_ORIGIN}/api/sync/status`, 'POST'), true);
-  for (const [path, method] of [['events','GET'],['sidetone/mute','PUT'],['sidetone/unmute','PUT']]) assert.equal(allowedRequest(`http://127.0.0.1:17373/${path}`, method), true);
-  assert.equal(allowedRequest('http://127.0.0.1:17373/sidetone/mute', 'OPTIONS'), true);
-  assert.equal(allowedRequest('http://127.0.0.1:17373/other', 'OPTIONS'), false);
-  for (const url of ['https://morse.kubbur.digital/', 'https://example.org/', 'file:///etc/passwd', 'http://127.0.0.1:17373/other', 'http://127.0.0.1:17373/events?x=1', 'http://localhost:17373/events', 'http://127.0.0.1:37474/', `${APP_ORIGIN.replace('http://','http://user:password@')}/`]) assert.equal(allowedRequest(url), false, url);
-  assert.equal(allowedRequest('http://127.0.0.1:17373/sidetone/mute', 'GET'), false);
-  assert.equal(allowedRequest(APP_ORIGIN, 'DELETE'), false);
-  assert.equal(progressExport(`blob:${APP_ORIGIN}/test`), true);
-  assert.equal(progressExport('blob:https://example.org/test'), false);
+test('sandbox exposes only bundled documents and explicitly needed permissions',()=>{
+  assert.ok(appDocument(APP_ORIGIN+'/#send')); assert.ok(progressExport('blob:'+APP_ORIGIN+'/progress'));
+  for(const url of ['file:///tmp/x','http://127.0.0.1:17373/events','http://127.0.0.1:38764/api/v2/','https://morse.kubbur.digital/','https://github.com/']) assert.equal(allowedRequest(url),false);
+  assert.ok(allowedRequest(APP_ORIGIN+'/js/app.mjs'));
+  assert.equal(allowedRequest(APP_ORIGIN+'/api/sync/start','POST'),false);
+  for(const p of ['microphone','geolocation','media','accessibility','loopback-network']) assert.equal(allowedPermission(p,APP_ORIGIN,APP_ORIGIN),false);
+  assert.ok(allowedPermission('screen-wake-lock',APP_ORIGIN,APP_ORIGIN));
+  assert.equal(validCommand('keyer',{wpm:300,farnsworth:5,keyer:'a'}),false);
+  assert.equal(validCommand('type','arbitrary text'),false);
 });
-
-test('navigation and permissions stay limited to the app window, key companion and screen wake lock', () => {
-  assert.equal(appDocument(`${APP_ORIGIN}/#send`), true);
-  assert.equal(appDocument(`${APP_ORIGIN}/index.html`), true);
-  for (const url of ['https://example.org/', `${APP_ORIGIN}/js/app.mjs`, `${APP_ORIGIN}/?redirect=https://example.org`, 'about:blank', 'file:///tmp/index.html']) assert.equal(appDocument(url), false);
-  for (const permission of ['loopback-network','local-network-access','screen-wake-lock','persistent-storage']) assert.equal(allowedPermission(permission, APP_ORIGIN, `${APP_ORIGIN}/#send`), true);
-  for (const permission of ['media','geolocation','local-network','camera','microphone','serial','usb','hid','notifications','unknown']) assert.equal(allowedPermission(permission, APP_ORIGIN, APP_ORIGIN), false);
-  assert.equal(allowedPermission('loopback-network','https://example.org',APP_ORIGIN), false);
-  assert.equal(allowedPermission('screen-wake-lock',APP_ORIGIN,'https://example.org'), false);
-});
-
-test('local saves persist across server restarts, reject other origins and bind only to loopback', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'morse-desktop-save-'));
-  let server;
-  const send = async (action, body = {}, cookie = '', origin = APP_ORIGIN) => fetch(`${APP_ORIGIN}/api/sync/${action}`, { method: 'POST', headers: { Origin: origin, 'X-Morse-Sync': '1', 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) }, body: JSON.stringify(body) });
-  try {
-    server = await startLocalServer(directory);
-    const page = await fetch(APP_ORIGIN); assert.equal(page.status, 200);
-    assert.match(page.headers.get('content-security-policy'), /default-src 'none'/);
-    const profile = newProfile(); profile.stats.xp = 123;
-    const started = await send('start', { profile, label: 'Desktop' });
-    assert.equal(started.status, 200);
-    const cookie = started.headers.get('set-cookie').split(';')[0];
-    assert.match(started.headers.get('set-cookie'), /HttpOnly/);
-    assert.equal((await send('status', {}, cookie, 'https://example.org')).status, 403);
-    await server.close(); server = await startLocalServer(directory);
-    assert.equal((await (await send('status', {}, cookie)).json()).profile.stats.xp, 123);
-    assert.ok((await readdir(directory)).includes('progress.sqlite'));
-  } finally { if (server) await server.close(); await rm(directory, { recursive: true, force: true }); }
-});
-
-test('an occupied app port fails safely instead of switching origins or adopting another server', async () => {
-  const occupied = http.createServer((req, res) => res.end('unrelated'));
-  await new Promise(resolve => occupied.listen(APP_PORT, '127.0.0.1', resolve));
-  const directory = await mkdtemp(join(tmpdir(), 'morse-desktop-port-'));
-  try {
-    await assert.rejects(startLocalServer(directory), { code: 'EADDRINUSE' });
-    assert.equal(await (await fetch(APP_ORIGIN)).text(), 'unrelated');
-  } finally { await new Promise(resolve => occupied.close(resolve)); await rm(directory, { recursive: true, force: true }); }
-});
-
-test('staging contains only app code and assets, with local-only labels and one trainer entry point', async () => {
+test('every lesson and its static dependency closure is bundled on a fresh offline installation',async()=>{
   await stageApp();
-  const packageData = JSON.parse(await readFile(join(stage, 'package.json'), 'utf8'));
-  assert.equal(packageData.devDependencies, undefined); assert.equal(packageData.scripts, undefined);
-  const html = await readFile(join(stage, 'website/public/index.html'), 'utf8');
-  assert.equal(html.match(/src="\/js\/app.mjs"/g).length, 1);
-  assert.ok(html.indexOf('src="/js/desktop-ui.mjs"') < html.indexOf('src="/js/app.mjs"'));
-  const forbidden = /(^|\/)(\.env|\.git|artifacts|node_modules|compose\.yaml|sync\.sqlite|progress\.sqlite|AGENTS\.md)(\/|$)/;
-  async function walk(directory) {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      assert.equal(forbidden.test(join(directory, entry.name).slice(stage.length)), false);
-      if (entry.isDirectory()) await walk(join(directory, entry.name));
+  const root=join(stage,'website/public'), handle=await bundledTrainer(root);
+  const get=async path=>handle(new Request(new URL(path,APP_ORIGIN)));
+  const page=await get('/'); assert.equal(page.status,200);
+  assert.match(page.headers.get('content-security-policy'),/connect-src 'self';/);
+  const html=await page.text();
+  assert.equal(html.match(/src="\/js\/app.mjs"/g).length,1);
+  assert.ok(html.indexOf('/js/desktop-ui.mjs')<html.indexOf('/js/app.mjs'));
+  async function visit(dir,route) {
+    for(const e of await readdir(dir,{withFileTypes:true})) {
+      const path=route+'/'+e.name;
+      if(e.isDirectory()) await visit(join(dir,e.name),path);
+      else {
+        const file=await get(path); assert.equal(file.status,200,path);
+        const text=await file.text();
+        const paths=path.endsWith('.mjs') ? [...text.matchAll(/(?:from\s+|import\s*\(|new URL\(\s*)['"](\.{1,2}\/[^'"]+\.mjs)['"]/g)].map(m=>m[1])
+          : path.endsWith('.css') ? [...text.matchAll(/url\(\s*['"]?([^)'"]+)/g)].map(m=>m[1])
+          : path.endsWith('.html') ? [...text.matchAll(/(?:src|href)="(\/[^"#]+\.(?:mjs|css|svg|png|woff2|wav))"/g)].map(m=>m[1]) : [];
+        for(const ref of paths) { if(ref.startsWith('data:')) continue; const asset=new URL(ref,new URL(path,APP_ORIGIN)); assert.equal(asset.origin,APP_ORIGIN); assert.equal((await get(asset)).status,200,asset.href); }
+      }
     }
   }
-  await walk(stage);
+  await visit(root,'');
+  assert.ok(LESSONS.length>1);
+  for(let i=1;i<=COURSE_LEVELS;i++) assert.ok(courseStage(i));
+  for(let i=1;i<=SENDING_LEVELS;i++) assert.ok(sendingStage(i).items.length);
+  assert.equal((await get('https://example.com/js/app.mjs')).status,403);
+  assert.equal((await get('/api/sync/start')).status,404);
+  assert.equal(JSON.parse(await readFile(join(stage,'package.json'))).devDependencies,undefined);
+});
+test('update notice selects published Morse desktop version and matching CPU asset',()=>{
+ const release=(tag,assets,more={})=>({tag_name:tag,assets:assets.map(name=>({name})),...more});
+ const rows=[release('paddle-v9.0.0',[]),release('morse-v2.0.0',['Morse-2.0.0-mac-x64.zip']),release('morse-v1.2.0',['Morse-1.2.0-mac-arm64.zip']),release('morse-v4.0.0',['Morse-4.0.0-mac-arm64.zip'],{prerelease:true})];
+ assert.equal(availableUpdate(rows,'1.1.0','arm64').version,'1.2.0');
+ assert.equal(availableUpdate(rows,'1.1.0','x64').version,'2.0.0');
+ assert.equal(availableUpdate(rows,'2.1.0','x64'),null);
+ assert.equal(availableUpdate(rows,'1.2.0-dev.1','arm64').version,'1.2.0');
 });

@@ -1,8 +1,8 @@
 # Morse Paddle for Mac
 
-**Morse Paddle.app** is the native companion for a dual-lever paddle connected through a passive CTIA TRRS headset adapter. It is separate from the **Morse.app** trainer in [`../desktop/`](../desktop/).
+**Morse Paddle.app** connects a dual-lever paddle and passive CTIA headset adapter to the browser trainer. [Morse for Mac](../desktop/) includes its own paddle engine from version 1.1.0.
 
-**[Download Morse Paddle 1.4.0](https://github.com/kubbur/Morse/releases/latest/download/Morse-Paddle-Mac.zip) · [Latest release — both apps and PDF](https://github.com/kubbur/Morse/releases/latest) · [User and integration guide](Integration.md) · [Assembly guide (PDF)](https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)**
+**[Download Morse Paddle 1.4.0](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/Morse-Paddle-Mac.zip) · [User and integration guide](Integration.md) · [Assembly guide (PDF)](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)**
 
 ## Install and connect
 
@@ -10,7 +10,7 @@ Requires macOS 13 or later on Apple Silicon or Intel. Unzip the download and mov
 
 Enter the trainer address and click **Link**:
 
-- **Morse.app:** `http://127.0.0.1:37473`
+- **Morse for Mac 1.0.0 only:** `http://127.0.0.1:37473`
 - **Online trainer:** `https://morse.kubbur.digital`
 - **Custom trainer:** its HTTPS address, or a local development address such as `http://localhost:5173`.
 

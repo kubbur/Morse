@@ -20,7 +20,7 @@ typedef struct {
 
 typedef struct {
     uint64_t destination, lastEnd;
-    double lastUnitFrames;
+    double letterGapFrames, wordGapFrames;
     char marks[8];
     unsigned length;
     bool armed, hasMark, hasText, wordGap, timedSpaces;
@@ -33,4 +33,4 @@ bool takeTypedCharacter(TypingQueue *queue, TypedCharacter *result);
 void prepareTypingBlock(TypingDecoder *decoder, TypingQueue *queue, bool neutral);
 void advanceTyping(TypingDecoder *decoder, TypingQueue *queue, uint64_t now);
 void typeMark(TypingDecoder *decoder, TypingQueue *queue, unsigned element,
-              uint64_t start, uint32_t duration, double gapUnit, bool timedSpaces);
+              uint64_t start, uint32_t duration, double letterGap, double wordGap, bool timedSpaces);

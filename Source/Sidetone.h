@@ -2,10 +2,10 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-enum { MinToneHz=200, MaxToneHz=2000, MinKeyerWPM=5, MaxKeyerWPM=60,
+enum { MinToneHz=200, MaxToneHz=2000, MinKeyerWPM=5, MaxKeyerWPM=80, MinSpacingWPM=1,
        MinRampMs=1, MaxRampMs=30 };
 typedef enum { RaisedCosine, LinearRamp, ExponentialRamp } RampCurve;
-enum { UseFarnsworth=1, TimedWordSpaces=2 };
+enum { UseFarnsworth=1, TimedWordSpaces=2, IambicModeB=4, TrainerGapThresholds=8 };
 typedef struct {
     uint16_t pitchHz;
     uint8_t wpm, riseMs, fallMs, curve;

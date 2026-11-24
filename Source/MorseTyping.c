@@ -67,8 +67,7 @@ void prepareTypingBlock(TypingDecoder *d, TypingQueue *q, bool neutral) {
 void advanceTyping(TypingDecoder *d, TypingQueue *q, uint64_t now) {
     if (!d->armed || !d->hasMark || now<d->lastEnd) return;
     uint64_t silence=now-d->lastEnd;
-    double unit=d->lastUnitFrames;
-    if (d->length && silence>=(uint64_t)llround(3*unit)) {
+    if (d->length && silence>=(uint64_t)llround(d->letterGapFrames)) {
         char character=d->length<sizeof(d->marks) ? decode(d->marks) : 0;
         if (character) {
             enqueue(q,d->destination,character,d->timedSpaces && d->wordGap && character!=' ');
@@ -76,10 +75,10 @@ void advanceTyping(TypingDecoder *d, TypingQueue *q, uint64_t now) {
         }
         d->length=0;
     }
-    if (d->timedSpaces && d->hasText && silence>=(uint64_t)llround(7*unit)) d->wordGap=true;
+    if (d->timedSpaces && d->hasText && silence>=(uint64_t)llround(d->wordGapFrames)) d->wordGap=true;
 }
 void typeMark(TypingDecoder *d, TypingQueue *q, unsigned element,
-              uint64_t start, uint32_t duration, double gapUnit, bool timedSpaces) {
+              uint64_t start, uint32_t duration, double letterGap, double wordGap, bool timedSpaces) {
     if (!d->armed) return;
     advanceTyping(d,q,start);
     if (timedSpaces!=d->timedSpaces) d->wordGap=false;
@@ -88,5 +87,5 @@ void typeMark(TypingDecoder *d, TypingQueue *q, unsigned element,
         d->marks[d->length++]=element==1 ? '.' : '-';
         d->marks[d->length]='\0';
     } else d->length=sizeof(d->marks);
-    d->lastEnd=start+duration; d->lastUnitFrames=gapUnit; d->hasMark=true;
+    d->lastEnd=start+duration; d->letterGapFrames=letterGap; d->wordGapFrames=wordGap; d->hasMark=true;
 }

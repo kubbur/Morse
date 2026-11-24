@@ -116,10 +116,7 @@ static bool checkAdapterToText(double rate, bool swapped, bool audible) {
     int blocks[]={SettleBlocks+IdleBlocks+10,18,20,36,24,18,48};
     for (unsigned i=0; i<sizeof(mask)/sizeof(mask[0]); ++i) for (int b=0; b<blocks[i]; ++b) {
         int physical=swapped && mask[i] ? 3-mask[i] : mask[i];
-        if (!audible && d.calibrated>=SettleBlocks+IdleBlocks) {
-            setPaddles(&k,logicalContacts(&d)); keyFrames(&k,inputFrames,false);
-        }
-        synth(&d,&g,rate,physical,1,&noise);
+        synth(&d,&g,rate,physical,1,&noise,audible ? NULL : &k);
         if (audible) keyFrames(&k,inputFrames,true);
     }
     return expectText(&q,"sos");

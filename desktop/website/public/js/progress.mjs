@@ -46,11 +46,11 @@ export function sanitizeSettings(input = {}) {
   settings.custom = supportedCharacters(typeof source.custom === 'string' ? source.custom : 'ETAN').slice(0, 50) || 'ETAN';
   settings.wpm = integer(source.wpm, 5, 80, 30);
   settings.farnsworth = integer(source.farnsworth, 1, settings.wpm, 15);
-  settings.tone = integer(source.tone, 200, 1200, 600);
+  settings.tone = 50 * Math.round(integer(source.tone, 200, 2000, 600) / 50);
   settings.volume = integer(source.volume, 0, 100, 55);
   settings.rise = integer(source.rise, 1, 30, 5);
   settings.fall = integer(source.fall, 1, 30, 5);
-  settings.curve = source.curve === 'linear' ? 'linear' : 'smooth';
+  settings.curve = ['linear', 'exponential'].includes(source.curve) ? source.curve : 'smooth';
   settings.adaptive = source.adaptive !== false;
   settings.timingMode = source.timingMode === 'fixed' ? 'fixed' : 'adaptive';
   settings.goal = integer(source.goal, 5, 50, 10);
@@ -118,6 +118,7 @@ function sanitizeStats(input) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(day)) stats.days[day] = integer(count, 0, 10000, 0);
   }
   stats.rounds = Array.isArray(source.rounds) ? source.rounds.slice(-300).map(entry => ({
+    ...(safeId(entry?.id) ? {id:entry.id} : {}),
     at: Number.isFinite(entry?.at) ? entry.at : 0,
     level: integer(entry?.level, 1, 100, 1),
     wpm: integer(entry?.wpm, 5, 80, 30),
@@ -179,28 +180,44 @@ function sanitizeRound(input, settings, endless, focus, listening) {
   };
 }
 
-export function newProfile(name = 'Listener 1') {
-  return { id: id(), name: safeText(name) || 'Listener', callsign: '', leaderboard: false, settings: { ...DEFAULT_SETTINGS }, stats: emptyStats(), sessionId: '', round: null, focus: emptyFocus(), listening: emptyListening(), guidance: emptyGuidance(), pacing: sanitizePacing(), headPacing: sanitizePacing(), review: emptyReview(), endless: emptyEndless(), sending: emptySending() };
+// Profile settings drive playback, grading and the native keyer. Keep the
+// sending export fields aligned for older readers of the version 1 file.
+export function mirrorSendingSpeed(profile) {
+  profile.sending.settings.wpm = profile.settings.wpm;
+  profile.sending.settings.farnsworth = profile.settings.farnsworth;
 }
 
-export function resetLearnerProgress(learner) {
+export function newProfile(name = 'Listener') {
+  const profile = { soundVersion: 1, id: id(), name: safeText(name) || 'Listener', callsign: '', leaderboard: false, credits: {}, settings: { ...DEFAULT_SETTINGS }, stats: emptyStats(), sessionId: '', round: null, focus: emptyFocus(), listening: emptyListening(), guidance: emptyGuidance(), pacing: sanitizePacing(), headPacing: sanitizePacing(), review: emptyReview(), endless: emptyEndless(), sending: emptySending() };
+  mirrorSendingSpeed(profile);
+  return profile;
+}
+
+export function resetListeningProgress(learner) {
   return {
+    ...learner,
     id: learner.id,
     name: learner.name,
     callsign: learner.callsign || '',
     leaderboard: learner.leaderboard === true,
+    credits: structuredClone(learner.credits || {}),
     settings: sanitizeSettings({ ...learner.settings, track: 'course', lesson: 'starter', content: 'groups', level: 1, courseLevel: 1, courseCount: 4, earReturnLevel: 0 }),
     stats: { ...structuredClone(learner.stats), mastery: {} },
     sessionId: '',
     round: null,
     focus: emptyFocus(),
     listening: emptyListening(),
-    sending: { ...sanitizeSending(learner.sending), level: 1, pendingLevel: null, records: {} },
+    sending: structuredClone(learner.sending),
     guidance: emptyGuidance(),
     pacing: sanitizePacing(learner.pacing, learner.settings.recallSeconds),
     headPacing: sanitizePacing(learner.headPacing, learner.settings.recallSeconds), review: sanitizeReview(learner.review),
     endless: { ...emptyEndless(), rank: learner.endless?.rank || 1, xp: learner.endless?.xp || 0, earned: learner.endless?.earned || 0, contacts: learner.endless?.contacts || 0 },
   };
+}
+
+// Previously queued full-course resets still clear both courses.
+export function resetLearnerProgress(learner) {
+  return resetSendingProgress(resetListeningProgress(learner));
 }
 
 export function resetSendingProgress(learner) {
@@ -245,7 +262,21 @@ export function sanitizeState(input) {
     if (focus.active) listening.active = null;
     if (isEndless(settings) && !endless.unlocked) Object.assign(settings, sanitizeSettings({ ...settings, track: 'course' }));
     const profile = { id: profileId, name: safeText(source?.name) || `Listener ${index + 1}`, callsign: sanitizeCallsign(source.callsign), leaderboard: source.leaderboard === true && !!sanitizeCallsign(source.callsign), settings, stats, sessionId: stats.sessions.some(row => row.id === source.sessionId) ? source.sessionId : '', focus, listening, round: sanitizeRound(source?.round, settings, endless, focus, listening), guidance: sanitizeGuidance(source.guidance, settings, stats.total), pacing: sanitizePacing(source.pacing, settings.recallSeconds), headPacing: sanitizePacing(source.headPacing, settings.recallSeconds), review: sanitizeReview(source.review), endless };
+    // Cumulative contributions have a private device stream ID. Imported
+    // totals predating this format remain an unattributed legacy balance.
+    profile.credits=Object.fromEntries(Object.entries(safeObject(source.credits)).filter(([key,n])=>
+      /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(key) && Number.isSafeInteger(n) && n>0 && n<=1e9));
+    if (Math.min(1e9,Object.values(profile.credits).reduce((sum,n)=>sum+n,0))>stats.xp) throw new Error('The result credits exceed the saved XP.');
     profile.sending = sanitizeSending(source.sending);
+    profile.soundVersion = 1;
+    const oldSpeed = source.soundVersion === 1 ? source.previousTiming :
+      source.sending?.settings && profile.sending.settings;
+    if (oldSpeed && Number.isFinite(oldSpeed.wpm) && Number.isFinite(oldSpeed.farnsworth)) {
+      const wpm = integer(oldSpeed.wpm, 5, 80, 30);
+      const farnsworth = integer(oldSpeed.farnsworth, 1, wpm, wpm);
+      if (wpm !== settings.wpm || farnsworth !== settings.farnsworth) profile.previousTiming = { wpm, farnsworth };
+    }
+    mirrorSendingSpeed(profile);
     collectBadges(profile);
     return profile;
   });
@@ -280,7 +311,7 @@ export function loadState(storage, cookie = '') {
         warning = 'We could not read your last save. A recovery copy was kept on this device.';
       }
     }
-  } catch { warning = 'Browser storage is unavailable. Export your progress before leaving to keep it.'; }
+  } catch { warning = 'Local storage is unavailable. Export your progress before leaving to keep it.'; }
   state ||= newState();
   const selected = cookie.split(';').map(c => c.trim()).find(c => c.startsWith('morse_learner='))?.slice(14);
   if (selected && state.profiles.some(p => p.id === selected)) state.activeId = selected;
@@ -423,7 +454,7 @@ export function finishRound(profile, { solved = false, now = new Date() } = {}) 
   stats.total++;
   if (solved) stats.solved++;
   if (clean) stats.clean++;
-  stats.xp += awarded;
+  stats.xp = Math.min(1e9,stats.xp + awarded);
   const mode = stats.modes[profile.settings.copyMode === 'head' ? 'head' : 'flexible'];
   mode.total = Math.min(1e9, mode.total + 1);
   if (clean) mode.clean = Math.min(1e9, mode.clean + 1);
@@ -487,7 +518,7 @@ export function finishRound(profile, { solved = false, now = new Date() } = {}) 
     entry.seen++;
     if (letter.correct && !mistake && !round.assisted && round.plays === 1) entry.correct++;
   }
-  stats.rounds.push({ at: now.getTime(), level: round.target.replaceAll(' ', '').length, wpm: profile.settings.wpm, solved, clean, quick, speedBonus, assisted: round.assisted || round.plays > 1 || round.attempts > 1 });
+  stats.rounds.push({ id: id(), at: now.getTime(), level: round.target.replaceAll(' ', '').length, wpm: profile.settings.wpm, solved, clean, quick, speedBonus, assisted: round.assisted || round.plays > 1 || round.attempts > 1 });
   stats.rounds = stats.rounds.slice(-300);
   const dayEntries = Object.entries(stats.days).sort().slice(-366);
   stats.days = Object.fromEntries(dayEntries);

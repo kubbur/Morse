@@ -9,7 +9,7 @@ static void measuredInput(Detector *d, double rate, uint64_t *sample, int frames
             double t=*sample/rate;
             pcm[i]=(float)(dit*sin(2*M_PI*(1000+offsetHz)*t+.21)+dah*sin(2*M_PI*(1600-offsetHz)*t-.32));
         }
-        detect(d,pcm);
+        acceptInput(d,NULL,pcm,inputFrames);
     }
 }
 static void recordMask(void *context, unsigned mask, bool swapped) {
