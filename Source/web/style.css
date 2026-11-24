@@ -1,0 +1,14 @@
+:root{color-scheme:dark;font-family:Inter,-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;background:#101a20;color:#eef5f3}
+*{box-sizing:border-box}body{margin:0}main{width:min(100% - 40px,570px);margin:clamp(28px,9vh,96px) auto}
+header{display:flex;gap:12px;align-items:center;color:#afc1c2;font-size:15px;font-weight:650}
+.mark{display:flex;align-items:center;gap:4px}.mark i,.mark b{border-radius:4px;height:6px;background:#73dfbe}.mark i{width:6px}.mark b{width:18px}
+h1{font-size:clamp(36px,7vw,54px);letter-spacing:-.045em;line-height:1.05;margin:32px 0 10px}p{color:#b8c9cb;line-height:1.55}
+morse-paddle-input{display:inline-flex;align-items:center;gap:14px;flex-wrap:wrap;margin:14px 0 26px}morse-paddle-input::part(button){border:0;border-radius:8px;background:#81e6c7;color:#0c3027;cursor:pointer;font:inherit;font-size:16px;font-weight:650;padding:11px 17px}
+morse-paddle-input::part(status){font-size:14px;color:#b8c9cb}section{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+section div{border:1px solid #40545a;background:#1a2b30;border-radius:12px;padding:22px}section span,section strong{display:block}
+section span{font-size:19px;font-weight:650}section strong{font-size:15px;color:#b8c9cb;font-weight:450;margin-top:20px}
+section .down{background:#94efd1;color:#10392e;border-color:#b0f6df}section .down strong{color:#185440}
+footer{margin-top:28px;font-size:14px}a{color:#99dcca;text-underline-offset:3px}button:focus-visible,a:focus-visible{outline:2px solid white;outline-offset:3px}
+.sidetone-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:20px}
+.sidetone-controls button{font:inherit;font-size:14px;color:inherit;background:#1a2b30;border:1px solid #40545a;border-radius:8px;padding:8px 12px;cursor:pointer}
+#sidetone-result{font-size:14px;color:#b8c9cb}

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morse Paddle · Connection test</title><link rel="stylesheet" href="/style.css"><script type="module" src="/demo.js"></script></head>
+<body><main><header><span class="mark" aria-hidden="true"><i></i><b></b></span><span>Morse Paddle</span></header>
+<h1>Connection test</h1><p>Connect, then press either paddle or squeeze both.</p>
+<morse-paddle-input></morse-paddle-input>
+<section aria-label="Paddle contacts"><div id="dit"><span>Dit</span><strong>Released</strong></div>
+<div id="dah"><span>Dah</span><strong>Released</strong></div></section>
+<p id="timing" hidden></p>
+<div class="sidetone-controls" role="group" aria-label="Mac paddle sidetone">
+<button type="button" data-sidetone="mute">Mute sidetone</button>
+<button type="button" data-sidetone="unmute">Unmute sidetone</button>
+<span id="sidetone-result" role="status"></span></div>
+<footer><a href="/morse-paddle.js" download>Download the web receiver</a></footer></main></body></html>
