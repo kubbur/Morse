@@ -65,6 +65,9 @@ export class PaddleService {
     if (op === 'input') this.input = value;
     if (op === 'vband' && (this.input !== 'vband' || value.session !== this.generation)) return Promise.resolve({ error: 'VBand input was interrupted.' });
     if (!this.child) return Promise.resolve({ error: 'Paddle unavailable.' });
+    const starting = this.status?.session !== this.generation;
+    if (starting && ['arm','vband','calibrate','sample'].includes(op))
+      return Promise.resolve({ error: 'Paddle engine is starting. Release both paddles and try again.' });
     if (this.pending.size >= 32) {
       if (!['input','vband-release','disarm','interrupt'].includes(op)) return Promise.resolve({ error: 'Paddle command unavailable.' });
       // Terminating the engine releases all contacts and any typing destination.
@@ -73,7 +76,7 @@ export class PaddleService {
     }
     const child = this.child, id = ++this.serial;
     return new Promise(resolve => {
-      const timer = setTimeout(() => { this.pending.delete(id); resolve({ error: 'Paddle command timed out.' }); child.kill(); }, 2500);
+      const timer = setTimeout(() => { this.pending.delete(id); resolve({ error: 'Paddle command timed out.' }); child.kill(); }, starting ? 15000 : 2500);
       this.pending.set(id, { resolve, timer });
       child.stdin.write(JSON.stringify({ id, op, value }) + '\n');
     });

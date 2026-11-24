@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,25 +14,56 @@ const temporary = await mkdtemp(join(tmpdir(), 'morse-desktop-smoke-'));
 const output = join(root, 'build/test-results'); await mkdir(output, { recursive: true });
 const checks = [], errors=[];
 const checked=message=>{checks.push(message); console.log('PASS '+message);};
-let context;
+let child, browser;
 async function launch() {
-  context=await chromium.launchPersistentContext(join(temporary,'profile'),{
-    executablePath:executable, headless:false, timeout:20000,
-    args:['--morse-isolated','--disable-gpu','--disable-background-networking'],
-    ignoreDefaultArgs:['--no-sandbox'], chromiumSandbox:true,
-    env:{...process.env,XDG_CONFIG_HOME:join(temporary,'config'),XDG_CACHE_HOME:join(temporary,'cache')},
+  const args = ['--morse-isolated', '--disable-gpu', '--disable-background-networking',
+    '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', `--user-data-dir=${join(temporary,'profile')}`];
+  child = spawn(executable, args, { stdio: ['ignore','pipe','pipe'],
+    env: {...process.env, XDG_CONFIG_HOME:join(temporary,'config'), XDG_CACHE_HOME:join(temporary,'cache')},
   });
-  const page=await Promise.race([new Promise(resolve=>{
-    const timer=setInterval(()=>{
-      const p=context.pages().find(p=>p.url().startsWith(APP_ORIGIN));
-      if (p) {clearInterval(timer);resolve(p);}
-    },100); timer.unref();
-  }),new Promise((_,reject)=>setTimeout(()=>reject(Error('Morse window unavailable')),15000).unref())]);
+  let log = '', endpoint, startError;
+  const capture = chunk => {
+    log = (log + chunk).slice(-20000);
+    endpoint ||= /DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[\da-f-]+)/i.exec(log)?.[1];
+  };
+  child.stdout.on('data', capture); child.stderr.on('data', capture);
+  child.once('error', error => { startError = error; });
+  const deadline = Date.now() + 45000;
+  let ready = false;
+  while (Date.now() < deadline && !ready) {
+    if (startError) throw startError;
+    if (child.exitCode !== null || child.signalCode) throw Error(`Morse exited during launch (${child.signalCode || child.exitCode}). ${log.slice(-1200)}`);
+    if (endpoint) {
+      const url = new URL(endpoint);
+      const response = await fetch(`http://${url.host}/json/list`, { signal: AbortSignal.timeout(1500) }).catch(() => null);
+      if (response?.ok) ready = (await response.json()).some(t => t.url === APP_ORIGIN + '/' && t.type === 'page');
+    }
+    if (!ready) await delay(100);
+  }
+  if (!ready) throw Error(`Morse did not open the practice window. Debugger announced: ${!!endpoint}. ${log.slice(-1200)}`);
+  // Electron publishes Chromium's debugger endpoint after launch. Its first
+  // empty frame is replaced when the bundled trainer commits navigation.
+  browser = await chromium.connectOverCDP(endpoint, {timeout:15000});
+  const page = browser.contexts()[0].pages().find(p => p.url() === APP_ORIGIN + '/');
+  assert.ok(page, 'Bundled practice page is available');
+  page.setDefaultTimeout(15000);
   page.on('pageerror',e=>errors.push(e.message));
   await page.locator('#play-signal').waitFor();
   return page;
 }
-async function stop() { if(context) { await context.close(); context=null; } }
+async function stop() {
+  if (child && child.exitCode === null && !child.signalCode && child.pid) {
+    const ended = once(child,'exit');
+    child.kill('SIGTERM');
+    const timer = setTimeout(() => child?.kill('SIGKILL'), 10000);
+    try {
+      const [code, signal] = await ended;
+      assert.equal(signal, null, 'Morse must quit through its normal lifecycle');
+      assert.equal(code, 0);
+    } finally { clearTimeout(timer); }
+  }
+  await browser?.close(); browser = null; child = null;
+}
 const saved=page=>page.evaluate(()=>{const data=JSON.parse(window.morseMac.loadSave(null).raw);return data.profiles.find(p=>p.id===data.activeId);});
 try {
   let page=await launch();
@@ -105,7 +139,7 @@ try {
   checked('bundled private helper responds, sending lesson grades keyboard input');
   const before = page.url();
   await page.evaluate(() => window.open('https://example.org/'));
-  await page.waitForTimeout(200); assert.equal(context.pages().filter(p=>p.url().startsWith(APP_ORIGIN)).length, 1); assert.equal(page.url(), before);
+  await page.waitForTimeout(200); assert.equal(page.context().pages().filter(p=>p.url().startsWith(APP_ORIGIN)).length, 1); assert.equal(page.url(), before);
   const foreign = await page.evaluate(async () => { try { await fetch('https://example.org/'); return 'allowed'; } catch { return 'blocked'; } });
   assert.equal(foreign, 'blocked');
   checked('foreign fetch and pop-up navigation blocked');

@@ -7,7 +7,7 @@ import { buildNative } from '../scripts/native.mjs';
 import { PaddleService } from '../src/paddle-service.mjs';
 import { NativeSidetone } from '../website/public/js/native-paddle.mjs';
 
-test('isolated native helper persists volume and never arms typing, including after restart', { skip:process.platform !== 'darwin', timeout:20000 }, async () => {
+test('isolated native helper persists volume and never arms typing, including after restart', { skip:process.platform !== 'darwin', timeout:90000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(),'morse-helper-'));
   const binary = join(dir,'MorseKeyer');
   const settings = join(dir,'preferences');
@@ -21,6 +21,7 @@ test('isolated native helper persists volume and never arms typing, including af
     for (const fresh of [true,false]) {
       service = new PaddleService(binary,settings,()=>{},true);
       service.start();
+      assert.match((await service.command('arm')).error,/starting/);
       assert.deepEqual(await service.command('status'),{});
       assert.equal(service.status.source,'off');
       assert.deepEqual(await service.command('input','vband'),{});
