@@ -1,6 +1,9 @@
+import { pairedProgress } from './initial-merge.mjs';
+import { syncProfile, mergeProgress } from './sync-data.mjs';
 import { MORSE, PROSIGNS, patternFor, LETTERS, DIGITS, PUNCTUATION, KOCH, envelopeAt, gradeAnswer, normalizeText, supportedCharacters } from './morse.mjs';
 import { LESSONS, CONTENT, COURSE_LETTERS, COURSE_LEVELS, legacyCourseLevel, earCourseLevelFor, courseStage, courseLevelFor, alphabetFor, isGrowingCourse, isEndless, courseFocus, practiceKey, candidatesFor, randomPrompt, transmissionText } from './lessons.mjs';
-import { STORAGE_KEY, DEFAULT_SETTINGS, COURSE_FOCUS_COPIES, loadState, saveState, importState, sanitizeSettings, sanitizeCallsign, newState, resetLearnerProgress, resetSendingProgress, startRound, finishRound, recordFirstReview, recordTypedMistakes, localDay, dayStreak, masteryFor, nextPracticeStep, BADGES, collectedBadges } from './progress.mjs';
+import { previousSounds } from './shared-sound.mjs';
+import { mirrorSendingSpeed, STORAGE_KEY, DEFAULT_SETTINGS, COURSE_FOCUS_COPIES, loadState, saveState, importState, sanitizeSettings, sanitizeCallsign, newState, resetListeningProgress, resetSendingProgress, startRound, finishRound, recordFirstReview, recordTypedMistakes, localDay, dayStreak, masteryFor, nextPracticeStep, BADGES, collectedBadges } from './progress.mjs';
 import { MorseAudio } from './audio.mjs';
 import { createCopySession, recordCopyInput, headCopyResponse, copyResponses, copyFeedback, measuredResponse, responseGoal, sanitizePacing } from './recognition.mjs';
 import { chooseSalute, saluteForId } from './celebrations.mjs';
@@ -8,7 +11,9 @@ import { readProgressFile } from './import-file.mjs';
 import { lessonGuidance, guidanceKey, acknowledgeGuidance, rememberGuidanceSound, guidanceListenCount, GUIDANCE_LISTENS, beginRecovery, recoveryCharacter, rememberRecoverySound } from './guidance.mjs';
 import { confusionPairs, practiceNeeds, visualHelpPhase } from './review.mjs';
 import { radioMission, nextRadioStep, rankGoal } from './endless.mjs';
-import { DeviceSync } from './device-sync.mjs';
+import { Station } from './station.mjs';
+import { PracticeStorage } from './practice-storage.mjs';
+import { JOURNAL_KEY, recoverJournal } from './origin-move.mjs';
 import qrcode from './vendor/qrcode.mjs';
 import { sanitizeFocus, beginFocus, endFocus, focusPhase, focusPrompt, focusProgress } from './focus-level.mjs';
 import { LISTENING_GOAL, sanitizeListening, activeListening, queueListening, beginListening, leaveListening, listeningPrompt, checkpointSettings, listeningCheckpoint, guidedListeningPractice } from './by-ear.mjs';
@@ -32,7 +37,26 @@ try {
   // privacy choice and are not treated as new learners after this update.
   callsignIntroPending = marker === 'pending' || marker !== 'done' && !storage.getItem(STORAGE_KEY);
 } catch { /* Learning remains available when browser storage is blocked. */ }
+// Recover an interrupted address move before loading, saving or syncing a
+// possibly mixed pair of primary progress and device-journal records.
+let interruptedMove = null;
+try { interruptedMove = storage.getItem(JOURNAL_KEY); } catch { /* Normal storage warning handles unavailable storage. */ }
+if (interruptedMove) {
+  try { recoverJournal(storage); }
+  catch (error) { location.replace('/move-progress');throw error; }
+}
+try {
+  storage = new PracticeStorage(storage,window.morseMac);
+} catch {
+  document.body.replaceChildren();
+  const notice=document.createElement('p');
+  notice.textContent='Morse could not open the learner save. The previous data was retained. Reopen Morse after checking available storage.';
+  document.body.append(notice); throw new Error('Learner storage unavailable.');
+}
 const loaded = loadState(storage, document.cookie);
+storage.owner=loaded.state.activeId;
+const returningLearner=loaded.state.profiles.find(p=>p.id===loaded.state.activeId);
+if (storage.row().foundation || storage.row().choiceSet) $('intro-share').checked=returningLearner.leaderboard;
 let state = loaded.state;
 let view = 'practice';
 let playing = false;
@@ -62,10 +86,15 @@ let answerFocus = null;
 let answerFocusFrame = null;
 let pendingAnswerKey = null;
 let deviceSync = null;
+const learnerStations = new Map();
 let sender = null;
+let choicesKey = '';
+let acceptedSound = false;
+const soundFields = ['wpm','farnsworth','tone','volume','rise','fall','curve'];
 let pairingInvitation = /^#pair=([A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1] || null;
 let pairingOffer = null;
 let pairingDevicesKey = '';
+let recoveryBusy = false, recoveryGeneration = 0;
 let identityDirty = false;
 let leaderboardLoading = false;
 let leaderboardUpdated = 0;
@@ -353,11 +382,17 @@ function announce(message) {
   toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500);
 }
 
+function completeListening(p, options) {
+  const result=finishRound(p,options);
+  if (result) storage.result(p,'listen',result.awarded,p.stats.rounds.at(-1).id);
+  return result;
+}
+
 function persist() {
   const success = saveState(storage, state, cookie => { document.cookie = cookie; }, location.protocol === 'https:');
   if (!success) {
     $('saved-status').textContent = 'Not saved — export to keep your progress';
-    $('storage-warning').textContent = 'Browser storage is unavailable or full. Export your progress from Saved progress before leaving.';
+    $('storage-warning').textContent = 'Local storage is unavailable or full. Export your progress from Saved progress before leaving.';
     $('storage-warning').hidden = false;
   }
   if (success) deviceSync?.changed();
@@ -669,12 +704,11 @@ function renderControls() {
     if (control.type === 'checkbox') control.checked = settings[key];
     else if (document.activeElement !== control || control.type === 'range') control.value = settings[key];
     if (control.type === 'range') {
-      const ratio = (Number(control.value) - Number(control.min)) / (Number(control.max) - Number(control.min));
-      control.style.setProperty('--fill', `${ratio * 100}%`);
       control.setAttribute('aria-valuetext', `${control.value}${['wpm', 'farnsworth'].includes(key) ? ' words per minute' : key === 'tone' ? ' hertz' : ['rise', 'fall'].includes(key) ? ' milliseconds' : key === 'volume' ? ' percent' : key === 'recallSeconds' ? ' seconds per character' : ''}`);
     }
   });
   $$('[data-value]').forEach(output => { output.textContent = settings[output.dataset.value]; });
+  $('spacing-max').textContent = settings.wpm;
   $('summary-wpm').textContent = `${settings.wpm} WPM`;
   $('summary-farnsworth').textContent = settings.farnsworth === settings.wpm ? 'Standard spacing' : `${settings.farnsworth} Farnsworth`;
   $('summary-tone').textContent = `${settings.tone} Hz`;
@@ -722,7 +756,7 @@ function renderAudioState() {
   $('receiver-stage').classList.toggle('is-celebrating', celebrating);
   const round = profile().round;
   const salute = saluteForId(round?.saluteId, profile().settings);
-  $('audio-status').innerHTML = `<span class="live-dot"></span> ${celebrating ? `Completion signal · ${escape(salute.label)}` : playingKind === 'review' ? 'Review the sound with the pattern' : playing && playingKind === 'round' ? round?.introduction ? `New character: ${round.target}` : 'Signal on air' : round?.completed ? 'Copy complete' : round?.heard ? 'Your turn to copy' : round?.introduction ? `New character: ${round.target}` : 'Ready'}`;
+  $('audio-status').innerHTML = `<span class="live-dot"></span> ${celebrating ? `Completion signal · ${escape(salute.label)}` : playingKind === 'review' ? 'Review the sound with the pattern' : playing && playingKind === 'round' ? round?.introduction ? `New character: ${round.target}` : 'Signal on air' : round?.completed ? 'Copy complete' : round?.heard ? 'Your turn to copy' : round?.introduction ? `New character: ${round.target}` : 'Press Play to listen'}`;
   $('mastery-celebration').hidden = !celebrating;
   $('celebration-title').textContent = round?.byEarComplete ? 'Copied by ear' : round?.focusComplete ? 'Focus level complete' : isEndless(profile().settings) ? `Paragon ${profile().endless.rank}` : `Level ${levelNumber(profile().settings)} mastered`;
   $('celebration-code').textContent = salute.label;
@@ -809,7 +843,7 @@ function renderCopyPace() {
   const badge = $('copy-pace');
   badge.dataset.pace = pace;
   badge.innerHTML = `${icon(symbol, true)}<span>${label}</span>${icon('down', true)}`;
-  badge.title = `${description} Click for Adaptive or Fixed timing.`;
+  badge.title = `${description} Open response timing in Settings.`;
   badge.setAttribute('aria-label', `${label}. Adjust response timing. Current goal ${goal} seconds per letter. ${adaptive ? 'Adaptive' : 'Fixed'} mode.`);
   $$('[data-value="recallSeconds"]').forEach(output => { output.textContent = goal; });
   $$('[data-timing-description]').forEach(output => { output.textContent = adaptive ? 'Adjusts after every four accurate first-listen answers. Uses your recent response times. Moving the slider switches to Fixed.' : 'Your chosen window stays fixed. Type along, or head-copy the whole group before typing.'; });
@@ -1041,7 +1075,7 @@ function renderJourney() {
   $('course-journey-letters').innerHTML = characterChips([...letters, ...(isGrowingCourse(p.settings) ? courseStage(p.settings.courseLevel).prosigns || [] : [])]);
   $('copying-styles').innerHTML = ['flexible', 'head'].map(mode => {
     const entry = stats.modes[mode];
-    return `<div class="copying-style"><strong>${mode === 'head' ? 'Head-copy · listen first' : 'Flexible copying'}</strong><span>${entry.total ? `${Math.round(entry.clean / entry.total * 100)}% first-listen accuracy · ${entry.quick} quick copies · best ${entry.best} characters` : 'Ready'}</span></div>`;
+    return `<div class="copying-style"><strong>${mode === 'head' ? 'Head-copy · listen first' : 'Flexible copying'}</strong><span>${entry.total ? `${entry.total} completed · ${Math.round(entry.clean / entry.total * 100)}% first-listen accuracy · ${entry.quick} quick copies · best ${entry.best} characters` : mode === 'head' ? 'Hear the whole signal, then type. No answers recorded yet.' : 'Type as you listen or after the signal. No answers recorded yet.'}</span></div>`;
   }).join('');
   const pairs = confusionPairs(p.review);
   $('confusion-pairs').hidden = !pairs.length;
@@ -1068,17 +1102,41 @@ function renderJourney() {
   $('recent-sessions').innerHTML = recent.length ? `<table class="round-table session-table"><thead><tr><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Answers</th><th scope="col">Copied</th></tr></thead><tbody>${recent.map(s => `<tr><td>${escape(new Date(s.start).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</td><td>${sessionDuration(s.duration)}</td><td>${s.answers.toLocaleString()}</td><td class="clean-label">${s.correct.toLocaleString()}</td></tr>`).join('')}</tbody></table>` : '<p class="empty-note">No practice sessions recorded.</p>';
 }
 
+function saveSharing(callsign, enabled) {
+  storage.atomic(()=>{storage.consent(profile(),callsign,enabled); storage.setItem(STORAGE_KEY,JSON.stringify(state));});
+  deviceSync.consentChanged();
+}
 function renderSavedProgress() {
   const p = profile();
   $('progress-summary').textContent = `Listening: Level ${levelNumber(p.settings)} · Sending: Level ${p.sending.level}/${SENDING_LEVELS} · ${p.stats.xp.toLocaleString()} XP`;
   if (deviceSync) renderDeviceSync(deviceSync.status);
+  const older = state.profiles.filter(saved => saved.id !== p.id);
+  $('earlier-saves').hidden = !older.length;
+  $('earlier-exports').replaceChildren(...older.map(saved => {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'text-button';
+    button.textContent = `Export ${saved.callsign || saved.name} · ${saved.stats.xp.toLocaleString()} XP`;
+    button.onclick = () => exportLearner(saved); return button;
+  }));
+  $('storage-note').textContent = window.morseMac ? 'Your progress is saved on this Mac. Export a copy to keep it elsewhere.' :
+    'Your progress is saved in this browser. Export a copy before clearing site data.';
+  const h=storage.row(p.id).history;
+  $('legacy-scores').hidden=h?.decision!=='pending';
+  if (h?.decision==='pending' && $('publish-history').hidden) $('legacy-score-summary').textContent=h.xp.toLocaleString()+' XP from the previous desktop app. This stays private until you confirm.';
   if (!identityDirty) {
     $('learner-callsign').value = p.callsign || '';
-    $('list-on-leaderboard').checked = p.leaderboard === true;
+    $('list-on-leaderboard').checked = p.leaderboard || !p.callsign && !storage.row().foundation && !storage.row().choiceSet;
   }
 }
 
 async function refreshLeaderboard(force = false) {
+  if (window.morseMac) {
+    if (!window.morseMac.stagingEnabled) {
+      $('refresh-leaderboard').hidden = true;
+      $('leaderboard-message').textContent = 'The live leaderboard is disconnected in this version. Eligible scores stay on this Mac while sharing is on.';
+      return;
+    }
+    $('leaderboard-title').textContent = 'Local test leaderboard';
+  }
   if (!deviceSync || leaderboardLoading || !force && Date.now() - leaderboardUpdated < 10000) return;
   leaderboardLoading = true;
   $('leaderboard-message').textContent = 'Loading…';
@@ -1123,6 +1181,19 @@ function clearMorseData() {
 
 function renderDeviceSync(status) {
   $('sync-status').textContent = status.message;
+  const available = !window.morseMac || window.morseMac.stagingEnabled;
+  const linked = available && status.connected && !status.waiting;
+  $('station-recovery').disabled = !linked || recoveryBusy;
+  $('pair-entry').hidden = !available;
+  $('station-adopt').hidden = !!window.morseMac || status.connected;
+  $('pair-devices').textContent = linked ? 'Pair another device' : 'Enable private sync';
+  $('recovery-help').textContent = !available ? 'Recovery codes require private sync. Use Export progress to keep a copy you can restore.' :
+    status.waiting ? 'Approve the pairing on your other device before generating a recovery code.' : linked ? 'Generate a code here and store it somewhere private. Generating a new code replaces the previous one.' :
+    'Choose Enable private sync on the device that holds your progress, then choose Generate recovery code.';
+  if (!linked) { $('recovery-issued').hidden = true; $('recovery-output').textContent = ''; }
+  $('sync-description').textContent = available ? 'To link to an existing profile, use its pairing link below. Recovery includes only progress that reached the server.' :
+    'This version saves progress on your Mac. Private sync is unavailable.';
+  if (deviceSync?.scoreError) $('callsign-message').textContent=deviceSync.scoreError;
   $('sync-status').dataset.error = String(!!status.error);
   const devices = status.devices || [];
   const deviceKey = JSON.stringify(status.connected ? devices : []);
@@ -1139,7 +1210,7 @@ function renderDeviceSync(status) {
     $('pair-request-title').textContent = `${status.invite.label} wants to connect`;
     $('pair-approval-code').textContent = status.invite.code;
     const mine = profile().stats.xp, theirs = status.invite.xp;
-    $('pair-score-choice').textContent = `This device: ${mine.toLocaleString()} XP · Other device: ${theirs.toLocaleString()} XP. ${theirs > mine ? 'The other device’s' : 'This device’s'} save will be used on both.`;
+    $('pair-score-choice').textContent = `This device has ${mine} XP. The other has ${theirs} XP. Both original profiles are retained. New work is combined. Old counters without result IDs can overlap.`;
   }
   if (pairingOffer && (!status.invite || status.invite.expiresAt <= Date.now())) {
     pairingOffer = null;
@@ -1147,8 +1218,8 @@ function renderDeviceSync(status) {
     $('pair-qr').replaceChildren();
     $('pair-link').value = '';
   }
-  $('pair-devices').hidden = !!pairingOffer || !!claim || !!status.waiting || !!pairingInvitation;
-  $('pair-incoming').hidden = !pairingInvitation;
+  $('pair-devices').hidden = !available || !!pairingOffer || !!claim || !!status.waiting || !!pairingInvitation;
+  $('pair-incoming').hidden = !available || !pairingInvitation;
 }
 
 function deviceLabel() {
@@ -1178,6 +1249,16 @@ function showPairQr(link) {
   svg.append(path); $('pair-qr').replaceChildren(svg);
 }
 
+function localProfileWithSync(current, shared, replace) {
+  const next = { ...shared, ...(current.previousTiming ? { previousTiming: current.previousTiming } : {}), leaderboard: current.leaderboard, callsign: current.callsign || shared.callsign, sending: { ...shared.sending, settings:{...shared.sending.settings,reverse:current.sending.settings.reverse} }, id: current.id, name: current.name, settings: { ...shared.settings, volume: current.settings.volume }, pacing: current.pacing, headPacing: current.headPacing,
+    sessionId: replace ? '' : current.sessionId,
+    listening: { ...shared.listening, active: !replace && practiceKey(shared.settings) === practiceKey(current.settings) ? current.listening.active : null, cooldown: replace ? 0 : current.listening.cooldown },
+    focus: !replace && practiceKey(shared.settings) === practiceKey(current.settings) ? current.focus : sanitizeFocus(null, shared.settings) };
+  const sameMission = JSON.stringify(shared.endless) === JSON.stringify(current.endless);
+  next.round = !replace && practiceKey(next.settings) === practiceKey(current.settings) && (!isEndless(next.settings) || sameMission) ? current.round : null;
+  return next;
+}
+
 function acceptSyncedProfile(shared, { replace = false } = {}) {
   const returning = callsignIntroPending && !callsignIntroBusy && (shared.callsign || shared.stats.total || shared.stats.xp || shared.guidance.welcomed);
   const intro = returning ? $('callsign-intro-dialog') : null;
@@ -1189,12 +1270,7 @@ function acceptSyncedProfile(shared, { replace = false } = {}) {
     if (intro.open) finishDialog(intro, { returnToPractice: false });
   }
   const current = profile();
-  const next = { ...shared, id: current.id, name: current.name, settings: { ...shared.settings, volume: current.settings.volume }, pacing: current.pacing, headPacing: current.headPacing,
-    sessionId: replace ? '' : current.sessionId,
-    listening: { ...shared.listening, active: !replace && practiceKey(shared.settings) === practiceKey(current.settings) ? current.listening.active : null, cooldown: replace ? 0 : current.listening.cooldown },
-    focus: !replace && practiceKey(shared.settings) === practiceKey(current.settings) ? current.focus : sanitizeFocus(null, shared.settings) };
-  const sameMission = JSON.stringify(shared.endless) === JSON.stringify(current.endless);
-  next.round = !replace && practiceKey(next.settings) === practiceKey(current.settings) && (!isEndless(next.settings) || sameMission) ? current.round : null;
+  const next = localProfileWithSync(current,shared,replace);
   stopPlayback({ save: false });
   state.profiles = state.profiles.map(p => p.id === current.id ? next : p);
   cancelImport(); cancelProgressReset();
@@ -1202,7 +1278,43 @@ function acceptSyncedProfile(shared, { replace = false } = {}) {
   if (!$$('dialog').some(d => d.open) && view === 'practice' && !showLessonGuidance()) focusAnswer({ select: next.round?.completed, fromDialog: intro });
 }
 
+function renderSoundChoice(native) {
+  const p = profile(), options = previousSounds(p, acceptedSound ? null : native);
+  const panel = $('sound-choice');
+  panel.hidden = options.length < 2;
+  const key = JSON.stringify([p.id, options, !!native]);
+  if (key !== choicesKey) {
+    choicesKey = key;
+    $('sound-choices').replaceChildren(...options.map(({label, settings}) => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'button secondary';
+      const curve = settings.curve === 'smooth' ? 'raised cosine' : settings.curve;
+      button.textContent = `Use ${label} · ${settings.wpm}/${settings.farnsworth} WPM · ${settings.tone} Hz · ${settings.volume}% · ${settings.rise}/${settings.fall} ms ${curve}`;
+      button.onclick = () => {
+        const p = profile();
+        if (choicesKey !== key) return;
+        const prior = p.settings, previousTiming = p.previousTiming;
+        p.settings = sanitizeSettings({ ...prior, ...settings }); delete p.previousTiming;
+        mirrorSendingSpeed(p);
+        if (!persist()) {
+          p.settings = prior; if (previousTiming) p.previousTiming = previousTiming;
+          mirrorSendingSpeed(p); return;
+        }
+        acceptedSound = !!native; choicesKey = '';
+        if (sender?.native) sender.migrationPending = !sender.connection.status;
+        sender?.pause(); render();
+      };
+      return button;
+    }));
+  }
+  return !panel.hidden;
+}
+
 function render() {
+  if (sender) {
+    const pending = renderSoundChoice(sender.connection?.status);
+    if (sender.native && sender.connection?.status) sender.migrationPending = pending;
+  }
   if (guidanceContext && (guidanceContext.learnerId !== profile().id || guidanceContext.key !== guidanceKey(profile().settings) || guidanceContext.focus && !profile().focus?.active)) finishLessonGuidance();
   ensureRound();
   renderHeader();
@@ -1408,6 +1520,7 @@ function changeView(next, { lesson = false } = {}) {
   render();
   if (next === 'journey') refreshLeaderboard();
   window.scrollTo({ top: 0, behavior: 'instant' });
+  if (next === 'lab' && !$('sound-choice').hidden) $('sound-choice').scrollIntoView({ block:'nearest' });
   if (lesson) {
     $('lesson-settings').scrollIntoView({ block: 'start', behavior: 'instant' });
     $('lab-lesson').focus({ preventScroll: true });
@@ -1421,14 +1534,19 @@ function changeSettings(updates) {
   if (Object.hasOwn(updates, 'visualSupport')) updates = { ...updates, showMorse: updates.visualSupport !== 'off' };
   if (Object.hasOwn(updates, 'courseLevel') || Object.hasOwn(updates, 'courseCount')) updates = { ...updates, track: 'course' };
   const oldKey = practiceKey(p.settings);
+  const previousSettings = p.settings;
   const previous = p.round?.target || '';
   const courseChanged = Object.hasOwn(updates, 'courseCount') && Number(updates.courseCount) !== p.settings.courseCount;
-  // Moving either slider is an explicit manual goal. Keep that goal when the
+  // Moving the quick copy slider sets a manual goal. Keep that goal when the
   // learner switches back to Adaptive, which then calibrates on fresh answers.
   if (Object.hasOwn(updates, 'recallSeconds')) updates = { ...updates, timingMode: 'fixed' };
   if (updates.timingMode === 'adaptive' && p.settings.timingMode === 'fixed') p[p.settings.copyMode === 'head' ? 'headPacing' : 'pacing'] = sanitizePacing(null, p.settings.recallSeconds);
   const audioAlphabet = isGrowingCourse(p.settings) && courseStage(p.settings.courseLevel).audioAlphabet;
   p.settings = sanitizeSettings({ ...p.settings, ...updates, ...(courseChanged ? { courseLevel: audioAlphabet ? earCourseLevelFor(Number(updates.courseCount)) : courseLevelFor(Number(updates.courseCount), 1) } : {}) });
+  mirrorSendingSpeed(p);
+  if (soundFields.some(key => p.settings[key] !== previousSettings[key]) && (sender?.busy || sender?.heard && !sender.result)) {
+    sender.pause('Sound settings changed. Hear the signal again.');
+  }
   const hadFocus = !!p.focus?.active;
   p.focus = sanitizeFocus(p.focus, p.settings);
   const hadListening = !!p.listening.active;
@@ -1447,7 +1565,7 @@ function nextRound({ skipped = false, draft = '' } = {}) {
   composing = false;
   const p = profile();
   const previous = p.round?.target || '';
-  if (skipped && p.round && !p.round.completed) finishRound(p);
+  if (skipped && p.round && !p.round.completed) completeListening(p);
   const next = nextPracticeStep(p);
   const sourceLevel = p.settings.courseLevel;
   const leavingListening = p.round?.byEar && (p.round.byEarComplete || p.round.byEarDeferred);
@@ -1495,7 +1613,7 @@ function checkAnswer(event) {
   let celebrate = false;
   let earned = [];
   if (result.correct) {
-    const finished = finishRound(p, { solved: true });
+    const finished = completeListening(p, { solved: true });
     earned = BADGES.filter(b => finished.badges.includes(b.id));
     continuous = true;
     celebrate = finished.byEarComplete || finished.focusComplete || finished.promoted || nextPracticeStep(p) !== null;
@@ -1510,7 +1628,7 @@ function checkAnswer(event) {
     recordSessionAnswer(p, { correct: false });
     round.draft = '';
     if (round.byEar) {
-      finishRound(p);
+      completeListening(p);
       round.visualRevealed = true;
       continuous = true;
     } else if (!focusCardOpen()) beginRecovery(round, result, round.focus ? { ...p.settings, lesson: 'custom' } : p.settings);
@@ -1571,6 +1689,20 @@ document.addEventListener('input', event => {
   const control = event.target.closest('[data-setting]');
   if (!control) return;
   const key = control.dataset.setting;
+  if (control.type === 'range' && soundFields.includes(key)) {
+    const preview = (name, value, unit) => {
+      document.querySelector(`[data-value="${name}"]`).textContent = value;
+      control.setAttribute('aria-valuetext', `${value} ${unit}`);
+    };
+    preview(key,control.value,({wpm:'words per minute',farnsworth:'words per minute',tone:'hertz',volume:'percent'})[key] || 'milliseconds');
+    if (key === 'wpm') {
+      const spacing = $('send-farnsworth');
+      spacing.max = control.value; spacing.value = Math.min(profile().settings.farnsworth,Number(control.value));
+      document.querySelector('[data-value="farnsworth"]').textContent = spacing.value;
+      $('spacing-max').textContent = control.value;
+    }
+    return;
+  }
   if (key === 'custom') return; // Apply a custom alphabet on change, after typing.
   const value = control.type === 'checkbox' ? control.checked : control.type === 'range' || ['level', 'courseLevel'].includes(key) ? Number(control.value) : control.value;
   if (key === 'showMorse') {
@@ -1595,6 +1727,11 @@ document.addEventListener('input', event => {
     return;
   }
   changeSettings({ [key]: value });
+});
+
+document.addEventListener('change', event => {
+  const control = event.target.closest('input[type="range"][data-setting]');
+  if (control && soundFields.includes(control.dataset.setting)) changeSettings({[control.dataset.setting]: Number(control.value)});
 });
 
 $('lab-custom').addEventListener('change', event => {
@@ -1644,9 +1781,8 @@ $('answer').addEventListener('compositionend', () => { composing = false; setTim
 $('answer-form').addEventListener('submit', checkAnswer);
 $('play-signal').addEventListener('click', playOrPause);
 $('copy-pace').addEventListener('click', () => {
-  renderControls();
-  openDialog('recall-dialog');
-  $('practice-recall').focus({ preventScroll: true });
+  changeView('lab');
+  $('lab-timing-mode').focus();
 });
 $('mastery-info').addEventListener('click', () => {
   if (profile().focus?.active) { showLessonGuidance({ reference: true }); return; }
@@ -1673,7 +1809,7 @@ function returnToCourse({ fromDialog = null } = {}) {
   if (focusCardOpen()) fromDialog = $('guidance-dialog');
   if (fromDialog) finishLessonGuidance();
   stopPlayback();
-  if (p.round && !p.round.completed) finishRound(p);
+  if (p.round && !p.round.completed) completeListening(p);
   endFocus(p); p.round = null;
   ensureRound(); persist(); render(); focusAnswer({ fromDialog });
   if (!showLessonGuidance()) playRound();
@@ -1683,7 +1819,7 @@ $('skip-button').addEventListener('click', () => {
   const round = profile().round;
   if (!round) return;
   stopPlayback();
-  finishRound(profile());
+  completeListening(profile());
   persist();
   render();
   focusAnswer({ select: true });
@@ -1706,7 +1842,7 @@ $('reveal-button').addEventListener('click', () => {
   const p = profile();
   if (!p.round) return;
   p.round.assisted = true;
-  finishRound(p);
+  completeListening(p);
   persist();
   render();
   focusAnswer({ select: true });
@@ -1714,7 +1850,7 @@ $('reveal-button').addEventListener('click', () => {
 $('lab-test').addEventListener('click', preview);
 $('choose-lesson').addEventListener('click', () => changeView('lab', { lesson: true }));
 $('fix-lesson').addEventListener('click', () => changeView('lab', { lesson: true }));
-$('reset-audio').addEventListener('click', () => { changeSettings(Object.fromEntries(['wpm', 'farnsworth', 'tone', 'volume', 'rise', 'fall', 'curve'].map(key => [key, DEFAULT_SETTINGS[key]]))); announce('Sound reset to 30 WPM, 15 Farnsworth, and 600 Hz.'); });
+$('reset-audio').addEventListener('click', () => { changeSettings({ rise: DEFAULT_SETTINGS.rise, fall: DEFAULT_SETTINGS.fall, curve: DEFAULT_SETTINGS.curve }); announce('Tone envelope reset.'); });
 $('theme-toggle').addEventListener('click', () => { state.theme = state.theme === 'dark' ? 'light' : 'dark'; persist(); renderHeader(); });
 $('open-progress').addEventListener('click', () => openDialog('progress-dialog'));
 $('open-help').addEventListener('click', () => openDialog('help-dialog'));
@@ -1734,7 +1870,7 @@ $('reset-progress').addEventListener('click', () => {
   cancelImport(); cancelProgressReset();
   $('progress-message').textContent = '';
   pendingResetId = profile().id;
-  pendingResetScope = 'all';
+  pendingResetScope = 'listen';
   $('reset-progress-confirmation').hidden = false;
   $('cancel-reset-progress').focus();
 });
@@ -1743,7 +1879,7 @@ $('cancel-reset-progress').addEventListener('click', () => {
   $('reset-progress').focus({ preventScroll: true });
 });
 $('confirm-reset-progress').addEventListener('click', () => {
-  applyProgressReset('all');
+  applyProgressReset('listen');
 });
 $('reset-send-progress').addEventListener('click', () => {
   cancelImport(); cancelProgressReset();
@@ -1756,26 +1892,26 @@ $('cancel-reset-send').addEventListener('click', () => { cancelProgressReset(); 
 $('confirm-reset-send').addEventListener('click', () => applyProgressReset('send'));
 function applyProgressReset(scope) {
   if (pendingResetId !== profile().id || pendingResetScope !== scope) { cancelProgressReset(); return; }
-  const learner = scope === 'send' ? resetSendingProgress(profile()) : resetLearnerProgress(profile());
-  if (scope === 'all') ensureRound('', learner);
+  const learner = scope === 'send' ? resetSendingProgress(profile()) : resetListeningProgress(profile());
+  if (scope === 'listen') ensureRound('', learner);
   const resetState = { ...state, profiles: state.profiles.map(p => p.id === learner.id ? learner : p) };
   // Keep the current learner cookie: the learner's identity has not changed.
-  if (!saveState(storage, resetState)) {
-    $('progress-message').textContent = 'Could not save the reset. Your progress was kept. Try again when browser storage is available.';
+  try { storage.atomic(()=>{ if (!saveState(storage,resetState)) throw Error(); deviceSync?.replace(scope === 'send' ? 'reset-send' : 'reset-listen'); }); } catch {
+    $('progress-message').textContent = 'Could not save the reset. Your progress was kept. Try again when local storage is available.';
     return;
   }
   stopPlayback({ save: false });
   state = resetState;
-  deviceSync?.replace(scope === 'send' ? 'reset-send' : 'reset');
   composing = false;
   cancelProgressReset();
   $('progress-message').textContent = '';
   finishDialog($('progress-dialog'), { returnToPractice: false });
   changeView(scope === 'send' ? 'send' : 'practice');
 }
-$('export-progress').addEventListener('click', () => {
+$('export-progress').addEventListener('click', () => exportLearner(profile()));
+function exportLearner(learner) {
   persist();
-  const blob = new Blob([JSON.stringify({ ...state, profiles: [profile()], exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ ...state, activeId: learner.id, profiles: [learner], exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -1785,7 +1921,7 @@ $('export-progress').addEventListener('click', () => {
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   $('progress-message').textContent = 'Progress exported. Keep the file to restore or move your progress.';
-});
+}
 $('import-progress').addEventListener('click', () => $('import-file').click());
 $('guidance-continue').addEventListener('click', continueLessonGuidance);
 $('guidance-close').addEventListener('click', () => finishDialog($('guidance-dialog')));
@@ -1812,6 +1948,14 @@ $('guidance-answer').addEventListener('compositionend', event => {
   if (lessonCompositionAccepted) $('guidance-answer').value = '';
   else typeLessonLetter(event);
 });
+function previewImportedLearner() {
+  if (!pendingImport) return;
+  const incoming = pendingImport.profiles.find(p => p.id === $('import-learner').value);
+  if (!incoming) return;
+  pendingImport.activeId = incoming.id;
+  $('import-summary').textContent = `Listening level ${levelNumber(incoming.settings)} · Sending level ${incoming.sending.level} · ${incoming.stats.xp.toLocaleString()} XP`;
+}
+$('import-learner').addEventListener('change', previewImportedLearner);
 $('import-file').addEventListener('change', async event => {
   const file = event.target.files[0];
   event.target.value = '';
@@ -1826,8 +1970,10 @@ $('import-file').addEventListener('change', async event => {
     const imported = await readProgressFile(file, { signal: controller.signal });
     if (generation !== importGeneration || controller.signal.aborted || !$('progress-dialog').open) return;
     pendingImport = imported;
-    const incoming = pendingImport.profiles.find(p => p.id === pendingImport.activeId);
-    $('import-summary').textContent = `Listening: Level ${levelNumber(incoming.settings)} · Sending: Level ${incoming.sending.level}/${SENDING_LEVELS} · ${incoming.stats.xp.toLocaleString()} XP`;
+    $('import-selection').hidden = imported.profiles.length < 2;
+    $('import-learner').replaceChildren(...imported.profiles.map(p => new Option(`${p.callsign || p.name} · ${p.stats.xp} XP`, p.id)));
+    $('import-learner').value = imported.activeId;
+    previewImportedLearner();
     $('import-confirmation').hidden = false;
     $('progress-message').textContent = '';
   } catch (error) {
@@ -1845,11 +1991,10 @@ $('confirm-import').addEventListener('click', () => {
   const imported = { ...state, theme: pendingImport.theme, profiles: state.profiles.map(p => p.id === restored.id ? restored : p) };
   try { storage.setItem(`${STORAGE_KEY}.backup`, JSON.stringify(state)); }
   catch { $('progress-message').textContent = 'Could not back up the current save. Export it before importing.'; return; }
-  try { storage.setItem(STORAGE_KEY, JSON.stringify(imported)); }
+  try { storage.atomic(()=>{ if (restored.callsign!==profile().callsign) storage.consent(profile(),restored.callsign,false); storage.setItem(STORAGE_KEY, JSON.stringify(imported)); storage.row().stream=crypto.randomUUID(); storage.row().foundation=syncProfile(restored); deviceSync?.replace('import'); }); }
   catch { $('progress-message').textContent = 'Could not save the imported progress. Your current progress was kept.'; return; }
   stopPlayback({ save: false });
   state = imported;
-  deviceSync?.replace('import');
   cancelImport();
   persist();
   render();
@@ -1937,12 +2082,15 @@ window.addEventListener('resize', queueKeyboardLayout);
 window.visualViewport?.addEventListener('resize', queueKeyboardLayout);
 window.visualViewport?.addEventListener('scroll', queueKeyboardLayout);
 new ResizeObserver(fitMorseTrace).observe($('live-morse'));
+if (window.morseMac) window.addEventListener('morse-save-before-update', event => { event.detail.saved = persist(); });
 window.addEventListener('pagehide', () => { stopPlayback(); audio.release(); persist(); });
 window.addEventListener('storage', event => {
   if (event.key !== STORAGE_KEY || !event.newValue) return;
   try {
-    const updated = importState(event.newValue, { newSessionOwner: false });
+    if (window.morseMac) return;
+    const updated = importState(storage.external(event.newValue), { newSessionOwner: false });
     const current = profile(), incoming = updated.profiles.find(p => p.id === updated.activeId);
+    if (updated.activeId !== current.id) { location.reload(); return; }
     if (incoming?.id === current.id) incoming.sessionId = incoming.stats.sessions.some(row => row.id === current.sessionId) ? current.sessionId : '';
     cancelImport();
     cancelProgressReset();
@@ -1952,6 +2100,7 @@ window.addEventListener('storage', event => {
     cancelAnswerFocus();
     closeNativeDialog($('guidance-dialog'));
     state = updated;
+    resumeStations();
     render();
     showLessonGuidance();
     announce('Progress updated from another tab.');
@@ -1993,19 +2142,37 @@ window.addEventListener('hashchange', () => {
   if (['practice', 'send', 'journey', 'lab'].includes(next)) changeView(next);
 });
 
-sender = new SendingUI({ getProfile: profile, persist, active: () => view === 'send', onEarn: xp => { profile().stats.xp = Math.min(1e9, profile().stats.xp + xp); } });
+sender = new SendingUI({ getProfile: profile, persist, soundChoice: renderSoundChoice, inputSettingsOpen: () => view === 'lab', active: () => view === 'send', onEarn: (xp,id) => { storage.result(profile(),'send',xp,id); profile().stats.xp = Math.min(1e9, profile().stats.xp + xp); } });
 ensureRound();
 const initialView = location.hash.slice(1);
 if (['practice', 'send', 'journey', 'lab'].includes(initialView)) view = initialView;
 render();
-deviceSync = new DeviceSync({
-  storage, getProfile: profile,
-  ready: () => !playing && !continuous && !composing && !sender?.busy && !sender?.nextTimer && !$$('dialog').some(d => d.open && !['progress-dialog', 'callsign-intro-dialog'].includes(d.id) && !(d === $('guidance-dialog') && focusCardOpen())),
-  applyProfile: acceptSyncedProfile,
-  backup: () => { try { storage.setItem(`${STORAGE_KEY}.pairing-backup`, JSON.stringify(state)); } catch { throw new Error('Could not back up this save. Export your progress and free browser storage before pairing.'); } },
-  onStatus: renderDeviceSync,
-  onErased: clearMorseData,
-});
+function stationFor(id) {
+  if (learnerStations.has(id)) return learnerStations.get(id);
+  const local = () => state.profiles.find(p => p.id === id);
+  const station = new Station({
+    mac: window.morseMac, storage: storage.forLearner(id), getProfile: local,
+    ready: () => !!local() && (id !== state.activeId || !playing && !continuous && !composing && !sender?.busy && !sender?.nextTimer && !$$('dialog').some(d => d.open && !['progress-dialog', 'callsign-intro-dialog'].includes(d.id) && !(d === $('guidance-dialog') && focusCardOpen()))),
+    applyProfile(shared, options) {
+      if (id === state.activeId) return acceptSyncedProfile(shared, options);
+      const next = localProfileWithSync(local(), shared, options?.replace);
+      state.profiles = state.profiles.map(p => p.id === id ? next : p);
+      if (!saveState(storage,state)) throw new Error('Could not save the synced learner.');
+    },
+    backup: () => storage.setItem(STORAGE_KEY+'.pairing-backup.'+id, JSON.stringify(state)),
+    onStatus: status => { if (state.activeId === id) renderDeviceSync(status); },
+    onErased: () => { if (state.activeId === id) clearMorseData(); },
+  });
+  learnerStations.set(id,station);
+  return station;
+}
+function resumeStations() {
+  for (const p of state.profiles) {
+    const row = storage.row(p.id);
+    if (p.id === state.activeId || row.private || row.scores.length || row.needsConsent || row.history?.decision === 'queued') stationFor(p.id).schedule(0);
+  }
+}
+deviceSync = stationFor(state.activeId);
 $('callsign-intro-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (callsignIntroBusy) return;
@@ -2023,8 +2190,7 @@ $('callsign-intro-form').addEventListener('submit', async event => {
   $('join-leaderboard').disabled = true; $('skip-callsign').disabled = true;
   message.textContent = 'Adding your station…';
   try {
-    const result = await deviceSync.identity(callsign, true, deviceLabel());
-    if (!result.connected || result.erased) return;
+    saveSharing(callsign,$('intro-share').checked);
     identityDirty = false; leaderboardUpdated = 0;
     callsignIntroBusy = false;
     finishDialog($('callsign-intro-dialog'));
@@ -2038,17 +2204,25 @@ $('callsign-intro-form').addEventListener('submit', async event => {
   }
 });
 $('learner-callsign').addEventListener('input', () => { identityDirty = true; });
-$('list-on-leaderboard').addEventListener('change', () => { identityDirty = true; });
+$('list-on-leaderboard').addEventListener('change', () => {
+  identityDirty=true;
+  if (!$('list-on-leaderboard').checked && profile().leaderboard) {
+    try { saveSharing(profile().callsign,false); $('callsign-message').textContent='Sharing off. Pending scores cleared.'; }
+    catch { $('callsign-message').textContent='Sharing paused. The choice could not be saved to disk.'; }
+  }
+});
 $('save-callsign').addEventListener('click', event => pairingAction(event.currentTarget, async () => {
   const raw = $('learner-callsign').value.trim(), callsign = sanitizeCallsign(raw), listed = $('list-on-leaderboard').checked;
   $('callsign-message').textContent = '';
   if (raw && !callsign) { $('callsign-message').textContent = 'Use 2–16 letters, numbers or / for your callsign.'; return; }
   if (listed && !callsign) { $('callsign-message').textContent = 'Add your callsign to join the leaderboard.'; return; }
-  if (deviceSync.meta() || listed) await deviceSync.identity(callsign, listed, deviceLabel());
-  else { Object.assign(profile(), { callsign, leaderboard: false }); persist(); }
+  saveSharing(callsign,listed);
   identityDirty = false; renderSavedProgress(); leaderboardUpdated = 0;
-  $('callsign-message').textContent = listed ? 'Callsign saved · you’re on the leaderboard.' : 'Callsign saved · your score is private.';
+  $('callsign-message').textContent = listed ? 'Callsign saved. Eligible scores will be submitted when connected.' : 'Callsign saved. Score sharing is off.';
 }));
+$('journey-recovery').addEventListener('click', () => {
+  openDialog('progress-dialog'); $('device-sync-title').scrollIntoView({ block:'start' });
+});
 $('refresh-leaderboard').addEventListener('click', () => refreshLeaderboard(true));
 $('delete-all-data').addEventListener('click', () => {
   cancelImport(); cancelProgressReset();
@@ -2061,9 +2235,15 @@ $('confirm-delete-data').addEventListener('click', event => pairingAction(event.
   catch (error) { throw new Error(navigator.onLine === false ? 'Reconnect to delete the shared save from all devices. Your data has been kept.' : error.message); }
 }));
 $('pair-devices').addEventListener('click', event => pairingAction(event.currentTarget, async () => {
-  const result = await deviceSync.start(deviceLabel());
+  const invite = deviceSync.status.connected;
+  const result = await deviceSync.start(deviceLabel(), { invite });
+  if (!invite) {
+    renderDeviceSync(deviceSync.status);
+    $('station-recovery').focus();
+    return;
+  }
   pairingOffer = result.invitation;
-  const link = `${location.origin}/#pair=${pairingOffer}`;
+  const link = `${window.morseMac ? 'http://127.0.0.1:38764' : location.origin}/#pair=${pairingOffer}`;
   $('pair-link').value = link; showPairQr(link);
   $('pair-offer').hidden = false;
   renderDeviceSync(deviceSync.status);
@@ -2085,18 +2265,91 @@ $('approve-pairing').addEventListener('click', event => pairingAction(event.curr
   const claim = deviceSync.status.invite?.claim;
   if (!claim) return;
   const result = await deviceSync.approve(claim);
-  $('pair-message').textContent = `Paired · ${result.selectedXp.toLocaleString()} XP save selected. Your devices will stay in sync.`;
+  $('pair-message').textContent = 'Paired. Both devices will receive the merged progress.';
 }));
 $('sync-devices').addEventListener('click', event => {
   const button = event.target.closest('[data-disconnect]');
   if (button) pairingAction(button, () => deviceSync.disconnect(button.dataset.disconnect));
 });
-window.addEventListener('online', () => deviceSync.schedule(0));
+$('station-adopt').onclick=e=>pairingAction(e.currentTarget,async()=>{
+  deviceSync.backup();
+  let previous;
+  try { previous=JSON.parse(storage.storage.getItem('morse.devices.v1')); } catch { /* Missing legacy baseline. */ }
+  if (previous?.replacement || previous?.pending?.replace) throw new Error('A previous import or reset is pending. Finish it on the existing website before adopting this browser.');
+  const result=await deviceSync.request('adopt'), current=syncProfile(profile());
+  let baseline=previous?.epoch===result.epoch ? previous.base : null;
+  if (baseline && previous.pending && previous.pending.seq<=result.seq) baseline=previous.pending.profile;
+  const merged=baseline ? mergeProgress(baseline,current,result.profile)
+    : pairedProgress(result.profile,current,result.profile,storage.row().foundation || current).profile;
+  storage.atomic(()=>{
+    acceptSyncedProfile(merged);
+    deviceSync.save({version:1,base:result.profile,epoch:result.epoch,seq:result.seq,revision:result.revision});
+  });
+  deviceSync.schedule(0);
+});
+let pendingRecovery = null;
+$('recover-replace').onclick=e=>pairingAction(e.currentTarget,async()=>{
+  if (!pendingRecovery) return;
+  await deviceSync.recover(pendingRecovery,$('recovery-old-device').value);
+  pendingRecovery=null; $('recovery-replacement').hidden=true;
+});
+$('station-redeem').onclick=e=>pairingAction(e.currentTarget,async()=>{
+  const value=$('station-code').value.trim(), invite=/(?:^|#pair=)([A-Za-z0-9_-]{43})$/.exec(value);
+  $('station-code').value='';
+  if (invite) { pairingInvitation=invite[1]; renderDeviceSync(deviceSync.status); }
+  else if (/^[A-Za-z0-9_-]{32}$/.test(value)) {
+    pendingRecovery=null; $('recovery-replacement').hidden=true;
+    const devices=await deviceSync.recover(value);
+    if (devices) {
+      pendingRecovery=value;
+      $('recovery-old-device').replaceChildren(...devices.map(d=>new Option(d.label,d.id)));
+      $('recovery-replacement').hidden=false;
+    }
+  }
+  else throw new Error('Enter a pairing link or a recovery code from a linked device.');
+});
+$('station-recovery').onclick=async e=>{
+  if (recoveryBusy || !deviceSync.status.connected || deviceSync.status.waiting || window.morseMac && !window.morseMac.stagingEnabled) return;
+  const generation = ++recoveryGeneration, id = profile().id;
+  recoveryBusy = true; e.currentTarget.disabled = true;
+  $('pair-message').textContent = ''; $('recovery-issued').hidden = true; $('recovery-output').textContent = '';
+  try {
+    const { code } = await deviceSync.request('recovery-code');
+    if (generation === recoveryGeneration && profile().id === id && deviceSync.status.connected && !deviceSync.status.waiting && $('progress-dialog').open) {
+      $('recovery-output').textContent = code; $('recovery-issued').hidden = false;
+    }
+  } catch (error) { if (generation === recoveryGeneration) $('pair-message').textContent = error.message; }
+  finally { recoveryBusy = false; renderDeviceSync(deviceSync.status); }
+};
+$('progress-dialog').addEventListener('close',()=>{
+  recoveryGeneration++; pendingRecovery=null; $('recovery-replacement').hidden=true;
+  $('recovery-issued').hidden=true; $('recovery-output').textContent=''; $('station-code').value=''; $('publish-history').hidden=true;
+});
+$('preview-history').onclick=e=>pairingAction(e.currentTarget,async()=>{
+  const p=profile(), row=storage.row(p.id);
+  if (!p.leaderboard || !p.callsign) throw new Error('Enable score sharing for your callsign before previewing a submission.');
+  await deviceSync.flushScores();
+  const info=await deviceSync.exchange('scores/history-preview',{generation:row.generation});
+  if (info.imported) throw new Error('Historical scores have already been imported for this station.');
+  $('legacy-score-summary').textContent=`Publish up to ${Math.max(0,row.history.xp-info.previous)} historical XP for ${p.callsign}. Existing historical balance: ${info.previous} XP. Old exports may overlap. This import can be used once.`;
+  $('publish-history').dataset.consent=String(row.generation); $('publish-history').hidden=false;
+});
+$('publish-history').onclick=()=>{
+  const row=storage.row();
+  if (!profile().leaderboard || row.history?.decision!=='pending' || String(row.generation)!==$('publish-history').dataset.consent) return;
+  storage.atomic(()=>{Object.assign(row.history,{decision:'queued',id:crypto.randomUUID()});});
+  deviceSync.changed(); renderSavedProgress();
+};
+$('keep-history').onclick=()=>{storage.atomic(()=>{storage.row().history.decision='private';}); renderSavedProgress();};
+window.addEventListener('online', resumeStations);
 window.addEventListener('focus', () => { if (deviceSync.meta()) deviceSync.schedule(0); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && deviceSync.meta()) deviceSync.schedule(0); });
-if (pairingInvitation) { openDialog('progress-dialog'); renderDeviceSync(deviceSync.status); }
+if (pairingInvitation || initialView === 'progress') { openDialog('progress-dialog'); renderDeviceSync(deviceSync.status); }
 else if (!showCallsignIntro() && !showLessonGuidance()) focusAnswer({ select: profile().round?.completed });
 persist();
-deviceSync.schedule(0);
+resumeStations();
+if (!window.morseMac && navigator.serviceWorker && ['/', '/index.html'].includes(location.pathname)) {
+  navigator.serviceWorker.register('/practice-worker.mjs',{updateViaCache:'none'}).catch(()=>{});
+}
 if (view === 'journey') refreshLeaderboard();
 if (loaded.warning) { $('storage-warning').textContent = loaded.warning; $('storage-warning').hidden = false; }

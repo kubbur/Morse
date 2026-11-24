@@ -1,101 +1,84 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { once } from 'node:events';
-import http from 'node:http';
 import { APP_ORIGIN } from '../src/policy.mjs';
 import { root } from '../scripts/stage.mjs';
 
 const executable = process.env.MORSE_DESKTOP_EXECUTABLE || (process.platform === 'darwin' ? join(root, `build/packages/Morse-darwin-${process.arch}/Morse.app/Contents/MacOS/Morse`) : join(root, 'build/packages/Morse-linux-x64/Morse'));
 const temporary = await mkdtemp(join(tmpdir(), 'morse-desktop-smoke-'));
 const output = join(root, 'build/test-results'); await mkdir(output, { recursive: true });
-const checks = [], errors = [], clients = new Set();
-const checked = message => { checks.push(message); console.log(`PASS ${message}`); };
-let child, browser, log = '', seq = 0;
-let muted = false;
-const requests = [];
-const bridge = http.createServer(async (req, res) => {
-  const cors = { 'Access-Control-Allow-Origin': APP_ORIGIN, 'Access-Control-Allow-Private-Network': 'true', 'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS' };
-  if (req.headers.origin !== APP_ORIGIN) { res.writeHead(403); res.end(); return; }
-  if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
-  if (['/sidetone/mute', '/sidetone/unmute'].includes(req.url) && req.method === 'PUT') {
-    let bytes = 0; for await (const chunk of req) bytes += chunk.length;
-    assert.equal(bytes, 0); muted = req.url === '/sidetone/mute'; requests.push(req.url);
-    res.writeHead(204, cors); res.end(); return;
-  }
-  if (req.url !== '/events') { res.writeHead(404); res.end(); return; }
-  res.writeHead(200, { ...cors, 'Content-Type': 'text/event-stream' });
-  res.write(`event: paddle\ndata: ${JSON.stringify({ v: 1, seq: seq++, status: 'ready', dit: false, dah: false, timeMs: performance.now() })}\n\n`);
-  clients.add(res); req.on('close', () => clients.delete(res));
-});
-const emit = (dit, dah) => { for (const res of clients) res.write(`event: paddle\ndata: ${JSON.stringify({ v: 1, seq: seq++, status: 'ready', dit, dah, timeMs: performance.now() })}\n\n`); };
-
+const checks = [], errors=[];
+const checked=message=>{checks.push(message); console.log('PASS '+message);};
+let child, browser;
 async function launch() {
-  const probe = http.createServer();
-  await new Promise((resolve, reject) => { probe.once('error', reject); probe.listen(0, '127.0.0.1', resolve); });
-  const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
-  const args = [`--user-data-dir=${join(temporary, 'profile')}`, `--remote-debugging-port=${port}`, '--disable-gpu', '--disable-dev-shm-usage'];
-  if (process.env.MORSE_DESKTOP_TEST_CONTAINER === '1') args.push('--no-sandbox');
-  child = spawn(executable, args, { env: { ...process.env, XDG_CONFIG_HOME: join(temporary, 'config'), XDG_CACHE_HOME: join(temporary, 'cache') }, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.on('data', data => { log = (log + data).slice(-40000); }); child.stderr.on('data', data => { log = (log + data).slice(-40000); });
-  let version;
-  for (let i = 0; i < 120; i++) {
-    if (child.exitCode !== null) throw new Error(`Desktop exited before its window opened: ${log}`);
-    try { version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+  const args = ['--morse-isolated', '--disable-gpu', '--disable-background-networking',
+    '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', `--user-data-dir=${join(temporary,'profile')}`];
+  child = spawn(executable, args, { stdio: ['ignore','pipe','pipe'],
+    env: {...process.env, XDG_CONFIG_HOME:join(temporary,'config'), XDG_CACHE_HOME:join(temporary,'cache')},
+  });
+  let log = '', endpoint, startError;
+  const capture = chunk => {
+    log = (log + chunk).slice(-20000);
+    endpoint ||= /DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[\da-f-]+)/i.exec(log)?.[1];
+  };
+  child.stdout.on('data', capture); child.stderr.on('data', capture);
+  child.once('error', error => { startError = error; });
+  const deadline = Date.now() + 45000;
+  let ready = false;
+  while (Date.now() < deadline && !ready) {
+    if (startError) throw startError;
+    if (child.exitCode !== null || child.signalCode) throw Error(`Morse exited during launch (${child.signalCode || child.exitCode}). ${log.slice(-1200)}`);
+    if (endpoint) {
+      const url = new URL(endpoint);
+      const response = await fetch(`http://${url.host}/json/list`, { signal: AbortSignal.timeout(1500) }).catch(() => null);
+      if (response?.ok) ready = (await response.json()).some(t => t.url === APP_ORIGIN + '/' && t.type === 'page');
+    }
+    if (!ready) await delay(100);
   }
-  if (!version?.webSocketDebuggerUrl) throw new Error(`Desktop debugger did not open: ${log}`);
-  // Attach after the first navigation commits. Attaching to Electron's initial
-  // empty frame can leave Playwright waiting for a frame that was replaced.
-  for (let i = 0; i < 120; i++) {
-    const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    if (targets.some(target => target.url.startsWith(APP_ORIGIN) && target.title === 'Morse code trainer')) break;
-    if (i === 119) throw new Error(`Desktop navigation did not finish: ${log}`);
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  browser = await chromium.connectOverCDP(version.webSocketDebuggerUrl);
-  const context = browser.contexts()[0];
-  context.setDefaultTimeout(15000);
-  let page;
-  for (let i = 0; i < 100; i++) {
-    page = context.pages().find(page => page.url().startsWith(APP_ORIGIN));
-    if (page) break;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  if (!page) throw new Error(`No app window: ${log}`);
-  page.on('pageerror', error => errors.push(error.message));
+  if (!ready) throw Error(`Morse did not open the practice window. Debugger announced: ${!!endpoint}. ${log.slice(-1200)}`);
+  // Electron publishes Chromium's debugger endpoint after launch. Its first
+  // empty frame is replaced when the bundled trainer commits navigation.
+  browser = await chromium.connectOverCDP(endpoint, {timeout:15000});
+  const page = browser.contexts()[0].pages().find(p => p.url() === APP_ORIGIN + '/');
+  assert.ok(page, 'Bundled practice page is available');
+  page.setDefaultTimeout(15000);
+  page.on('pageerror',e=>errors.push(e.message));
   await page.locator('#play-signal').waitFor();
   return page;
 }
-
 async function stop() {
-  if (!child || child.exitCode !== null) return;
-  const ended = once(child, 'exit'); child.kill('SIGTERM');
-  await Promise.race([ended, new Promise((_, reject) => setTimeout(() => reject(new Error(`Desktop did not quit: ${log}`)), 10000).unref())]);
-  browser = null; child = null;
+  if (child && child.exitCode === null && !child.signalCode && child.pid) {
+    const ended = once(child,'exit');
+    child.kill('SIGTERM');
+    const timer = setTimeout(() => child?.kill('SIGKILL'), 10000);
+    try {
+      const [code, signal] = await ended;
+      assert.equal(signal, null, 'Morse must quit through its normal lifecycle');
+      assert.equal(code, 0);
+    } finally { clearTimeout(timer); }
+  }
+  await browser?.close(); browser = null; child = null;
 }
-const saved = page => page.evaluate(() => { const data = JSON.parse(localStorage.getItem('morse.progress.v1')); return data.profiles.find(p => p.id === data.activeId); });
+const saved=page=>page.evaluate(()=>{const data=JSON.parse(window.morseMac.loadSave(null).raw);return data.profiles.find(p=>p.id===data.activeId);});
 try {
-  // Never operate an already-running personal copy or an actual paddle companion.
-  try { await fetch(APP_ORIGIN, { signal: AbortSignal.timeout(300) }); throw new Error('Quit the existing Morse app before running the smoke test.'); } catch (error) { if (error.message.startsWith('Quit ')) throw error; }
-  await new Promise((resolve, reject) => { bridge.once('error', reject); bridge.listen(17373, '127.0.0.1', resolve); });
-  let page = await launch();
+  let page=await launch();
   await page.locator('#skip-callsign').click();
-  if (await page.locator('#guidance-dialog').isVisible()) await page.keyboard.press('Escape');
-  assert.equal((await saved(page)).stats.xp, 0, 'smoke test must use its own empty save');
-  assert.deepEqual(await page.evaluate(() => ({ require: typeof window.require, process: typeof window.process, secure: isSecureContext })), { require: 'undefined', process: 'undefined', secure: true });
-  checked('packaged native window opens offline with isolated renderer and secure loopback origin');
+  if(await page.locator('#guidance-dialog').isVisible()) await page.keyboard.press('Escape');
+  assert.equal((await saved(page)).stats.xp,0);
+  assert.deepEqual(await page.evaluate(()=>[typeof require,typeof process,isSecureContext]),['undefined','undefined',true]);
+  checked('fresh isolated offline profile and sandboxed practice window');
   await page.locator('#play-signal').click();
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem('morse.progress.v1')).profiles[0].round.heard);
+  await page.waitForFunction(()=>JSON.parse(morseMac.loadSave(null).raw).profiles[0].round.heard);
   await page.locator('#answer').fill((await saved(page)).round.target);
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem('morse.progress.v1')).profiles[0].stats.solved === 1);
+  await page.waitForFunction(()=>JSON.parse(morseMac.loadSave(null).raw).profiles[0].stats.solved===1);
   await page.locator('#open-progress').click();
-  assert.equal(await page.locator('.device-sync').isVisible(), false);
-  assert.match(await page.locator('#callsign-help').textContent(), /on this Mac/);
-  checked('real listening playback, answer checking and local-only saved-progress controls');
-
+  assert.equal(await page.locator('.device-sync').isVisible(),true);
+  checked('bundled listening lesson and local result write without a network connection');
   // Validate the export without automating the operating system's save dialog.
   const download = await page.evaluate(async () => {
     const originalURL = URL.createObjectURL, originalClick = HTMLAnchorElement.prototype.click;
@@ -111,42 +94,59 @@ try {
   assert.equal(JSON.parse(download.contents).profiles[0].stats.solved, 1);
   checked('progress export produces valid current-save JSON with the expected filename');
 
-  const exported = await page.evaluate(() => localStorage.getItem('morse.progress.v1'));
+  const exported = await page.evaluate(() => morseMac.loadSave(null).raw);
   const imported = JSON.parse(exported); imported.profiles[0].stats.xp = 4321; imported.profiles[0].settings.tone = 770;
   await page.locator('#import-file').setInputFiles({ name: 'desktop-progress.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(imported)) });
   await page.locator('#import-confirmation').waitFor(); await page.locator('#confirm-import').click();
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem('morse.progress.v1')).profiles[0].stats.xp === 4321);
+  await page.waitForFunction(() => JSON.parse(morseMac.loadSave(null).raw).profiles[0].stats.xp === 4321);
   if (await page.locator('#guidance-dialog').isVisible()) await page.keyboard.press('Escape');
   checked('confirmed progress import through the sandboxed file worker');
   await page.screenshot({ path: join(output, 'desktop-practice.png'), fullPage: true });
   await stop(); page = await launch();
-  assert.equal((await saved(page)).stats.xp, 4321); assert.equal((await saved(page)).settings.tone, 770);
+  assert.equal((await saved(page)).stats.xp, 4321); assert.equal((await saved(page)).settings.tone, 750);
   checked('save and sound preferences survive a full application quit and restart');
   await page.locator('.main-nav [data-view="send"]').click();
-  await page.locator('#send-connect').click();
-  await page.waitForFunction(() => document.getElementById('sender').dataset.sidetone === 'muted');
-  emit(true, false); await page.waitForTimeout(20); emit(false, false);
-  await page.waitForFunction(() => document.getElementById('send-target-label').textContent === 'SEND');
-  assert.equal(muted, false);
-  emit(true, false); await page.waitForTimeout(20); emit(false, false);
+  assert.equal(await page.locator('#send-connect').isVisible(),false);
+  await page.locator('#send-setup summary').click();
+  assert.deepEqual(await page.locator('#send-setup input').evaluateAll(nodes=>nodes.map(n=>n.id)),['send-wpm','send-farnsworth','send-pitch','send-volume']);
+  await page.locator('#send-pitch').focus(); await page.keyboard.press('ArrowRight');
+  assert.equal((await saved(page)).settings.tone,800);
+  await page.locator('.main-nav [data-view="practice"]').click();
+  assert.equal(await page.locator('#summary-tone').innerText(),'800 Hz');
+  assert.equal(await page.locator('#send-pitch').isVisible(),false);
+  assert.equal(await page.locator('.main-nav [data-view="practice"]').innerText(),'Listen');
+  await page.locator('.main-nav [data-view="lab"]').click();
+  await page.locator('#lab-curve').selectOption('exponential');
+  assert.equal((await saved(page)).settings.curve,'exponential');
+  const helper=await page.evaluate(()=>morseMac.paddle('status'));
+  assert.equal(helper.error,undefined);
+  assert.equal(await page.locator('#send-source').inputValue(),'paddle');
+  await page.locator('#send-source').selectOption('vband');
+  assert.match(await page.locator('#send-connection').innerText(),/Left Control sends dit.*Right Control sends dah/);
+  assert.equal(await page.locator('#native-start').isVisible(),false);
+  await stop(); page=await launch();
+  await page.locator('.main-nav [data-view="lab"]').click();
+  assert.equal(await page.locator('#send-source').inputValue(),'vband');
+  await page.locator('#send-source').selectOption('paddle');
+  assert.equal(await page.locator('#native-start').isVisible(),true);
+  checked('adapter selection survives quit and relaunch, and calibration is available for the audio converter');
+  await page.locator('#send-source').selectOption('keyboard');
+  await page.locator('.main-nav [data-view="send"]').click();
+  await page.locator('#send-listen').click();
+  await page.waitForFunction(()=>document.getElementById('send-target-label').textContent==='SEND');
+  await page.keyboard.down('z');await page.waitForTimeout(15);await page.keyboard.up('z');
   await page.locator('#send-capture[data-result="good"]').waitFor();
-  assert.equal((await saved(page)).sending.clean, 1);
-  assert.ok(requests.includes('/sidetone/mute') && requests.includes('/sidetone/unmute'));
-  await page.locator('#send-connect').click();
-  checked('actual local SSE paddle contacts, empty PUT mute/unmute acknowledgements and automatic grading');
-  await page.screenshot({ path: join(output, 'desktop-send.png'), fullPage: true });
+  checked('bundled private helper responds, sending lesson grades keyboard input');
   const before = page.url();
   await page.evaluate(() => window.open('https://example.org/'));
-  await page.waitForTimeout(200); assert.equal(browser.contexts()[0].pages().length, 1); assert.equal(page.url(), before);
+  await page.waitForTimeout(200); assert.equal(page.context().pages().filter(p=>p.url().startsWith(APP_ORIGIN)).length, 1); assert.equal(page.url(), before);
   const foreign = await page.evaluate(async () => { try { await fetch('https://example.org/'); return 'allowed'; } catch { return 'blocked'; } });
   assert.equal(foreign, 'blocked');
   checked('foreign fetch and pop-up navigation blocked');
   assert.deepEqual(errors, []);
-  await writeFile(join(output, 'smoke.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, executable, checkedAt: new Date().toISOString(), checks, rendererErrors: errors, note: process.env.MORSE_DESKTOP_TEST_CONTAINER ? 'Linux desktop under Xvfb; no-sandbox is a test-only container launch flag. Physical macOS and Apple signing acceptance were not tested here.' : 'Native desktop acceptance.' }, null, 2) + '\n');
+  await writeFile(join(output, 'smoke.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, executable, checkedAt: new Date().toISOString(), checks, rendererErrors: errors, note: process.env.MORSE_DESKTOP_TEST_CONTAINER ? 'Linux desktop under Xvfb; no-sandbox is a test-only container launch flag. Physical macOS and Apple signing acceptance were not tested here.' : 'Isolated packaged UI; hardware and permission grants were not exercised.' }, null, 2) + '\n');
   console.log(JSON.stringify({ passed: checks.length, checks }, null, 2));
-} catch (error) { await writeFile(join(output, 'failure.log'), log); throw error; }
-finally {
-  await stop().catch(() => { child?.kill('SIGKILL'); });
-  for (const res of clients) res.end(); bridge.closeAllConnections(); await new Promise(resolve => bridge.close(resolve));
-  await rm(temporary, { recursive: true, force: true });
+} finally {
+  await stop();
+  await rm(temporary,{recursive:true,force:true});
 }

@@ -1,5 +1,5 @@
 // Model the two switch contacts and resistor losses using the real generator.
-static void synth(Detector *d, Generator *g, double hz, int mask, int blocks, unsigned *rng) {
+static void synth(Detector *d, Generator *g, double hz, int mask, int blocks, unsigned *rng, Keyer *quiet) {
     float samples[MaxBlock], stereo[MaxBlock*2];
     for (int b=0; b<blocks; ++b) {
         tones(g,stereo,inputFrames,hz);
@@ -9,7 +9,7 @@ static void synth(Detector *d, Generator *g, double hz, int mask, int blocks, un
             samples[i] = stereo[2*i]*(.0004 + ((mask&1) ? .029 : 0)) +
                          stereo[2*i+1]*(.0003 + ((mask&2) ? .012 : 0)) + noise;
         }
-        detect(d, samples);
+        acceptInput(d,quiet,samples,inputFrames);
     }
 }
 // Inspect the same stereo PCM callback that feeds the speakers. Buffer boundaries

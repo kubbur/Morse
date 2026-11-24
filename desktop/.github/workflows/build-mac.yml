@@ -31,6 +31,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run test:native
       - name: Package an ad-hoc test build
         run: node scripts/package.mjs darwin ${{ matrix.architecture }}
       - name: Check the Mac code signature

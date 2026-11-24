@@ -7,6 +7,7 @@
 #include <AudioToolbox/AudioToolbox.h>
 #include <AudioUnit/AudioUnit.h>
 #include <math.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdarg.h>
@@ -154,13 +155,76 @@ typedef struct { double real, imag; } PilotPhase;
 static UInt32 inputFrames;
 static double window[MaxBlock], coeff[6], pilotSine[2];
 static PilotPhase blockAdvance[2];
+// Fit the two known return tones to a short slice. Around its midpoint the
+// sine terms are odd and the cosine terms are even. Two 2×2 systems separate
+// the paddles even when a slice contains a fractional number of pilot cycles.
+enum { SlicesPerWindow=4 };
+typedef struct { double a, cross, b; } PairMatrix;
+typedef struct {
+    UInt32 count;
+    double basis[(MaxBlock+SlicesPerWindow-1)/SlicesPerWindow][4];
+    PairMatrix cosine, sine;
+} PilotSlicePlan;
+typedef struct {
+    PilotPhase tone[2];
+    double power[2], residual;
+} PilotSlice;
+static PilotSlicePlan slicePlan[SlicesPerWindow];
+static UInt32 sliceEnd[SlicesPerWindow];
+static PilotPhase sliceAdvance[SlicesPerWindow][2];
+static PairMatrix inversePair(PairMatrix m) {
+    double determinant=m.a*m.b-m.cross*m.cross;
+    return (PairMatrix){m.b/determinant,-m.cross/determinant,m.a/determinant};
+}
+static void prepareSlice(PilotSlicePlan *plan, UInt32 count, double hz) {
+    plan->count=count;
+    PairMatrix cosine={0}, sine={0};
+    for (UInt32 i=0;i<count;i++) {
+        double t=(i-(count-1)*.5)*2*M_PI/hz;
+        double *v=plan->basis[i];
+        v[0]=cos(t*toneHz[0]); v[1]=cos(t*toneHz[1]);
+        v[2]=sin(t*toneHz[0]); v[3]=sin(t*toneHz[1]);
+        cosine.a+=v[0]*v[0]; cosine.cross+=v[0]*v[1]; cosine.b+=v[1]*v[1];
+        sine.a+=v[2]*v[2]; sine.cross+=v[2]*v[3]; sine.b+=v[3]*v[3];
+    }
+    plan->cosine=inversePair(cosine); plan->sine=inversePair(sine);
+}
+static PilotSlice fitSlice(const PilotSlicePlan *plan, const float *samples) {
+    double dot[4]={0}, energy=0;
+    for (UInt32 i=0;i<plan->count;i++) {
+        double x=samples[i]; energy+=x*x;
+        for (int j=0;j<4;j++) dot[j]+=x*plan->basis[i][j];
+    }
+    PairMatrix c=plan->cosine, s=plan->sine;
+    PilotSlice fit={.tone={
+        {c.a*dot[0]+c.cross*dot[1], -(s.a*dot[2]+s.cross*dot[3])},
+        {c.cross*dot[0]+c.b*dot[1], -(s.cross*dot[2]+s.b*dot[3])}
+    }};
+    for (int k=0;k<2;k++) {
+        PilotPhase p=fit.tone[k];
+        fit.power[k]=p.real*p.real+p.imag*p.imag;
+        // Subtract the energy explained by the two fitted pilot components.
+        energy-=p.real*dot[k]-p.imag*dot[k+2];
+    }
+    fit.residual=isfinite(energy) ? fmax(0,energy)/plan->count : INFINITY;
+    return fit;
+}
 static void makeTables(double hz) {
     inputFrames = (UInt32)lround(hz*.01);
+    for (unsigned i=0;i<SlicesPerWindow;i++) {
+        sliceEnd[i]=(i+1)*inputFrames/SlicesPerWindow;
+        prepareSlice(&slicePlan[i],sliceEnd[i]-i*inputFrames/SlicesPerWindow,hz);
+    }
     const int bins[6] = {1000, 1600, 800, 1200, 1400, 1800};
     for (int k=0; k<6; ++k) coeff[k] = 2*cos(2*M_PI*bins[k]/hz);
     for (int k=0; k<2; ++k) {
         double w=2*M_PI*toneHz[k]/hz;
         pilotSine[k]=sin(w);
+        for (unsigned i=0;i<SlicesPerWindow;i++) {
+            unsigned previous=(i+SlicesPerWindow-1)%SlicesPerWindow;
+            double hop=w*.5*(slicePlan[previous].count+slicePlan[i].count);
+            sliceAdvance[i][k]=(PilotPhase){cos(hop),sin(hop)};
+        }
         blockAdvance[k]=(PilotPhase){cos(w*inputFrames),sin(w*inputFrames)};
     }
     for (UInt32 i=0; i<inputFrames; ++i) window[i] = .5-.5*cos(2*M_PI*i/inputFrames);
@@ -193,10 +257,26 @@ typedef struct {
 } SidetoneLevel;
 
 typedef struct {
-    // The input thread publishes held contacts in bits 0–1 and new presses in bits 2–3.
-    // All other fields belong to the loudspeaker's render thread after startup.
-    atomic_uint contacts;
-    unsigned held, pending, last;
+    // Preserve the order of input transitions between speaker callbacks.
+    atomic_uint read, write, mask;
+    atomic_bool overrun;
+    unsigned transitions[64];
+} ContactQueue;
+
+static void initContacts(ContactQueue *q) {
+    atomic_init(&q->read,0); atomic_init(&q->write,0);
+    atomic_init(&q->mask,0); atomic_init(&q->overrun,false);
+}
+
+typedef struct {
+    ContactQueue wiredContacts;
+    ContactQueue *contacts;
+    unsigned held, pending, first, last;
+    bool squeezed, waitNeutral, haveStamp;
+    double nextSampleTime;
+    ElementStream *stream;
+    unsigned epoch;
+    uint64_t nextWatermark;
     UInt32 markLength, markLeft, gapLeft;
     double rate, unitFrames, carry, phase, phaseStep;
     const AtomicToneSettings *settings;
@@ -211,20 +291,62 @@ typedef struct {
 } Keyer;
 
 static void configureKeyer(Keyer *k, double rate, double wpm) {
-    atomic_init(&k->contacts, 0);
+    initContacts(&k->wiredContacts);
+    k->contacts=&k->wiredContacts;
     k->rate=rate; k->unitFrames=rate*1.2/wpm;
     k->initialSettings=defaultToneSettings; k->initialSettings.wpm=(uint8_t)wpm;
     k->volumeRamp=(UInt32)MAX(1,lround(rate*.005));
     k->volumeGain=1;
 }
-static void setPaddles(Keyer *k, unsigned held) {
-    unsigned old = atomic_load_explicit(&k->contacts,memory_order_relaxed);
-    unsigned update;
-    do {
-        unsigned pressed = held & ~old;
-        update = (old & 12u) | held | (pressed << 2);
-    } while (!atomic_compare_exchange_weak_explicit(&k->contacts,&old,update,
-                                                     memory_order_relaxed,memory_order_relaxed));
+static void queueContacts(ContactQueue *q, unsigned held) {
+    if (atomic_exchange_explicit(&q->mask,held,memory_order_relaxed)==held) return;
+    unsigned write=atomic_load_explicit(&q->write,memory_order_relaxed);
+    if (write-atomic_load_explicit(&q->read,memory_order_acquire)>=64) {
+        atomic_store(&q->overrun,true);
+        return;
+    }
+    q->transitions[write%64]=held;
+    atomic_store_explicit(&q->write,write+1,memory_order_release);
+}
+static void setPaddles(Keyer *k, unsigned held) { queueContacts(k->contacts,held); }
+
+static void consumeContacts(Keyer *k) {
+    ContactQueue *q=k->contacts;
+    unsigned read=atomic_load_explicit(&q->read,memory_order_relaxed);
+    unsigned write=atomic_load_explicit(&q->write,memory_order_acquire);
+    if (atomic_exchange(&q->overrun,false)) {
+        interruptElements(k->stream);
+        k->waitNeutral=true;
+    }
+    unsigned epoch=k->stream ? atomic_load(&k->stream->epoch) : 0;
+    if (k->epoch!=epoch || k->waitNeutral) {
+        if (k->epoch!=epoch) {
+            k->epoch=epoch; k->waitNeutral=true;
+            if (k->typing) resetTypingSession(k->typing);
+        }
+        k->first=k->last=k->pending=k->markLeft=k->gapLeft=0;
+        k->held=atomic_load(&q->mask);
+        k->squeezed=false;
+        k->waitNeutral=k->held!=0;
+        read=write;
+    }
+    while (read!=write) {
+        unsigned held=q->transitions[read++%64];
+        k->pending|=held & ~k->held;
+        k->held=held;
+        if (!k->first && !k->markLeft && !k->gapLeft && held) {
+            k->first=held==3 ? (k->last==1 ? 2 : 1) : held;
+            k->pending &= ~k->first;
+        }
+        if (held==3) k->squeezed=true;
+        if (!held && k->squeezed) {
+            ToneSettings t=k->settings ? atomic_load(k->settings) : k->initialSettings;
+            unsigned last=k->first ? k->first : k->last;
+            k->pending=(t.options & IambicModeB) && last ? (last==1 ? 2 : 1) : 0;
+            k->squeezed=false;
+        }
+    }
+    atomic_store_explicit(&q->read,read,memory_order_release);
 }
 static UInt32 timedFrames(Keyer *k, unsigned units) {
     double exact = units*k->unitFrames+k->carry;
@@ -235,7 +357,8 @@ static UInt32 timedFrames(Keyer *k, unsigned units) {
 static float nextKeyerSample(Keyer *k, uint64_t frame, bool sound) {
     if (k->gapLeft) { --k->gapLeft; return 0; }
     if (!k->markLeft) {
-        unsigned requested = k->held | k->pending;
+        unsigned requested = k->first ? k->first : (k->held | k->pending);
+        k->first=0;
         if (!requested) { k->last=0; return 0; }
         k->last = requested==3 ? (k->last==1 ? 2 : 1) : requested;
         k->pending &= ~k->last;
@@ -243,13 +366,17 @@ static float nextKeyerSample(Keyer *k, uint64_t frame, bool sound) {
         double unit=k->rate*1.2/tone.wpm;
         if (k->unitFrames!=unit) { k->unitFrames=unit; k->carry=0; }
         k->markLength = k->markLeft = timedFrames(k,k->last==1 ? 1 : 3);
+        emitElement(k->stream,k->epoch,1,frame,k->rate);
         if (sound) {
             k->phaseStep=2*M_PI*tone.pitchHz/k->rate;
             k->ramps=fitToneRamps(tone,k->rate,k->markLength);
         }
-        if (k->decoder.armed)
+        if (k->decoder.armed) {
+            double spacing=k->rate*spacingUnitMs(tone)/1000;
+            bool trainer=(tone.options & TrainerGapThresholds)!=0;
             typeMark(&k->decoder,k->typing,k->last,frame,k->markLength,
-                     k->rate*spacingUnitMs(tone)/1000,(tone.options & TimedWordSpaces)!=0);
+                     trainer ? 2*unit : 3*spacing,(trainer ? 5 : 7)*spacing,(tone.options & TimedWordSpaces)!=0);
+        }
         k->phase = 0;
     }
     float sample=0;
@@ -260,15 +387,16 @@ static float nextKeyerSample(Keyer *k, uint64_t frame, bool sound) {
         k->phase += k->phaseStep;
         if (k->phase >= 2*M_PI) k->phase -= 2*M_PI;
     }
-    if (--k->markLeft==0) k->gapLeft=timedFrames(k,1);
+    if (--k->markLeft==0) {
+        k->gapLeft=timedFrames(k,1);
+        emitElement(k->stream,k->epoch,2,frame+1,k->rate);
+    }
     return sample;
 }
 static bool renderKeyer(Keyer *k, UInt32 frames, float *output) {
-    unsigned contacts = atomic_fetch_and_explicit(&k->contacts,3u,memory_order_relaxed);
-    k->held = contacts & 3u;
-    k->pending |= contacts >> 2;
-    bool silent = !k->held && !k->pending && !k->markLeft && !k->gapLeft;
-    if (k->typing) prepareTypingBlock(&k->decoder,k->typing,silent);
+    consumeContacts(k);
+    bool silent = k->waitNeutral || (!k->first && !k->held && !k->pending && !k->markLeft && !k->gapLeft);
+    if (k->typing) prepareTypingBlock(&k->decoder,k->typing,silent && !k->waitNeutral);
     if (silent) {
         if (output) memset(output,0,(size_t)frames*sizeof(float));
         k->last=0;
@@ -278,6 +406,10 @@ static bool renderKeyer(Keyer *k, UInt32 frames, float *output) {
         for (UInt32 i=0; i<frames; ++i) nextKeyerSample(k,k->frame+i,false);
     }
     k->frame+=frames;
+    if (silent && !k->waitNeutral && k->frame>=k->nextWatermark) {
+        emitElement(k->stream,k->epoch,0,k->frame,k->rate);
+        k->nextWatermark=k->frame+(uint64_t)(k->rate*.04);
+    }
     if (k->decoder.armed) advanceTyping(&k->decoder,k->typing,k->frame);
     return silent;
 }
@@ -303,8 +435,12 @@ static bool applySidetoneVolume(Keyer *k, float *samples, UInt32 frames) {
 }
 static OSStatus speakerRender(void *context, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *stamp,
                              UInt32 bus, UInt32 frames, AudioBufferList *audio) {
-    (void)stamp; (void)bus;
+    (void)bus;
     Keyer *k = context;
+    if (stamp && (stamp->mFlags & kAudioTimeStampSampleTimeValid)) {
+        if (k->haveStamp && fabs(stamp->mSampleTime-k->nextSampleTime)>.5) interruptElements(k->stream);
+        k->haveStamp=true; k->nextSampleTime=stamp->mSampleTime+frames;
+    }
     if (!audio || !audio->mNumberBuffers) return kAudio_ParamError;
     // The client format below is planar float. Each speaker receives the same sidetone.
     size_t bytes = (size_t)frames*sizeof(float);
@@ -337,7 +473,7 @@ static bool speakerSelected(const Speaker *s, const Route *r) {
     return AudioUnitGetProperty(s->unit,kAudioOutputUnitProperty_CurrentDevice,kAudioUnitScope_Global,0,
                                 &actual,&size)==noErr && actual==r->dev;
 }
-static bool startSpeaker(Speaker *s, const Route *r, const AtomicToneSettings *settings, TypingQueue *typing, const SidetoneLevel *volume) {
+static bool startSpeaker(Speaker *s, const Route *r, const AtomicToneSettings *settings, TypingQueue *typing, const SidetoneLevel *volume, ElementStream *stream, ContactQueue *contacts) {
     AudioComponentDescription desc={.componentType=kAudioUnitType_Output,
         .componentSubType=kAudioUnitSubType_HALOutput,.componentManufacturer=kAudioUnitManufacturer_Apple};
     AudioComponent component=AudioComponentFindNext(NULL,&desc);
@@ -356,7 +492,8 @@ static bool startSpeaker(Speaker *s, const Route *r, const AtomicToneSettings *s
     if (!checked(AudioUnitSetProperty(s->unit,kAudioUnitProperty_StreamFormat,kAudioUnitScope_Input,0,
                                       &client,sizeof(client)),"Setting speaker PCM format")) goto fail;
     configureKeyer(&s->keyer,rate,defaultToneSettings.wpm); s->keyer.settings=settings;
-    s->keyer.typing=typing;
+    if (contacts) s->keyer.contacts=contacts;
+    s->keyer.typing=typing; s->keyer.stream=stream;
     s->keyer.volume=volume; s->keyer.volumeGain=levelGain(volume);
     AURenderCallbackStruct callback={speakerRender,&s->keyer};
     if (!checked(AudioUnitSetProperty(s->unit,kAudioUnitProperty_SetRenderCallback,kAudioUnitScope_Input,0,
@@ -378,6 +515,11 @@ typedef struct {
     int calibrated, stable, repeats[2], neutralFrames;
     bool carrier[2], waitForRelease;
     PilotPhase expected[2];
+    float input[MaxBlock];
+    UInt32 filled, sliceIndex;
+    unsigned cleanPairs[2];
+    PilotSlice previousSlice;
+    bool havePreviousSlice;
     const atomic_bool *swapRequested;
     bool swappedForPress;
     Keyer *keyer;
@@ -394,7 +536,7 @@ typedef struct {
     void *context;
 } Detector;
 static void resetContactEvidence(Detector *d) {
-    d->stable=0; d->neutralFrames=0;
+    d->stable=0; d->neutralFrames=0; d->filled=d->sliceIndex=0; d->havePreviousSlice=false;
     memset(d->carrier,0,sizeof(d->carrier)); memset(d->repeats,0,sizeof(d->repeats));
     if (d->keyer) setPaddles(d->keyer,0);
 }
@@ -463,12 +605,24 @@ static unsigned logicalContacts(const Detector *d) {
     unsigned physical=(unsigned)d->stable;
     return d->swappedForPress ? ((physical & 1u)<<1) | ((physical & 2u)>>1) : physical;
 }
+static void commitContacts(Detector *d, int bits) {
+    if (d->stable==bits) return;
+    if (!d->stable && d->swapRequested)
+        d->swappedForPress=atomic_load_explicit(d->swapRequested,memory_order_relaxed);
+    for (int k=0;k<2;k++) if ((d->stable^bits)&(1<<k)) {
+        d->repeats[k]=0; d->cleanPairs[k]=0;
+    }
+    d->stable=bits;
+    unsigned mask=logicalContacts(d);
+    if (d->keyer) setPaddles(d->keyer,mask);
+    if (d->change) d->change(d->context,mask,d->swappedForPress);
+}
 static void setIdleLevel(Detector *d, int k, double level) {
     d->idleLevel[k]=level;
     d->on[k]=fmax(.00008,level*2.3+.00003);
     d->off[k]=fmax(.000045,level*1.6+.000015);
 }
-static void detect(Detector *d, const float *samples) {
+static void detectWindow(Detector *d, const float *samples, int cleanBits) {
     double a[6]; PilotPhase phase[2]; measurePilots(samples,a,phase);
     if (d->step!=InputInactive) { captureWindow(d,a); return; }
     if (d->calibrated < SettleBlocks + IdleBlocks) {
@@ -521,15 +675,67 @@ static void detect(Detector *d, const float *samples) {
         }
         return;
     }
-    if (d->stable!=bits) {
-        // Latch the layout on the first debounced press. A held paddle or squeeze
-        // keeps its meaning until both physical contacts have been released.
-        if (!d->stable && d->swapRequested)
-            d->swappedForPress=atomic_load_explicit(d->swapRequested,memory_order_relaxed);
-        d->stable = bits;
-        unsigned mask=logicalContacts(d);
-        if (d->keyer) setPaddles(d->keyer,mask);
-        if (d->change) d->change(d->context,mask,d->swappedForPress);
+    // Publish one contact snapshot when both analyses finish on the same sample.
+    // Separate snapshots here could create an iambic squeeze that never happened.
+    int cleanChanges=cleanBits^d->stable;
+    commitContacts(d,(bits & ~cleanChanges) | (cleanBits & cleanChanges));
+}
+
+// Three consecutive disjoint, consistent slices can establish a transition. Marginal
+// levels, frequency drift or energy outside the pilot model leave it to the
+// existing 10 ms spectral/phase detector and its per-contact hysteresis.
+static int cleanContacts(Detector *d, PilotSlice current) {
+    int bits=d->stable;
+    if (d->havePreviousSlice) {
+        const PilotSlice *before=&d->previousSlice;
+        for (int k=0;k<2;k++) {
+            int bit=1<<k;
+            double low=fmin(before->power[k],current.power[k]);
+            double high=fmax(before->power[k],current.power[k]);
+            double noise=fmax(before->residual,current.residual);
+            bool consistent;
+            if (bits & bit) {
+                double off=d->profile.off[k] ? d->profile.off[k] : d->off[k];
+                double quiet=.8*off;
+                consistent=high<quiet*quiet && noise<.125*off*off;
+            } else {
+                double on=d->profile.on[k] ? d->profile.on[k] : d->on[k];
+                // Require 30% level headroom, agreement within 3 dB, and little
+                // unexplained energy relative to this particular paddle.
+                double strong=1.3*on;
+                PilotPhase a=before->tone[k], b=current.tone[k], shift=sliceAdvance[d->sliceIndex][k];
+                double agreement=(a.real*shift.real-a.imag*shift.imag)*b.real +
+                                 (a.real*shift.imag+a.imag*shift.real)*b.imag;
+                const double minimumCosine=cos(M_PI/24); // 7.5° over approximately 2.5 ms
+                consistent=low>strong*strong && low>=.5*high && noise<=.015*low &&
+                    agreement>0 && agreement*agreement>=minimumCosine*minimumCosine*low*high;
+            }
+            if (!consistent) d->cleanPairs[k]=0;
+            else if (++d->cleanPairs[k]>=2) bits^=bit;
+        }
+    } else d->cleanPairs[0]=d->cleanPairs[1]=0;
+    d->previousSlice=current; d->havePreviousSlice=true;
+    return bits;
+}
+static void acceptInput(Detector *d, Keyer *quiet, const float *src, UInt32 count) {
+    while (count) {
+        const PilotSlicePlan *plan=&slicePlan[d->sliceIndex];
+        UInt32 end=sliceEnd[d->sliceIndex];
+        UInt32 n=MIN(end-d->filled,count);
+        memcpy(d->input+d->filled,src,n*sizeof(*src));
+        d->filled+=n; src+=n; count-=n;
+        if (d->filled!=end) continue;
+        if (quiet && !d->keyer && d->calibrated>=SettleBlocks+IdleBlocks) {
+            setPaddles(quiet,logicalContacts(d)); renderKeyer(quiet,plan->count,NULL);
+        }
+        int clean=d->stable;
+        if (!d->step && !d->waitForRelease && d->calibrated>=SettleBlocks+IdleBlocks)
+            clean=cleanContacts(d,fitSlice(plan,d->input+end-plan->count));
+        else d->havePreviousSlice=false;
+        if (++d->sliceIndex==SlicesPerWindow) {
+            d->filled=d->sliceIndex=0;
+            detectWindow(d,d->input,clean);
+        } else commitContacts(d,clean);
     }
 }
 
@@ -538,11 +744,18 @@ typedef struct {
     Speaker speaker;
     Keyer quietKeyer;
     AudioQueueRef in, out;
-    float partial[MaxBlock];
-    UInt32 filled, outputFrames;
-    double inHz, outHz;
+    UInt32 outputFrames;
+    double inHz, outHz, expectedInputTime;
+    bool receivedInput, haveInputTime, captureQueueError;
     Generator generator;
     OSStatus callbackError;
+    // AudioQueue callbacks run on this worker's CFRunLoop. Copy reports here
+    // and deliver them after CFRunLoopRunInMode returns.
+    struct { unsigned mask; bool swapped; double at; } reports[128];
+    unsigned reportCount;
+    bool reportsLost, capturePending, captureSampling, captureBoosted, haveProfile;
+    PaddleCalibrationStep captureStep;
+    InputProfile captureProfile;
     bool closing;
     double lastIn, lastOut;
 } Session;
@@ -561,27 +774,32 @@ static void outputCallback(void *context, AudioQueueRef queue, AudioQueueBufferR
     s->lastOut = monotonicSeconds(); fillOutput(s, buf);
     s->callbackError = AudioQueueEnqueueBuffer(queue, buf, 0, NULL);
 }
-static void inputCallback(void *context, AudioQueueRef queue, AudioQueueBufferRef buf,
-                          const AudioTimeStamp *stamp, UInt32 packets, const AudioStreamPacketDescription *desc) {
-    (void)stamp; (void)packets; (void)desc;
-    Session *s = context;
-    if (s->closing || s->callbackError) return;
-    const float *src = buf->mAudioData; unsigned left = buf->mAudioDataByteSize/sizeof(float);
-    if (left) s->lastIn = monotonicSeconds();
-    while (left) {
-        unsigned n = inputFrames-s->filled; if (n > left) n = left;
-        memcpy(&s->partial[s->filled], src, n*sizeof(float)); s->filled += n; src += n; left -= n;
-        if (s->filled == inputFrames) {
-            // The wired clock drives the same keyer when the selected audio output is away.
-            if (!s->detector.keyer && s->detector.calibrated>=SettleBlocks+IdleBlocks) {
-                setPaddles(&s->quietKeyer,logicalContacts(&s->detector));
-                renderKeyer(&s->quietKeyer,inputFrames,NULL);
-            }
-            detect(&s->detector,s->partial); s->filled=0;
-            s->generator.boosted=s->detector.step ? s->detector.trialBoost : s->detector.profile.boosted;
+static void receiveInput(Session *s, const float *samples, UInt32 frames, const AudioTimeStamp *stamp) {
+    if (!frames) return;
+    bool validTime=stamp && (stamp->mFlags & kAudioTimeStampSampleTimeValid) && isfinite(stamp->mSampleTime);
+    if (s->receivedInput && (validTime!=s->haveInputTime ||
+        (validTime && fabs(stamp->mSampleTime-s->expectedInputTime)>.5))) {
+        interruptElements(s->quietKeyer.stream);
+        resetContactEvidence(&s->detector); s->detector.waitForRelease=true;
+        if (s->detector.sampling) {
+            s->detector.sampling=false;
+            notifyCapture(&s->detector,s->detector.step);
         }
     }
-    s->callbackError = AudioQueueEnqueueBuffer(queue, buf, 0, NULL);
+    s->receivedInput=true; s->haveInputTime=validTime;
+    if (validTime) s->expectedInputTime=stamp->mSampleTime+frames;
+    s->lastIn=monotonicSeconds();
+    acceptInput(&s->detector,&s->quietKeyer,samples,frames);
+    s->generator.boosted=s->detector.step ? s->detector.trialBoost : s->detector.profile.boosted;
+}
+static void inputCallback(void *context, AudioQueueRef queue, AudioQueueBufferRef buf,
+                          const AudioTimeStamp *stamp, UInt32 packets, const AudioStreamPacketDescription *desc) {
+    (void)packets; (void)desc;
+    Session *s=context;
+    if (s->closing || s->callbackError) return;
+    receiveInput(s,buf->mAudioData,buf->mAudioDataByteSize/sizeof(float),stamp);
+    s->callbackError=AudioQueueEnqueueBuffer(queue,buf,0,NULL);
+    s->captureQueueError=s->callbackError!=noErr;
 }
 static bool sameDevice(AudioQueueRef queue, const Route *r) {
     CFStringRef selected = NULL; UInt32 size = sizeof(selected);
@@ -591,9 +809,8 @@ static bool sameDevice(AudioQueueRef queue, const Route *r) {
     if (!strcmp(uid, r->uid)) return true;
     say("Audio queue changed device. Expected %s, got %s.", r->uid, uid); return false;
 }
-static bool prepareQueue(Session *s, const Route *r) {
+static bool prepareQueue(Session *s, const Route *r, bool shortCapture) {
     UInt32 channels = r->input ? 1 : 2;
-    UInt32 frames = r->input ? inputFrames : s->outputFrames;
     AudioStreamBasicDescription fmt = {.mSampleRate=r->input ? s->inHz : s->outHz, .mFormatID=kAudioFormatLinearPCM,
         .mFormatFlags=kAudioFormatFlagsNativeFloatPacked, .mBytesPerPacket=channels*sizeof(float),
         .mFramesPerPacket=1, .mBytesPerFrame=channels*sizeof(float), .mChannelsPerFrame=channels, .mBitsPerChannel=32};
@@ -608,7 +825,12 @@ static bool prepareQueue(Session *s, const Route *r) {
     status = AudioQueueSetProperty(*queue, kAudioQueueProperty_CurrentDevice, &target, sizeof(target));
     CFRelease(target);
     if (!checked(status,r->input ? "Selecting headset microphone" : "Selecting headphone output") || !sameDevice(*queue, r)) return false;
-    for (int i=0; i<QueueBuffers; ++i) {
+    // Deliver each short slice as soon as it fills. Keep the same total
+    // capture capacity across a delayed callback, including odd window sizes.
+    UInt32 defaultFrames=r->input ? inputFrames : s->outputFrames;
+    int buffers=shortCapture ? SlicesPerWindow*QueueBuffers : QueueBuffers;
+    for (int i=0; i<buffers; ++i) {
+        UInt32 frames=shortCapture ? slicePlan[i%SlicesPerWindow].count : defaultFrames;
         AudioQueueBufferRef buf;
         if (!checked(AudioQueueAllocateBuffer(*queue, frames*fmt.mBytesPerFrame, &buf), "Allocating buffer")) return false;
         if (!r->input) fillOutput(s, buf);
@@ -674,14 +896,20 @@ static void closeAudio(Session *s) {
 @interface MorseEngine ()
 @property (atomic) BOOL stopping;
 - (instancetype)initWithDefaults:(NSUserDefaults *)defaults;
+- (ContactQueue *)vbandContactQueue;
 - (void)contacts:(unsigned)mask swapped:(BOOL)swapped;
 - (void)inputStep:(PaddleCalibrationStep)step sampling:(BOOL)sampling boosted:(BOOL)boosted profile:(const InputProfile *)profile;
 @end
 static void deliverContact(void *context, unsigned mask, bool swapped) {
-    [(__bridge MorseEngine *)context contacts:mask swapped:swapped];
+    Session *s=context;
+    if (s->reportCount>=128) { s->reportsLost=true; return; }
+    s->reports[s->reportCount++]=(typeof(s->reports[0])){mask,swapped,paddleTimeMs()};
 }
 static void deliverInputStep(void *context, PaddleCalibrationStep step, bool sampling, bool boosted, const InputProfile *profile) {
-    [(__bridge MorseEngine *)context inputStep:step sampling:sampling boosted:boosted profile:profile];
+    Session *s=context;
+    s->capturePending=true; s->captureStep=step; s->captureSampling=sampling; s->captureBoosted=boosted;
+    s->haveProfile=profile!=NULL;
+    if (profile) s->captureProfile=*profile;
 }
 typedef NS_ENUM(unsigned, InputRequest) { NoInputRequest, BeginInput, SampleNormal, SampleBoosted, CancelInput, AutomaticInput };
 static NSString *const inputProfilePreference=@"wiredPaddleInputProfile";
@@ -697,7 +925,9 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
     NSString *_phase, *_detail, *_audioText;
     NSArray *_lastOptions;
     unsigned _mask;
+    double _contactTime;
     TypingQueue _typing;
+    ElementStream _elements;
     SidetoneLevel _volume;
     atomic_bool _swapRequested;
     BOOL _swappedForPress;
@@ -705,6 +935,9 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
     NSUserDefaults *_preferences;
     NSArray<NSString *> *_inputDevices;
     atomic_uint _inputRequest;
+    atomic_uint _requestedRoute; // low two bits are the source, high bits distinguish visits
+    unsigned _workerRoute;
+    ContactQueue _vbandContacts;
 }
 - (instancetype)init { return [self initWithDefaults:NSUserDefaults.standardUserDefaults]; }
 - (instancetype)initWithDefaults:(NSUserDefaults *)defaults {
@@ -712,6 +945,8 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
         _outputChoice=@"auto"; _workers=dispatch_group_create(); initTypingQueue(&_typing);
         atomic_init(&_volume.percent,100); atomic_init(&_volume.muted,false);
         atomic_init(&_inputRequest,NoInputRequest);
+        atomic_init(&_requestedRoute,PaddleInputAudio);
+        initContacts(&_vbandContacts);
         _preferences=defaults;
         atomic_init(&_swapRequested,[defaults boolForKey:swapPreference]);
         NSDictionary *saved=[defaults dictionaryForKey:tonePreference];
@@ -721,8 +956,8 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
         tone.riseMs=(uint8_t)storedNumber(saved,@"riseMs",tone.riseMs,MinRampMs,MaxRampMs);
         tone.fallMs=(uint8_t)storedNumber(saved,@"fallMs",tone.fallMs,MinRampMs,MaxRampMs);
         tone.curve=(uint8_t)storedNumber(saved,@"curve",tone.curve,RaisedCosine,ExponentialRamp);
-        tone.spacingWpm=(uint8_t)storedNumber(saved,@"spacingWpm",MIN(tone.spacingWpm,tone.wpm),MinKeyerWPM,tone.wpm);
-        tone.options=(uint8_t)storedNumber(saved,@"options",0,0,UseFarnsworth|TimedWordSpaces);
+        tone.spacingWpm=(uint8_t)storedNumber(saved,@"spacingWpm",MIN(tone.spacingWpm,tone.wpm),MinSpacingWPM,tone.wpm);
+        tone.options=(uint8_t)storedNumber(saved,@"options",0,0,UseFarnsworth|TimedWordSpaces|IambicModeB|TrainerGapThresholds);
         atomic_init(&_tone,tone);
     }
     return self;
@@ -730,9 +965,10 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
 - (void)report:(NSString *)phase detail:(NSString *)detail mask:(unsigned)mask {
     if ([_phase isEqual:phase] && [_detail isEqual:detail] && _mask==mask) return;
     _phase=phase; _detail=detail; _mask=mask;
-    double ms=paddleTimeMs();
+    double ms=_contactTime ? _contactTime : paddleTimeMs();
     BOOL swapped=_swappedForPress;
-    dispatch_async(dispatch_get_main_queue(),^{ if (self.stateChanged) self.stateChanged(phase,detail,mask,ms,swapped); });
+    unsigned route=_workerRoute;
+    dispatch_async(dispatch_get_main_queue(),^{ if (route==atomic_load(&self->_requestedRoute) && self.stateChanged) self.stateChanged(phase,detail,mask,ms,swapped); });
 }
 - (void)contacts:(unsigned)mask swapped:(BOOL)swapped {
     _swappedForPress=swapped; [self report:@"ready" detail:@"Ready for paddle input" mask:mask];
@@ -762,8 +998,9 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
     }
     if (step==InputCalibrated || step==InputOverlap)
         [self report:@"calibrating" detail:@"Release both paddles to resume" mask:0];
+    unsigned route=_workerRoute;
     dispatch_async(dispatch_get_main_queue(),^{
-        if (self.inputCalibrationChanged) self.inputCalibrationChanged(step,sampling,boosted);
+        if (route==atomic_load(&self->_requestedRoute) && self.inputCalibrationChanged) self.inputCalibrationChanged(step,sampling,boosted);
     });
 }
 - (void)handleInputRequest:(InputRequest)request session:(Session *)s running:(BOOL)running {
@@ -774,7 +1011,7 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
     }
     switch (request) {
         case BeginInput:
-            resetTypingSession(&_typing); beginCapture(d);
+            [self interruptInput]; beginCapture(d);
             [self report:@"calibrating" detail:@"Measuring paddle input" mask:0]; break;
         case SampleNormal: case SampleBoosted:
             samplePosition(d,request==SampleBoosted); break;
@@ -803,8 +1040,8 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
     t.riseMs=(uint8_t)bounded(t.riseMs,MinRampMs,MaxRampMs);
     t.fallMs=(uint8_t)bounded(t.fallMs,MinRampMs,MaxRampMs);
     t.curve=(uint8_t)bounded(t.curve,RaisedCosine,ExponentialRamp);
-    t.spacingWpm=(uint8_t)bounded(t.spacingWpm,MinKeyerWPM,t.wpm);
-    t.options &= UseFarnsworth|TimedWordSpaces;
+    t.spacingWpm=(uint8_t)bounded(t.spacingWpm,MinSpacingWPM,t.wpm);
+    t.options &= UseFarnsworth|TimedWordSpaces|IambicModeB|TrainerGapThresholds;
     ToneSettings previous=atomic_load(&_tone);
     if (!memcmp(&previous,&t,sizeof(t))) return;
     atomic_store(&_tone,t);
@@ -815,6 +1052,24 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
 - (void)setSidetoneVolume:(unsigned)volume { atomic_store(&_volume.percent,MIN(volume,100u)); }
 - (BOOL)sidetoneMuted { return atomic_load(&_volume.muted); }
 - (void)setSidetoneMuted:(BOOL)muted { atomic_store(&_volume.muted,muted); }
+- (PaddleInputMode)inputMode { return (PaddleInputMode)(atomic_load(&_requestedRoute)&3u); }
+- (void)setInputMode:(PaddleInputMode)mode {
+    unsigned old=atomic_load(&_requestedRoute);
+    if (mode>PaddleInputOff || (old&3u)==mode) return;
+    queueContacts(&_vbandContacts,0);
+    atomic_store(&_inputRequest,NoInputRequest);
+    atomic_store(&_requestedRoute,((old&~3u)+4u)|mode);
+    [self interruptInput];
+}
+- (ContactQueue *)vbandContactQueue { return &_vbandContacts; }
+- (void)setVBandContacts:(unsigned)mask {
+    if (mask>3 || self.inputMode!=PaddleInputVBand) return;
+    unsigned logical=self.paddlesSwapped ? ((mask&1u)<<1)|((mask&2u)>>1) : mask;
+    queueContacts(&_vbandContacts,logical);
+}
+- (unsigned)elementEpoch { return atomic_load(&_elements.epoch); }
+- (BOOL)takeElement:(ElementEvent *)event { return takeElement(&_elements,event); }
+- (void)interruptInput { interruptElements(&_elements); selectTypingDestination(&_typing,0); }
 - (void)setTypingDestination:(pid_t)pid { selectTypingDestination(&_typing,pid); }
 - (void)drainTypedCharacters:(void (^)(pid_t, char, BOOL))receive {
     TypedCharacter event;
@@ -826,7 +1081,8 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
     for (SoundOutput *o in options) if (o.bluetooth) [mapped addObject:@{@"id":o.uid,@"name":o.name}];
     if ([_lastOptions isEqual:mapped] && [_audioText isEqual:text]) return;
     NSArray *items=[mapped copy]; _lastOptions=items; _audioText=text;
-    dispatch_async(dispatch_get_main_queue(),^{ if (self.outputsChanged) self.outputsChanged(items,text); });
+    unsigned route=_workerRoute;
+    dispatch_async(dispatch_get_main_queue(),^{ if (route==atomic_load(&self->_requestedRoute) && self.outputsChanged) self.outputsChanged(items,text); });
 }
 - (void)start {
     self.stopping=NO;
@@ -841,21 +1097,42 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
     BOOL running=NO, asked=NO, reportedAdapter=NO, lastPaired=NO;
     NSString *recentBluetooth=nil, *playingUID=nil;
     double nextScan=0, retryAudio=0, retryTone=0;
-    AudioDeviceID inputID=0, outputID=0;
+    AudioDeviceID inputID=0, outputID=0, standardCaptureDevice=0;
+    _workerRoute=UINT_MAX;
     while (!self.stopping) @autoreleasepool {
+        unsigned route=atomic_load(&_requestedRoute);
+        PaddleInputMode mode=(PaddleInputMode)(route&3u);
+        if (_workerRoute!=route) {
+            closeAudio(&s);
+            _workerRoute=route; running=NO; asked=NO; reportedAdapter=NO;
+            _phase=nil; _detail=nil; _audioText=nil; playingUID=nil;
+            nextScan=retryTone=retryAudio=0; inputID=outputID=standardCaptureDevice=0;
+        }
+        if (mode==PaddleInputOff) { [NSThread sleepForTimeInterval:.05]; continue; }
         if (running) CFRunLoopRunInMode(kCFRunLoopDefaultMode,.024,false);
         else [NSThread sleepForTimeInterval:.05];
+        if (route!=atomic_load(&_requestedRoute)) continue;
+        if (s.reportsLost) { [self interruptInput]; s.reportCount=0; s.reportsLost=false; }
+        for (unsigned i=0;i<s.reportCount;i++) {
+            _contactTime=s.reports[i].at;
+            [self contacts:s.reports[i].mask swapped:s.reports[i].swapped];
+        }
+        _contactTime=0; s.reportCount=0;
+        if (s.capturePending) {
+            [self inputStep:s.captureStep sampling:s.captureSampling boosted:s.captureBoosted profile:s.haveProfile ? &s.captureProfile : NULL];
+            s.capturePending=false;
+        }
         double now=monotonicSeconds();
         InputRequest request=atomic_exchange(&_inputRequest,NoInputRequest);
-        if (request!=NoInputRequest) [self handleInputRequest:request session:&s running:running];
+        if (request!=NoInputRequest && mode==PaddleInputAudio) [self handleInputRequest:request session:&s running:running];
         if (now<nextScan && !s.callbackError) continue;
         nextScan=now+.40;
         JackRoutes jack={0};
         NSArray<SoundOutput *> *options=scanOutputs(&jack);
         BOOL paired=jack.inputs==1 && jack.outputs==1;
-        if (!reportedAdapter || paired!=lastPaired) {
+        if (mode==PaddleInputAudio && (!reportedAdapter || paired!=lastPaired)) {
             reportedAdapter=YES; lastPaired=paired;
-            dispatch_async(dispatch_get_main_queue(),^{if (self.adapterConnectionChanged) self.adapterConnectionChanged(paired);});
+            dispatch_async(dispatch_get_main_queue(),^{ if (route==atomic_load(&self->_requestedRoute) && self.adapterConnectionChanged) self.adapterConnectionChanged(paired); });
         }
         AudioDeviceID systemOutput=0;
         property(kAudioObjectSystemObject,kAudioHardwarePropertyDefaultOutputDevice,kAudioObjectPropertyScopeGlobal,
@@ -866,18 +1143,21 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
         if (running && (!paired || jack.input.dev!=inputID || jack.output.dev!=outputID ||
             s.callbackError || now-s.lastIn>3 || now-s.lastOut>3 ||
             !sameDevice(s.in,&jack.input) || !sameDevice(s.out,&jack.output))) {
+            if (paired && jack.input.dev==inputID && (s.captureQueueError || (now-s.lastIn>3 && now-s.lastOut<=3)))
+                standardCaptureDevice=inputID;
             if (s.detector.step) [self inputStep:InputUnavailable sampling:NO boosted:NO profile:NULL];
             closeAudio(&s); running=NO; playingUID=nil; retryTone=0; retryAudio=now+.6;
-            resetTypingSession(&_typing);
+            [self interruptInput];
             [self report:@"disconnected" detail:@"Paddle disconnected" mask:0];
         }
-        if (!paired) {
+        if (mode==PaddleInputAudio && !paired) {
+            standardCaptureDevice=0;
             NSString *message=jack.outputs==1 && !jack.inputs ? @"Plug fully into the jack · headset mic missing" :
                 @"Connect the paddle adapter to the 3.5 mm jack";
             [self report:@"waiting" detail:message mask:0];
             [self reportOptions:options text:audioText]; continue;
         }
-        if (!running) {
+        if (mode==PaddleInputAudio && !running) {
             AVAuthorizationStatus auth=[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
             if (auth!=AVAuthorizationStatusAuthorized) {
                 if (auth==AVAuthorizationStatusNotDetermined && !asked) {
@@ -885,23 +1165,29 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
                     [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL allow){ (void)allow; }];
                 }
                 [self report:@"permission" detail:auth==AVAuthorizationStatusNotDetermined ?
-                    @"Allow microphone access to read the paddle" : @"Allow Morse Paddle under Privacy & Security → Microphone" mask:0];
+                    @"Allow microphone access to read the paddle" : @"Allow Morse under Privacy & Security → Microphone" mask:0];
                 [self reportOptions:options text:audioText]; continue;
             }
             if (now<retryAudio) { [self reportOptions:options text:audioText]; continue; }
             s.inHz=deviceRate(&jack.input); s.outHz=deviceRate(&jack.output);
-            prepareQuietKeyer(&s,&_typing,&_tone);
+            [self interruptInput]; prepareQuietKeyer(&s,&_typing,&_tone); s.quietKeyer.stream=&_elements;
             makeTables(s.inHz); s.outputFrames=(UInt32)lround(s.outHz*.01);
-            s.detector.context=(__bridge void *)self; s.detector.change=deliverContact;
+            s.detector.context=&s; s.detector.change=deliverContact;
             s.detector.swapRequested=&_swapRequested;
             s.detector.captureChanged=deliverInputStep;
             s.detector.profile=[self inputProfileForDevices:@[@(jack.input.uid),@(jack.output.uid)]];
-            s.detector.waitForRelease=s.detector.profile.on[0]>0;
+            s.detector.waitForRelease=true;
             s.generator.boosted=s.detector.profile.boosted;
-            if (!prepareQueue(&s,&jack.input) || !prepareQueue(&s,&jack.output) ||
-                !checked(AudioQueueStart(s.out,NULL),"Starting wired pilots") ||
-                !checked(AudioQueueStart(s.in,NULL),"Starting headset return")) {
-                closeAudio(&s); retryAudio=now+2; [self report:@"error" detail:@"Could not open the wired audio ports · retrying" mask:0];
+            bool shortCapture=standardCaptureDevice!=jack.input.dev;
+            bool inputReady=prepareQueue(&s,&jack.input,shortCapture);
+            bool pilotsStarted=inputReady && prepareQueue(&s,&jack.output,false) &&
+                checked(AudioQueueStart(s.out,NULL),"Starting wired pilots");
+            if (!pilotsStarted || !checked(AudioQueueStart(s.in,NULL),"Starting headset return")) {
+                bool retryStandard=shortCapture && (!inputReady || pilotsStarted);
+                if (retryStandard) standardCaptureDevice=jack.input.dev;
+                closeAudio(&s); retryAudio=now+(retryStandard ? .1 : 2);
+                [self report:@"error" detail:retryStandard ? @"Retrying the audio converter with standard capture buffers" :
+                    @"Could not open the wired audio ports · retrying" mask:0];
                 [self reportOptions:options text:audioText]; continue;
             }
             running=YES; s.lastIn=s.lastOut=monotonicSeconds();
@@ -911,17 +1197,26 @@ static NSInteger storedNumber(NSDictionary *stored, NSString *key, NSInteger fal
         Route toneRoute=chosen ? chosen.route : (Route){0};
         if (s.speaker.unit && (![playingUID isEqual:chosen.uid] || !speakerSelected(&s.speaker,&toneRoute))) {
             s.detector.keyer=NULL; stopSpeaker(&s.speaker); playingUID=nil; retryTone=0;
-            prepareQuietKeyer(&s,&_typing,&_tone);
+            [self interruptInput];
+            if (running) { prepareQuietKeyer(&s,&_typing,&_tone); s.quietKeyer.stream=&_elements; }
         }
         if (chosen && !s.speaker.unit && now>=retryTone && toneRoute.dev!=outputID) {
             memset(&s.speaker,0,sizeof(s.speaker));
-            if (startSpeaker(&s.speaker,&toneRoute,&_tone,&_typing,&_volume)) {
-                playingUID=chosen.uid; s.detector.keyer=&s.speaker.keyer;
-                setPaddles(s.detector.keyer,logicalContacts(&s.detector));
+            interruptElements(&_elements);
+            if (startSpeaker(&s.speaker,&toneRoute,&_tone,&_typing,&_volume,&_elements,mode==PaddleInputVBand ? self.vbandContactQueue : NULL)) {
+                playingUID=chosen.uid;
+                if (running) {
+                    s.detector.keyer=&s.speaker.keyer;
+                    setPaddles(s.detector.keyer,logicalContacts(&s.detector));
+                }
             } else retryTone=now+2;
         }
         if (chosen && !s.speaker.unit) audioText=[NSString stringWithFormat:@"Waiting to open %@",chosen.name];
         [self reportOptions:options text:audioText];
+        if (mode==PaddleInputVBand) {
+            [self report:s.speaker.unit ? @"ready" : @"waiting"
+                  detail:s.speaker.unit ? @"VBand USB · ready for Control key input" : audioText mask:0];
+        }
     }
     closeAudio(&s);
 }

@@ -13,11 +13,25 @@ const keys = (...objects) => [...new Set(objects.flatMap(o => Object.keys(o || {
 const plus = (base = 0, local = 0, remote = 0) => Math.min(1e9, remote + Math.max(0, local - base));
 const unique = (a = [], b = [], limit = 1000) => [...new Set([...a, ...b])].slice(-limit);
 
+export function legacyXP(profile) {
+  return Math.max(0,profile.stats.xp-creditTotal(profile.credits || {}));
+}
+export function combineCredits(base,local,remote) {
+  const result={...remote.credits};
+  for (const [id,n] of Object.entries(local.credits || {})) {
+    const b=base.credits?.[id] || 0, r=result[id] || 0;
+    if (n>b) result[id]=r+Math.max(0,n-Math.max(b,r));
+  }
+  return result;
+}
+export const creditTotal=credits=>Object.values(credits).reduce((sum,n)=>sum+n,0);
+
 // Exactly one sanitized learner, never credentials, other learners, or a live
 // round. Playback, drafts, volume and typing calibration belong to each device.
 export function syncProfile(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || !input.settings || !input.stats) throw new Error('Invalid saved progress.');
   const profile = sanitizeState({ version: 1, activeId: input.id, profiles: [input] }).profiles[0];
+  delete profile.previousTiming; // previous device settings are resolved locally
   profile.round = null;
   profile.focus = emptyFocus();
   profile.listening.active = null;
@@ -26,6 +40,8 @@ export function syncProfile(input) {
   profile.id = 'paired-listener';
   profile.name = 'Listener';
   profile.settings.volume = 55;
+  profile.sending.settings.reverse = false;
+  profile.leaderboard = false; // consent belongs to the local publisher
   profile.pacing = sanitizePacing();
   profile.headPacing = sanitizePacing();
   for (const record of Object.values(profile.stats.mastery)) {
@@ -53,6 +69,8 @@ export function mergeProgress(baseInput, localInput, remoteInput) {
     if (!same(base.settings[key], local.settings[key])) result.settings[key] = local.settings[key];
   }
   for (const key of ['xp', 'total', 'solved', 'clean', 'focusCompletions']) result.stats[key] = plus(base.stats[key], local.stats[key], remote.stats[key]);
+  result.credits=combineCredits(base,local,remote);
+  result.stats.xp=Math.min(1e9,creditTotal(result.credits)+plus(legacyXP(base),legacyXP(local),legacyXP(remote)));
   result.stats.sessions = mergeSessions(remote.stats.sessions, local.stats.sessions);
   result.stats.badges = unique(remote.stats.badges, local.stats.badges, 100);
   for (const id of keys(local.listening.records, remote.listening.records)) {
@@ -79,7 +97,8 @@ export function mergeProgress(baseInput, localInput, remoteInput) {
     if (count) { counts.set(key, count - 1); return false; }
     return true;
   });
-  result.stats.rounds = [...remote.stats.rounds, ...added].sort((a, b) => a.at - b.at).slice(-300);
+  const remoteIds = new Set(remote.stats.rounds.map(row => row.id).filter(Boolean));
+  result.stats.rounds = [...remote.stats.rounds, ...added.filter(row => !row.id || !remoteIds.has(row.id))].sort((a, b) => a.at - b.at).slice(-300);
   for (const key of keys(base.stats.mastery, local.stats.mastery)) {
     const b = base.stats.mastery[key] || {}, l = local.stats.mastery[key];
     if (!l) continue;
