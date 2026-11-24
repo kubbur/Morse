@@ -2,15 +2,17 @@
 
 Morse code listening and sending practice, online or in an offline Mac app. Use the separate **Morse Paddle** companion to connect a physical paddle through the passive headset adapter.
 
-**[Project page](https://kubbur.github.io/Morse/) · [Open the online trainer](https://morse.kubbur.digital/) · [Assembly guide (PDF)](docs/assembly/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)**
+**[Latest release — both Mac apps, source and PDF](https://github.com/kubbur/Morse/releases/latest) · [Project page](https://kubbur.github.io/Morse/) · [Open the online trainer](https://morse.kubbur.digital/)**
 
 ## Choose how to practise
 
 | | What it does | Get it |
 | --- | --- | --- |
 | **Morse online** | Listening and sending practice in your browser. | [Open the trainer](https://morse.kubbur.digital/) |
-| **Morse for Mac** | The trainer in **Morse.app**. Practice works offline; progress stays on your Mac, with import and export. | [Apple Silicon](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/Morse-1.0.0-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/Morse-1.0.0-mac-x64.zip) |
-| **Morse Paddle for Mac** | A separate companion for a wired dual-lever paddle, sidetone, text entry and trainer input. | [Universal Mac download](https://github.com/kubbur/Morse/releases/download/v1.4.0/Morse-Paddle-Mac.zip) |
+| **Morse for Mac** | The trainer in **Morse.app**. Practice works offline; progress stays on your Mac, with import and export. | [Apple Silicon](https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-x64.zip) |
+| **Morse Paddle for Mac** | A separate companion for a wired dual-lever paddle, sidetone, text entry and trainer input. | [Universal Mac download](https://github.com/kubbur/Morse/releases/latest/download/Morse-Paddle-Mac.zip) |
+
+**[Assembly guide and full BOM (PDF)](https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)** — also included in the latest release with both apps.
 
 Both Mac apps require **macOS 13 or later**. In **Apple menu → About This Mac**, an Apple chip means Apple Silicon; an Intel processor means Intel. The desktop trainer is version 1.0.0; the companion is version 1.4.0.
 
@@ -22,11 +24,11 @@ Both Mac apps require **macOS 13 or later**. In **Apple menu → About This Mac*
 
 The desktop app has its own local save. It does not automatically sync with the website, public leaderboard or device-pairing service. Closing the window leaves the app in the Dock; **Morse → Quit Morse** quits it.
 
-The current downloads are **ad-hoc signed and not Apple-notarized**. See the [release notes and verification status](https://github.com/kubbur/Morse/releases/tag/morse-v1.0.0). If you trust the download and macOS blocks it, follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445); keep system security protections enabled.
+The current downloads are **ad-hoc signed and not Apple-notarized**. See the [latest release notes and verification status](https://github.com/kubbur/Morse/releases/latest). If you trust the download and macOS blocks it, follow [Apple's Open Anyway instructions](https://support.apple.com/en-us/102445); keep system security protections enabled.
 
 ## Add a physical paddle
 
-**Morse Paddle remains a separate app.** Install [Morse Paddle.app](https://github.com/kubbur/Morse/releases/download/v1.4.0/Morse-Paddle-Mac.zip), open it on the same Mac and connect the passive adapter. Allow Microphone access and release both paddles during calibration.
+**Morse Paddle remains a separate app.** Install [Morse Paddle.app](https://github.com/kubbur/Morse/releases/latest/download/Morse-Paddle-Mac.zip), open it on the same Mac and connect the passive adapter. Allow Microphone access and release both paddles during calibration.
 
 | Practise in | Address to enter in Morse Paddle |
 | --- | --- |
@@ -39,7 +41,7 @@ Read the [Morse Paddle user and integration guide](Source/Integration.md) for ca
 
 ## Build the paddle and converter
 
-- **[Illustrated assembly guide and full BOM (PDF)](docs/assembly/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)** — mechanical assembly, M3 × 10 pivots, wiring diagrams and tests. Test the converter before gluing its lid.
+- **[Illustrated assembly guide and full BOM (PDF)](https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf)** — mechanical assembly, M3 × 10 pivots, wiring diagrams and tests. Test the converter before gluing its lid.
 - **[Printable model (OBJ)](morsefull.obj)** — paddle and converter parts.
 
 The guide documents the builder's prototype. Other audio hardware needs its own compatibility checks.
@@ -60,6 +62,6 @@ npm test
 npm start
 ```
 
-The [Mac build workflow](.github/workflows/build-mac.yml) builds and tests both architectures and retains workflow artifacts. It does not automatically publish a release. Download the [supplied 1.0.0 source ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/Morse-1.0.0-source.zip) for the standalone desktop source, or use this repository for the combined project.
+The [Mac build workflow](.github/workflows/build-mac.yml) builds and tests both architectures and retains workflow artifacts. It does not automatically publish a release. Download the [supplied 1.0.0 source ZIP](https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-source.zip) for the standalone desktop source, or use this repository for the combined project.
 
 The desktop source contains no saved learner data or server credentials. Generated builds, dependencies, local saves and credentials are excluded from version control. Third-party notices remain in the source and packaged apps.

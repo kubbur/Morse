@@ -142,6 +142,7 @@ footer { justify-content: space-between; gap: 1rem; padding-block: 1.4rem; borde
 .product-card .compatibility{margin-top:.8rem}
 .product-card .small,.small{margin-top:.7rem;color:var(--body);font-size:.82rem;line-height:1.6}
 .card-links{display:flex;flex-wrap:wrap;gap:.6rem 1.2rem;margin-top:1.2rem;font-size:.82rem;font-weight:600}
+.release-resources{display:flex;flex-wrap:wrap;gap:.8rem 1.5rem;margin-top:1.4rem;font-size:.9rem;font-weight:600;line-height:1.5}
 .mac-approval{margin-top:1.2rem;color:var(--body)}
 .mac-approval p{margin-top:.7rem;max-width:58rem;line-height:1.6}
 code{font:.85em var(--mono);overflow-wrap:anywhere;padding:.12em .25em;background:#e9ecdf;border-radius:3px;color:var(--ink)}
