@@ -1,0 +1,157 @@
+name: Publish verified Morse 1.1.0 downloads
+on:
+  push:
+    branches: ['publish/morse-v1.1.0']
+    paths: ['.github/workflows/publish-morse-1.1.0.yml']
+permissions: {}
+jobs:
+  publish:
+    if: github.repository == 'kubbur/Morse' && github.event.before == '0fa5046d80863c5aef9beb7e87aa162a2412b5d5'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify both tested archives and collect their release metadata
+        run: |
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import shutil
+          import subprocess
+          import zipfile
+          from pathlib import Path
+
+          repo = "kubbur/Morse"
+          tag = "morse-v1.1.0"
+          version = "1.1.0"
+          commit = "0fa5046d80863c5aef9beb7e87aa162a2412b5d5"
+          tree = "dbefa0fc2b29bec696d8e569e8ca08e1dc8df951"
+          run_id = 45512578537
+          out = Path("assets")
+          out.mkdir()
+          def api(path):
+              return json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/{path}"]))
+          def digest(path):
+              with path.open("rb") as stream:
+                  return hashlib.file_digest(stream, "sha256").hexdigest()
+          def report(path, data):
+              path.write_text(json.dumps(data, indent=2) + "\n")
+
+          run = api(f"actions/runs/{run_id}")
+          assert (run["head_sha"], run["path"], run["event"], run["conclusion"]) == (commit, ".github/workflows/build-mac.yml", "pull_request", "success")
+          assert api(f"git/commits/{commit}")["tree"]["sha"] == tree
+          notes = base64.b64decode(api(f"contents/desktop/RELEASE.md?ref={commit}")["content"])
+          Path("notes.md").write_bytes(notes)
+          source = f"Morse-{version}-source.zip"
+          builds, verified, names = [], [], []
+          for arch in ("arm64", "x64"):
+              app = f"Morse-{version}-mac-{arch}.zip"
+              directory, tests = Path("incoming", arch), Path("smoke", arch)
+              for artifact, folder in [(f"Morse-mac-{arch}", directory), (f"Morse-tests-{arch}", tests)]:
+                  subprocess.run(["gh", "run", "download", str(run_id), "-R", repo, "-n", artifact, "-D", str(folder)], check=True)
+              metadata = json.loads((directory / "darwin-build.json").read_text())
+              assert (metadata["name"], metadata["version"], metadata["platform"], metadata["electron"]) == ("Morse", version, "darwin", "45.4.1")
+              build, = metadata["builds"]
+              checks = json.loads((directory / "release-checks.json").read_text())["checks"]
+              checked, = [item for item in checks if item["file"] == app]
+              assert checked["codeMatchesSource"] and checked["fusesVerified"] and checked["minimumMacOS"] == "13.0"
+              assert checked["signing"] == "ad-hoc" and checked["architecture"] == arch
+              hashes = {line.split("  ", 1)[1]: line[:64] for line in (directory / "SHA256SUMS.txt").read_text().splitlines()}
+              assert (build["file"], build["architecture"], build["signing"], build["sha256"]) == (app, arch, "ad-hoc", hashes[app])
+              assert digest(directory / app) == hashes[app] and digest(directory / source) == hashes[source]
+              smoke = json.loads((tests / "smoke.json").read_text())
+              assert smoke["platform"] == "darwin" and smoke["architecture"] == arch and smoke["checks"] and not smoke["rendererErrors"]
+              with zipfile.ZipFile(directory / source) as archive:
+                  assert archive.read("Morse/RELEASE.md") == notes
+              shutil.copyfile(directory / app, out / app)
+              names.append(app)
+              builds.append(build)
+              verified.append({**checked, "packagedAppChecks": smoke["checks"]})
+              if arch == "arm64":
+                  shutil.copyfile(directory / source, out / source)
+                  source_check, = [item for item in checks if item["file"] == source and item["kind"] == "source"]
+          names.append(source)
+          report(out / "darwin-build.json", {"name": "Morse", "version": version, "electron": "45.4.1", "platform": "darwin", "sourceCommit": commit, "buildRun": run["html_url"], "builds": builds})
+          report(out / "release-checks.json", {"sourceCommit": commit, "buildRun": run["html_url"], "checks": [*verified, source_check]})
+          (out / "SHA256SUMS.txt").write_text("".join(f"{digest(out / name)}  {name}\n" for name in names))
+          PY
+      - name: Verify the draft assets against GitHub digests and publish
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          from pathlib import Path
+
+          repo, tag, commit = "kubbur/Morse", "morse-v1.1.0", "0fa5046d80863c5aef9beb7e87aa162a2412b5d5"
+          title = "Morse for Mac 1.1.0"
+          def api(path):
+              return json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/{path}"]))
+          def release(*args):
+              subprocess.run(["gh", "release", *args, "-R", repo], check=True)
+          def candidates():
+              return [r for r in api("releases?per_page=100") if r["tag_name"] == tag]
+          def assets(release_id):
+              return {a["name"]: a for a in api(f"releases/{release_id}/assets?per_page=100")}
+          files = {}
+          for f in Path("assets").iterdir():
+              with f.open("rb") as stream:
+                  files[f.name] = (f.stat().st_size, "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest())
+          def verify(uploaded):
+              assert set(uploaded) <= set(files), "Unexpected release files"
+              for name, a in uploaded.items():
+                  assert a["state"] == "uploaded" and (a["size"], a["digest"]) == files[name], name
+          assert api("git/ref/heads/release/morse-v1.1.0")["object"]["sha"] == commit, "The release branch moved"
+          assert api("releases/latest")["tag_name"] in ("morse-v1.0.0", tag), "The latest release has changed"
+          refs = api("git/matching-refs/tags/" + tag)
+          assert all(r["ref"] != "refs/tags/" + tag or r["object"]["sha"] == commit for r in refs), "Tag already belongs to another commit"
+          if not candidates():
+              release("create", tag, "--draft", "--target", commit, "--title", title, "--notes-file", "notes.md")
+          current, = candidates()
+          assert current["target_commitish"] == commit and current["name"] == title and not current["prerelease"]
+          assert current["body"].strip() == Path("notes.md").read_text().strip()
+          uploaded = assets(current["id"])
+          verify(uploaded)
+          missing = sorted(set(files) - set(uploaded))
+          if missing:
+              assert current["draft"], "Published releases are immutable for this job"
+              release("upload", tag, *[str(Path("assets", name)) for name in missing])
+          import time
+          for _ in range(12):
+              uploaded = assets(current["id"])
+              if set(uploaded) == set(files) and all(a["digest"] and a["state"] == "uploaded" for a in uploaded.values()):
+                  break
+              time.sleep(3)
+          verify(uploaded)
+          assert set(uploaded) == set(files), "Incomplete draft"
+          if current["draft"]:
+              release("edit", tag, "--draft=false", "--latest")
+          for _ in range(12):
+              final = api("releases/latest")
+              if final["id"] == current["id"]:
+                  break
+              time.sleep(3)
+          assert final["id"] == current["id"] and not final["draft"] and not final["prerelease"]
+          import urllib.error
+          import urllib.request
+          for arch in ("arm64", "x64"):
+              name = f"Morse-1.1.0-mac-{arch}.zip"
+              url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
+              for attempt in range(5):
+                  try:
+                      with urllib.request.urlopen(url, timeout=90) as stream:
+                          downloaded = hashlib.file_digest(stream, "sha256").hexdigest()
+                      break
+                  except urllib.error.HTTPError as error:
+                      if error.code not in (404, 502, 503, 504) or attempt == 4:
+                          raise
+                      time.sleep(5)
+              assert "sha256:" + downloaded == files[name][1], f"Public download failed verification: {name}"
+              print(f"Verified public download of {name}")
+          print(final["html_url"])
+          PY
