@@ -1,43 +1,78 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#f7f6ef">
-<meta name="description" content="Practice Morse code online or offline on your Mac. Download Morse, add the separate Morse Paddle companion, and build a paddle with the illustrated guide.">
-<title>Morse — Practice online or on your Mac</title>
-<link rel="icon" type="image/png" href="assets/morse-icon.png"><link rel="stylesheet" href="style.css"><script src="preview.js" defer></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Morse code practice for Mac and the web. App downloads, paddle setup, assembly guide and source.">
+  <title>Morse</title>
+  <link rel="icon" type="image/png" href="assets/morse-icon.png">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<a class="skip-link" href="#main">Skip to content</a>
-<header class="masthead wrap"><a class="brand" href="./" aria-label="Morse home"><img src="assets/morse-icon.png" width="42" height="42" alt=""><span>Morse</span></a><nav aria-label="Main"><a href="#downloads">Downloads</a><a href="#paddle">Paddle</a><a href="#build">Build</a><a href="https://github.com/kubbur/Morse">GitHub ↗</a></nav></header>
-<main id="main" class="wrap">
-<section class="hero" aria-labelledby="title"><div class="intro"><p class="eyebrow">LISTEN · SEND · PRACTISE</p><h1 id="title">Morse code.<br><em>Web or Mac.</em></h1><p>Practise listening and sending in your browser, or use the offline Mac app. Add a physical paddle with the separate Morse Paddle companion.</p><div class="hero-actions"><a class="download" href="https://morse.kubbur.digital/">Open online trainer ↗</a><a class="text-link" href="#downloads">Get Morse for Mac ↓</a></div></div>
-      <figure class="instrument" aria-label="Sidetone demo for the letter A">
-        <figcaption><span>Sidetone demo</span><span class="mono">650 Hz / 30 WPM</span></figcaption>
-        <div class="signal">
-          <div class="letter" aria-label="A, dit dah">A <span aria-hidden="true">· −</span></div>
-          <div class="trace">
-            <img src="assets/letter-a.png" width="1140" height="216" alt="A short tone, one dit of silence, and a tone three times as long.">
-          </div>
-          <div class="durations mono" aria-label="Dit duration 40 milliseconds, dah duration 120 milliseconds">
-            <span>Dit <b>40 ms</b></span><span>Dah <b>120 ms</b></span>
-          </div>
-        </div>
-        <div class="listen">
-          <a class="play" id="play-a" href="assets/letter-a.wav" aria-label="Play letter A in Morse code">
-            <span aria-hidden="true">▶</span> Play A
-          </a>
-          <span id="play-status" role="status" aria-live="polite"></span>
-        </div>
-        <audio id="tone" preload="none" src="assets/letter-a.wav"></audio>
-      </figure>
-</section>
-<section id="downloads" class="downloads" aria-labelledby="downloads-title"><div class="section-heading"><div><p class="eyebrow">LATEST RELEASE</p><h2 id="downloads-title">Choose your setup</h2></div><p>Morse is the trainer; Morse Paddle is its separate companion. Both apps and the PDF are together in the <a href="https://github.com/kubbur/Morse/releases/latest">latest release</a>.</p></div><div class="product-grid">
-<article class="product-card"><header class="product-heading"><img src="assets/morse-icon.png" width="64" height="64" alt=""><div><span class="product-kind">OFFLINE TRAINER</span><h3>Morse for Mac</h3></div></header><p>The trainer in a normal Mac app. Practice works offline, progress stays local, and import/export moves saves between the app and website.</p><div class="download-buttons"><a class="download" href="https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-arm64.zip">Apple Silicon ↓</a><a class="download secondary" href="https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-x64.zip">Intel ↓</a></div><p class="compatibility">1.0.0 · macOS 13+ · Unzip and move <strong>Morse.app</strong> into Applications.</p><p class="small">Check Apple menu → About This Mac to choose Apple Silicon or Intel.</p><div class="card-links"><a href="https://github.com/kubbur/Morse/releases/latest">Release notes &amp; checksums</a><a href="https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-source.zip">Source ZIP</a></div></article>
-<article class="product-card" id="paddle"><header class="product-heading"><img src="assets/app-icon.png" width="64" height="64" alt=""><div><span class="product-kind">PADDLE COMPANION</span><h3>Morse Paddle for Mac</h3></div></header><p>Connect a dual-lever paddle through the passive headset adapter. Hear sidetone on speakers or AirPods, use a trainer, or type decoded Morse.</p><a class="download" href="https://github.com/kubbur/Morse/releases/latest/download/Morse-Paddle-Mac.zip">Download companion ↓</a><p class="compatibility">1.4.0 · macOS 13+ · Apple Silicon &amp; Intel. Move <strong>Morse Paddle.app</strong> into Applications.</p><p class="small">This is a separate app. Allow Microphone access for the wired adapter.</p><div class="card-links"><a href="https://github.com/kubbur/Morse/blob/main/Source/Integration.md">Companion user guide</a><a href="https://github.com/kubbur/Morse/releases/latest">Release notes</a></div></article>
-</div><p class="release-resources"><a href="https://github.com/kubbur/Morse/releases/latest">View latest release</a><a href="https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf">Assembly guide &amp; full BOM (PDF)</a></p><details class="mac-approval"><summary>About the current Mac builds</summary><p>The downloads are ad-hoc signed and are not Apple-notarized. Runtime verification status is in the <a href="https://github.com/kubbur/Morse/releases/latest">latest release notes</a>. If you trust a download and macOS blocks it, follow <a href="https://support.apple.com/en-us/102445">Apple’s Open Anyway instructions</a>. Keep system security protections enabled.</p></details></section>
-<section id="setup" class="setup" aria-labelledby="install-title"><div class="section-intro"><p class="eyebrow">WITH A PHYSICAL PADDLE</p><h2 id="install-title">Connect and practise</h2><p>Keep Morse Paddle open on the same Mac as the trainer. No hardware is needed for listening practice.</p></div><div class="instructions"><section><h3>1. Connect the adapter</h3><p>Plug the paddle into the passive adapter, then the adapter into the Mac’s headset jack. Open Morse Paddle, allow Microphone access and release both paddles during calibration.</p></section><section><h3>2. Link the trainer</h3><p>In Morse Paddle, enter <code>http://127.0.0.1:37473</code> for Morse.app, or <code>https://morse.kubbur.digital</code> for the online trainer. Click <strong>Link</strong>, then connect from the trainer’s <strong>Send</strong> view.</p></section><section><h3>3. Set your sound</h3><p>Choose speakers or AirPods and adjust the sidetone in Morse Paddle. For text entry in another app, enable <strong>Type into focused app</strong> and grant Accessibility access.</p></section></div></section>
-<section id="build" class="build-section" aria-labelledby="build-title"><div class="section-intro"><p class="eyebrow">DIY HARDWARE</p><h2 id="build-title">Build your paddle<br>and adapter</h2><p>The full BOM, mechanical steps, wiring diagrams and checks are together in the illustrated manual.</p></div><div class="resource-list"><a class="resource" href="https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf"><span class="file-type">PDF</span><span><strong>Assembly guide &amp; full BOM</strong><small>Paddle, passive converter, wiring and testing</small></span><span aria-hidden="true">↗</span></a><a class="resource" href="https://github.com/kubbur/Morse/blob/main/morsefull.obj"><span class="file-type">OBJ</span><span><strong>Printable parts</strong><small>Paddle and converter model</small></span><span aria-hidden="true">↗</span></a><p class="small">Test the converter before gluing the lid. The guide records the builder’s prototype; other audio hardware needs its own checks.</p></div></section>
-<section class="source-section" aria-labelledby="source-title"><div><p class="eyebrow">SOURCE INCLUDED</p><h2 id="source-title">Read it. Build it.</h2><p>The desktop source includes tests and a Mac build workflow, without saved learner data or server credentials.</p></div><div class="source-links"><a href="https://github.com/kubbur/Morse/tree/main/desktop">Morse desktop source ↗</a><a href="https://github.com/kubbur/Morse/tree/main/Source">Morse Paddle source ↗</a><a href="https://github.com/kubbur/Morse/blob/main/desktop/README.md">Build instructions ↗</a></div></section>
-</main><footer class="wrap"><span>Morse · Online trainer, Mac app &amp; paddle companion</span><a href="https://github.com/kubbur/Morse">GitHub ↗</a></footer>
-</body></html>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="./"><img src="assets/morse-icon.png" width="32" height="32" alt="">Morse</a>
+    <nav aria-label="Main">
+      <a href="#downloads">Downloads</a>
+      <a href="#setup">Paddle setup</a>
+      <a href="https://github.com/kubbur/Morse">GitHub</a>
+    </nav>
+  </header>
+  <main id="main">
+    <h1>Morse</h1>
+    <p class="intro">Morse code listening and sending practice for Mac and the web.</p>
+    <p><a href="https://morse.kubbur.digital/">Open the web app</a></p>
+
+    <section id="downloads" aria-labelledby="downloads-title">
+      <h2 id="downloads-title">Downloads</h2>
+      <div class="apps">
+        <article>
+          <h3><img src="assets/morse-icon.png" width="36" height="36" alt="">Morse for Mac <small>1.0.0</small></h3>
+          <p>The trainer app. Works offline and saves progress locally, with import and export.</p>
+          <p class="download-links"><a class="button" href="https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-arm64.zip">Apple Silicon</a><a class="button" href="https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-mac-x64.zip">Intel</a></p>
+        </article>
+        <article id="paddle">
+          <h3><img src="assets/app-icon.png" width="36" height="36" alt="">Morse Paddle <small>1.4.0</small></h3>
+          <p>A separate app for a physical paddle, with sidetone and text entry.</p>
+          <p class="download-links"><a class="button" href="https://github.com/kubbur/Morse/releases/latest/download/Morse-Paddle-Mac.zip">Universal Mac app</a></p>
+        </article>
+      </div>
+      <p>Requires macOS 13 or later. Unzip the download and move the app into <strong>Applications</strong>.</p>
+      <ul class="resources">
+        <li><a href="https://github.com/kubbur/Morse/releases/latest/download/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf">Assembly guide and BOM (PDF)</a></li>
+        <li><a href="https://github.com/kubbur/Morse/releases/latest">Latest release and notes</a></li>
+      </ul>
+      <p class="note">The apps are not notarized by Apple. If macOS blocks them, follow <a href="https://support.apple.com/en-us/102445">Apple’s instructions for opening the app</a>.</p>
+    </section>
+
+    <section id="setup" aria-labelledby="setup-title">
+      <h2 id="setup-title">Paddle setup</h2>
+      <ol>
+        <li>Connect the paddle and passive adapter to the Mac. Open Morse Paddle, allow Microphone access and leave both paddles released during calibration.</li>
+        <li>Enter the trainer address below in Morse Paddle and click <strong>Link</strong>.</li>
+        <li>Open <strong>Send</strong> in the trainer and connect.</li>
+      </ol>
+      <table>
+        <thead><tr><th>Trainer</th><th>Address</th></tr></thead>
+        <tbody><tr><td>Morse.app</td><td><code>http://127.0.0.1:37473</code></td></tr><tr><td>Web app</td><td><code>https://morse.kubbur.digital</code></td></tr></tbody>
+      </table>
+      <p>See the <a href="https://github.com/kubbur/Morse/blob/main/Source/Integration.md">Morse Paddle guide</a> for calibration, sidetone and text entry settings.</p>
+    </section>
+
+    <section id="build" aria-labelledby="build-title">
+      <h2 id="build-title">Hardware</h2>
+      <p><a href="https://github.com/kubbur/Morse/blob/main/morsefull.obj">Printed parts (OBJ)</a> are included in the repository. The assembly PDF above covers the paddle, passive converter, wiring and checks. Test the converter before gluing the lid.</p>
+    </section>
+
+    <section aria-labelledby="source-title">
+      <h2 id="source-title">Source</h2>
+      <ul>
+        <li><a href="https://github.com/kubbur/Morse/tree/main/desktop">Morse trainer</a> — source, tests and Mac packaging. <a href="https://github.com/kubbur/Morse/blob/main/desktop/README.md">Build instructions</a>.</li>
+        <li><a href="https://github.com/kubbur/Morse/tree/main/Source">Morse Paddle</a> — companion source and <a href="https://github.com/kubbur/Morse/blob/main/Source/README.md">build instructions</a>.</li>
+        <li><a href="https://github.com/kubbur/Morse/releases/latest/download/Morse-1.0.0-source.zip">Trainer source ZIP</a>.</li>
+      </ul>
+    </section>
+  </main>
+  <footer><a href="https://github.com/kubbur/Morse">kubbur/Morse on GitHub</a></footer>
+</body>
+</html>

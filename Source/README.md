@@ -26,7 +26,7 @@ With Apple Command Line Tools and Python 3 installed, run from the **repository 
 python3 Source/build.py
 ```
 
-The universal app is written to `Source/build/Morse Paddle.app` and signed ad-hoc. Existing source paths and the 1.4.0 release are preserved.
+The universal app is written to `Source/build/Morse Paddle.app` and signed ad-hoc.
 
 ## Integrate a trainer
 

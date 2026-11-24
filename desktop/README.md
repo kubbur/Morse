@@ -1,6 +1,6 @@
 # Morse for Mac
 
-Morse code listening and sending practice in a standalone Mac app. The complete trainer, audio engine and local save storage are included. Users do not need Node.js, Docker or an internet connection to practise.
+Morse code listening and sending practice for Mac. Works offline and saves progress locally.
 
 **[Downloads and project overview](../README.md) · [Online trainer](https://morse.kubbur.digital/) · [Morse Paddle companion](../Source/README.md)**
 
@@ -14,7 +14,7 @@ For paddle input, install and open the separate **Morse Paddle** companion on th
 
 The desktop app saves progress on this Mac. It does not connect to the website's public leaderboard or device-pairing service. Use **Saved progress → Export / Import** to move a save between the desktop app and [the website](https://morse.kubbur.digital/). Closing the window keeps the app available in the Dock; **Morse → Quit Morse** closes it completely.
 
-Ad-hoc builds are for testing and are not Apple-notarized. macOS may require approval through **System Settings → Privacy & Security → Open Anyway**. Do not disable Gatekeeper. Signing status and SHA-256 checksums are included with the build artifacts. For broad distribution, use the Developer ID signing and notarization steps below.
+The current downloads are ad-hoc signed and not Apple-notarized. If macOS blocks them, use **System Settings → Privacy & Security → Open Anyway**. Signing and notarization instructions are below.
 
 ## Develop
 
@@ -32,7 +32,7 @@ npm run package:mac
 
 Mac packaging creates both architecture builds in `dist/`. By default a Mac host signs them ad-hoc. The included GitHub workflow builds and tests the app on macOS and retains the zip files, build metadata and checksums as workflow artifacts. It does not publish a release automatically.
 
-`npm run test:smoke` tests the packaged app with a temporary save and a simulated Morse Paddle companion. Quit Morse and Morse Paddle before running it; the test deliberately refuses to share their local addresses. It checks playback, grading, export JSON, confirmed import, saving across a full restart, paddle events and sidetone commands. Native save/open dialogs, Finder/Dock behaviour and a physical paddle still need a Mac acceptance test. The current cross-built downloads were tested using the Linux desktop runtime; that does not establish macOS or Gatekeeper acceptance.
+`npm run test:smoke` tests the packaged app with a temporary save and a simulated Morse Paddle companion. Quit Morse and Morse Paddle before running it; the test deliberately refuses to share their local addresses. It checks playback, grading, export JSON, confirmed import, saving across a full restart, paddle events and sidetone commands. Native save/open dialogs, Finder/Dock behaviour and a physical paddle still need a Mac acceptance test. See the [release notes](https://github.com/kubbur/Morse/releases/latest) for test results and remaining checks.
 
 Run `npm run source` to prepare the GitHub source zip, followed by `npm run verify:release` to check app contents, signatures' structure, architecture, file modes, framework links and checksums. Keep `dist/` out of source control and attach app zips to the corresponding desktop release. Do not replace the combined repository root with a standalone source export. To refresh the included trainer snapshot, run `node scripts/snapshot.mjs /path/to/morse-website` before rebuilding.
 
