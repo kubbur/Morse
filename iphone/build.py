@@ -130,7 +130,7 @@ def build(app, core, desktop, version, output):
     sources += [core / "Sidetone.c", core / "MorseTyping.c"]
     subprocess.run(["xcrun", "--sdk", "iphoneos", "clang", "-isysroot", sdk, "-target", "arm64-apple-ios"+MIN_IOS,
                     "-O2", "-fobjc-arc", "-fblocks", "-I", str(core), *map(str,sources),
-                    "-framework","UIKit","-framework","Foundation","-framework","AVFoundation",
+                    "-framework","UIKit","-framework","CoreGraphics","-framework","Foundation","-framework","AVFoundation",
                     "-framework","AudioToolbox","-framework","WebKit","-framework","Security",
                     "-o", str(app / "Morse")], check=True)
     # The installer supplies the user's development identity and device provisioning profile.
