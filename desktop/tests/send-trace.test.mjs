@@ -11,16 +11,30 @@ test('guided straight-key hits follow measured releases, track consecutive match
   const feedback = (target, times) => markFeedback(sendingTrace(target, speed, edges(times), {tolerance:0.3}));
   assert.deepEqual(feedback('R', [0]), []);
   const correct = feedback('R', [3000,3040,3080,3200,3240,3280]);
-  assert.deepEqual(correct.map(h => [h.label,h.streak]), [['On time',1],['On time',2],['On time',3]]);
+  assert.deepEqual(correct.map(h => [h.label,h.streak]), [['Perfect',1],['Perfect',2],['Perfect',3]]);
   assert.deepEqual(feedback('EEE',[0,40,240,280,400,440]).map(h => [h.label,h.streak]),
-    [['On time',1],['80 ms late',0],['On time',1]]);
+    [['Perfect',1],['80 ms late',0],['Perfect',1]]);
   assert.equal(feedback('EE',[0,40,110,150]).at(-1).label,'50 ms early');
-  assert.equal(feedback('T',[0,86]).at(-1).matched,true);
+  assert.equal(feedback('T',[0,86]).at(-1).label,'On time');
   assert.equal(feedback('E',[0,70]).at(-1).label,'30 ms long');
   assert.equal(feedback('E',[0,20]).at(-1).label,'20 ms short');
   assert.equal(feedback('R',[0,40,80,120]).at(-1).label,'Expected a dah');
   assert.equal(feedback('E',[0,40,80,120]).at(-1).label,'Extra mark');
   assert.deepEqual(feedback('',[0,40,80,200]),[]);
+});
+
+test('precision cues have a tighter window than a lesson pass and assess both the mark and its preceding gap', () => {
+  const last = (target, times, settings = speed) => markFeedback(sendingTrace(target, settings, edges(times), {tolerance:0.3})).at(-1);
+  assert.equal(last('T',[0,134.4]).perfect,true);
+  assert.equal(last('T',[0,134.5]).label,'On time');
+  assert.equal(last('EE',[0,40,145.6,185.6]).perfect,true);
+  assert.equal(last('EE',[0,40,145.5,185.5]).label,'On time');
+  assert.equal(last('EE',[0,40,160,210]).label,'On time');
+  assert.equal(last('E',[0,19],{wpm:80,farnsworth:80}).perfect,true);
+  assert.equal(last('E',[0,19.1],{wpm:80,farnsworth:80}).perfect,false);
+  assert.equal(last('T',[0,765],{wpm:5,farnsworth:5}).perfect,true);
+  assert.equal(last('T',[0,766],{wpm:5,farnsworth:5}).perfect,false);
+  assert.equal(last('R',[0,40,80,120]).perfect,false);
 });
 
 test('paddles match the chosen elements and judge hand-controlled gaps at the selected spacing speed', () => {
@@ -29,13 +43,16 @@ test('paddles match the chosen elements and judge hand-controlled gaps at the se
   const ideal = sendingTrace('A E',settings,[],options).expected;
   const last = ideal[2].start;
   const clean = from([0,55,100,220,last+20,last+60]);
-  assert.deepEqual(markFeedback(clean).map(h=>h.label), ['Dit matched','Dah matched','Gap on time']);
+  assert.deepEqual(markFeedback(clean).map(h=>[h.label,h.timed,h.perfect]), [
+    ['Dit matched',false,false],['Dah matched',false,false],['Perfect gap',true,true],
+  ]);
+  assert.equal(markFeedback(from([0,40,80,200,last+50,last+90])).at(-1).label,'Gap on time');
   const shortGap = from([0,40,80,200,400,440]);
   assert.match(markFeedback(shortGap).at(-1).label,/ms early$/);
   assert.equal(markFeedback(shortGap).at(-1).streak,0);
   const joined = sendingTrace('<SK>',settings,[],options).expected.flatMap(m=>[m.start,m.end]);
   const prosign = sendingTrace('<SK>',settings,edges(joined),options);
-  assert.ok(markFeedback(prosign).every(h=>h.matched && h.label.endsWith('matched')));
+  assert.ok(markFeedback(prosign).every(h=>h.matched && !h.timed && !h.perfect && h.label.endsWith('matched')));
   assert.equal(timingFeedback(prosign,true),'');
 });
 

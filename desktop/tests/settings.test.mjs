@@ -83,6 +83,7 @@ test('Mac and browser settings, course reset and recovery controls in an offline
     const cases = [
       ...['browser','mac-local','mac-staging','mac-website'].map(mode => [mode, 'settings-scenario.js']),
       ...['browser','mac-website'].map(mode => [mode, 'sending-controls-scenario.js']),
+      ['browser','sending-feedback-scenario.js'],
     ];
     for(const [mode, scenario] of cases) await t.test(mode+' '+scenario,async()=>{
       const bootstrap=join(dir,mode+'.js');

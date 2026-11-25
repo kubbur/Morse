@@ -81,7 +81,7 @@ test('input choice defaults to the audio converter and survives a new UI instanc
 
 function trainer(t,native) {
   const nodes=new Map();
-  const element=()=>({dataset:{},listeners:{},append(){},replaceChildren(){},addEventListener(name,fn){this.listeners[name]=fn;},
+  const element=()=>({dataset:{},listeners:{},append(){},replaceChildren(){},setAttribute(){},addEventListener(name,fn){this.listeners[name]=fn;},
     focus(){},blur(){},querySelector:selector=>node(selector),hidden:false,value:''});
   const node=id=>{ if (!nodes.has(id)) nodes.set(id,element()); return nodes.get(id); };
   const doc={...element(),hidden:false,hasFocus:()=>true,querySelector:()=>null,createElement:element,getElementById:node};
@@ -90,6 +90,7 @@ function trainer(t,native) {
   replaceGlobal(t,'morseMac',native);
   replaceGlobal(t,'requestAnimationFrame',()=>1);
   replaceGlobal(t,'ResizeObserver',class { observe(){} });
+  replaceGlobal(t,'matchMedia',()=>({matches:false}));
   saveInput('vband');
   const profile={id:'test',settings:{},sending:{level:1,settings:{wpm:30,farnsworth:30,keyer:'a',reverse:false}}};
   const ui=new SendingUI({getProfile:()=>profile,persist:()=>true,active:()=>true});

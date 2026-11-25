@@ -177,16 +177,19 @@
     Object.defineProperty(event,'timeStamp',{value:time}); document.body.dispatchEvent(event);
   }
   // At 30 WPM EE has two 40 ms marks with 120 ms between them.
+  await wait(()=>get('send-trace').querySelector('.trace-next'),'Guided first target');
   key(true,2000);
-  await wait(()=>get('send-trace').querySelector('.trace-aim') && get('send-hit').hidden,'Held key was scored before release');
+  await wait(()=>get('send-trace').querySelector('.trace-aim') && get('send-trace').querySelector('.trace-gate') && get('send-hit').hidden,'Held key guide before release');
   key(false,2040);
-  await wait(()=>get('send-hit').textContent==='On time' && !get('send-hit').hidden,'First mark feedback');
+  await wait(()=>get('send-hit').textContent==='Perfect' && !get('send-hit').hidden,'Precise first release');
+  expect(get('send-trace').querySelector('.trace-sent.trace-perfect') && get('send-trace').querySelector('.trace-gap'),'Persistent star and letter gap guide');
   key(true,2180); key(false,2220);
   expect(get('send-decoded').textContent==='EE','Decoded first transmission: '+get('send-decoded').textContent);
   await wait(()=>document.querySelectorAll('#send-trace .trace-sent').length===2,'Timed marks at width '+get('send-trace').clientWidth);
   const targets=get('send-trace').querySelectorAll('.trace-target'), sent=get('send-trace').querySelectorAll('.trace-sent');
   expect(targets.length===2 && sent[0].style.left===targets[0].style.left && sent[0].style.width===targets[0].style.width,'Target and capture scale');
   expect([...targets].every(el=>el.dataset.hit==='match') && get('send-hit').textContent.includes('2 in a row'),'Consecutive marks did not light their targets');
+  expect(!sent[1].classList.contains('trace-perfect') && get('send-hit').textContent.includes('On time'),'Broad lesson tolerance incorrectly awarded a perfect hit');
   expect(parseFloat(sent[1].style.left)>parseFloat(targets[1].style.left) && get('send-trace').textContent.includes('20 ms late'),'Late letter gap');
   stable('during input');
   await wait(()=>get('send-feedback').textContent.includes('Correct'),'Grade actual edges');
@@ -227,7 +230,7 @@
     for (const [start,end,text] of [[1000,1040,'E'],[1080,1200,'A'],[1240,1280,'R']]) {
       testPaddleElement(1,start);testPaddleElement(2,end);
       await wait(()=>get('send-decoded').textContent===text && !get('send-trace').hidden,'Native decoded '+text);
-      expect(get('send-hit').hidden && !get('send-trace').querySelector('.trace-target'),'Blind paddle input revealed the answer');
+      expect(get('send-hit').hidden && !get('send-trace').querySelector('.trace-target,.trace-gate,.trace-gap,.trace-burst,.trace-perfect'),'Blind paddle input revealed the answer');
       expect(panel()===empty,'White letter resized panel or shifted feedback for '+text);
       const plot=JSON.stringify(box(get('send-trace').querySelector('.trace-plot')).slice(0,2));
       if (graph) expect(plot===graph,'White letter shifted the graph for '+text);

@@ -513,15 +513,16 @@ export class SendingUI {
   paintTrace() {
     if (!this.item) return;
     if (this.lastTrace && !this.edges.length) {
-      this.trace.set(this.lastTrace.data, 'Last attempt · '+this.lastTrace.target, true);
+      this.trace.set(this.lastTrace.data, 'Last attempt · '+this.lastTrace.target, true, this.lastTrace.passed);
       return;
     }
     const complete = !!this.result?.valid;
     const showTarget = this.stage.guided || this.revealed || complete;
     const data = sendingTrace(showTarget ? this.item.target : '', this.settings, this.edges,
       { keyerTimed: this.source !== 'straight', tolerance: this.stage.tolerance });
-    this.trace.set(data, '', complete);
-    if (complete) this.lastTrace = {data, target:this.item.target};
+    const passed = this.result?.passed === true;
+    this.trace.set(data, '', complete, passed);
+    if (complete) this.lastTrace = {data, target:this.item.target, passed};
   }
 
   straight(down, at = performance.now()) {
