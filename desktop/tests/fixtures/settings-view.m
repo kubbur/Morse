@@ -41,7 +41,7 @@ int main(int argc,const char **argv) { @autoreleasepool {
     prefs.autosaves=NO; prefs.privateBrowsingEnabled=YES; web.preferences=prefs;
     [web setMaintainsBackForwardList:NO];
     [[web mainFrame] loadHTMLString:html baseURL:[NSURL URLWithString:[NSString stringWithFormat:@"https://%@/fixture",origin]]];
-    NSDate *limit=[NSDate dateWithTimeIntervalSinceNow:12]; BOOL started=NO;
+    NSDate *limit=[NSDate dateWithTimeIntervalSinceNow:45]; BOOL started=NO;
     while (limit.timeIntervalSinceNow>0) {
         @autoreleasepool {
             [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:.02]];

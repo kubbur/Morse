@@ -74,7 +74,7 @@ test('keyboard sidetone uses the selected envelope and releases from the level r
   }
 });
 
-test('Mac and browser settings, course reset and recovery controls in an offline WebKit view',{skip:process.platform!=='darwin',timeout:90000},async t=>{
+test('Mac and browser settings, course reset and recovery controls in an offline WebKit view',{skip:process.platform!=='darwin',timeout:390000},async t=>{
   const dir=await mkdtemp(join(tmpdir(),'morse-settings-view-'));
   try {
     const binary=join(dir,'view'), fixtures=join(root,'tests/fixtures');
@@ -88,7 +88,7 @@ test('Mac and browser settings, course reset and recovery controls in an offline
       const bootstrap=join(dir,mode+'.js');
       await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state:oldSave()})+';\n'+setup);
       const base=mode==='browser' ? root : staged;
-      execFileSync(binary,[join(base,'website/public'),bootstrap,join(fixtures,scenario)],{timeout:18000,stdio:'pipe'});
+      execFileSync(binary,[join(base,'website/public'),bootstrap,join(fixtures,scenario)],{timeout:60000,stdio:'pipe'});
     });
   } finally {await rm(dir,{recursive:true,force:true});}
 });

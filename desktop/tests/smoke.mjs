@@ -77,7 +77,8 @@ try {
   await page.locator('#answer').fill((await saved(page)).round.target);
   await page.waitForFunction(()=>JSON.parse(morseMac.loadSave(null).raw).profiles[0].stats.solved===1);
   await page.locator('#open-progress').click();
-  assert.equal(await page.locator('.device-sync').isVisible(),true);
+  await page.locator('#export-progress').waitFor();
+  assert.equal(await page.locator('#private-sync').evaluate(section => section.hidden), true);
   checked('bundled listening lesson and local result write without a network connection');
   // Validate the export without automating the operating system's save dialog.
   const download = await page.evaluate(async () => {
