@@ -525,7 +525,11 @@ export class SendingUI {
     }
     if (!this.active() || document.querySelector('dialog[open]') || event.ctrlKey || event.altKey || event.metaKey) return;
     if (down && (['INPUT', 'TEXTAREA', 'SELECT', 'SUMMARY'].includes(event.target.tagName) || event.target.isContentEditable)) return;
-    const key = event.code === 'Space' && this.source === 'straight' ? 'straight' : this.source === 'keyboard' && ['KeyZ', 'KeyX'].includes(event.code) ? event.code === 'KeyZ' ? 'dit' : 'dah' : '';
+		const key = event.code === 'Space' && this.source === 'straight'
+			? 'straight'
+			: this.source === 'keyboard' && ['KeyZ', 'BracketLeft', 'KeyX', 'BracketRight'].includes(event.code)
+			? ['KeyZ', 'BracketLeft'].includes(event.code) ? 'dit' : 'dah'
+			: '';
     if (key) {
       this.heldCodes ||= new Set();
       if (!down && !this.heldCodes.has(event.code)) return;
