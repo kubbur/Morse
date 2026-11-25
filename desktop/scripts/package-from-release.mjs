@@ -2,7 +2,7 @@
 // This path signs ad hoc. Developer ID and notarization use package.mjs.
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { createPackage, getRawHeader } from '@electron/asar';
 import { sign } from '@electron/osx-sign';
@@ -10,6 +10,7 @@ import { MacApp } from '../node_modules/@electron/packager/dist/mac.js';
 import plist from 'plist';
 import { stageApp, root } from './stage.mjs';
 import { buildNative } from './native.mjs';
+import { addSparkle, bundleVersion } from './sparkle.mjs';
 
 const pkg = JSON.parse(await readFile(join(root,'package.json'),'utf8'));
 if (process.platform !== 'darwin' || pkg.devDependencies.electron !== '45.4.1' || !process.argv[2])
@@ -49,7 +50,7 @@ for (const [arch,hash] of Object.entries(hashes)) {
   const infoPath = join(bundle,'Contents/Info.plist');
   const info = plist.parse(await readFile(infoPath,'utf8'));
   Object.assign(info,{
-    CFBundleShortVersionString:pkg.version, CFBundleVersion:pkg.version.split('-')[0],
+    CFBundleShortVersionString:pkg.version, CFBundleVersion:bundleVersion(pkg.version),
     NSMicrophoneUsageDescription:'Read the two paddle contacts through the wired headset adapter.',
     ElectronAsarIntegrity:integrity,
   });
@@ -59,6 +60,7 @@ for (const [arch,hash] of Object.entries(hashes)) {
   if (!await MacApp.prototype.setIntegrityDigest.call(context)) throw new Error('Electron framework integrity metadata missing.');
   await MacApp.prototype.resetFrameworkAdHocSignature.call(context);
   buildNative(join(bundle,'Contents/Helpers/MorseKeyer'),[arch==='arm64' ? 'arm64' : 'x86_64']);
+  await addSparkle(bundle,arch);
   await sign({app:bundle,identity:'-',identityValidation:false,gatekeeperAssess:false,platform:'darwin',type:'distribution',
     optionsForFile:()=>({entitlements:join(root,'assets/entitlements.plist'),hardenedRuntime:false})});
   run('codesign',['--verify','--deep','--strict',bundle]);
@@ -67,13 +69,18 @@ for (const [arch,hash] of Object.entries(hashes)) {
   // used by the existing packaged smoke and release verification scripts.
   const output = join(root,'build/packages','Morse-darwin-'+arch);
   await mkdir(output,{recursive:true});
-  run('ditto',[bundle,join(output,'Morse.app')]);
   const standalone = join(work,'candidate-'+arch);
   await mkdir(standalone);
   run('ditto',[bundle,join(standalone,'Morse.app')]);
   const name = 'Morse-'+pkg.version+'-mac-'+arch+'.zip';
   const archive = join(dist,name);
   run('python3',[join(root,'scripts/archive.py'),standalone,archive,join(root,'INSTALL.txt')]);
+  const installed=join(output,'Morse.app'), previous=join(work,'previous-'+arch+'.app');
+  // ditto merges directories and would leave a native updater from an earlier build.
+  let retained=false;
+  try { await rename(installed,previous); retained=true; } catch (error) { if (error.code!=='ENOENT') throw error; }
+  try { await rename(bundle,installed); }
+  catch (error) { if (retained) await rename(previous,installed); throw error; }
   builds.push({architecture:arch,file:name,sha256:digest(await readFile(archive)),signing:'ad-hoc'});
 }
 await writeFile(join(dist,'darwin-build.json'),JSON.stringify({

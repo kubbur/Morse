@@ -6,7 +6,7 @@ if (process.isMainFrame) {
     return () => ipcRenderer.removeListener(channel, listener);
   };
   contextBridge.exposeInMainWorld('morseMac', {
-    stagingEnabled: process.argv.includes('--morse-local-sync'),
+    syncMode: process.argv.includes('--morse-sync=staging') ? 'staging' : process.argv.includes('--morse-sync=website') ? 'website' : 'offline',
     paddle: (op, value) => ipcRenderer.invoke('paddle-command', op, value),
     onPaddle: handler => subscribe('paddle-event', handler),
     onUpdate: handler => subscribe('update-state', handler),

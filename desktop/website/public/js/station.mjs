@@ -6,6 +6,8 @@ export class Station extends DeviceSync {
   constructor(options) {
     super(options);
     this.mac=options.mac;
+    this.canPublish=options.canPublish || (() => true);
+    this.canSync=options.canSync || (() => true);
     this.requestImpl=options.transport;
     this.privateEnabled=false;
   }
@@ -35,7 +37,7 @@ export class Station extends DeviceSync {
     if (row.needsConsent || row.scores.length || row.history?.decision==='queued') this.queueScores();
   }
   queueScores(delay=200) {
-    if (this.scoreTimer || this.disposed) return;
+    if (!this.canPublish() || this.scoreTimer || this.disposed) return;
     this.scoreTimer=setTimeout(()=>{ this.scoreTimer=null; void this.flushScores(); },delay);
   }
   consentChanged() {
@@ -51,7 +53,7 @@ export class Station extends DeviceSync {
     return super.flush();
   }
   async flushScores() {
-    if (this.publishing || this.disposed || this.storage.failed) return;
+    if (!this.canPublish() || this.publishing || this.disposed || this.storage.failed) return;
     this.publishing=true;
     try {
       const profile=this.getProfile(), owner=profile.id, row=this.storage.row(owner);
@@ -89,7 +91,7 @@ export class Station extends DeviceSync {
   }
   async tick() {
     // Only an explicit link or restore starts private network traffic.
-    if (this.meta()) await super.tick();
+    if (this.canSync() && this.meta()) await super.tick();
     this.changedScoresOnReconnect();
   }
   changedScoresOnReconnect() {

@@ -5,5 +5,7 @@ import { buildNative } from './native.mjs';
 import electron from 'electron';
 await stageApp();
 buildNative(join(root,'build/native/MorseKeyer'));
-const child=spawn(electron,[stage,'--morse-isolated','--morse-staging','--user-data-dir='+join(root,'build/dev-profile')],{stdio:'inherit'});
+const local = process.argv.includes('--staging');
+const child=spawn(electron,[stage,'--morse-isolated',local ? '--morse-staging' : '--morse-website',
+  '--user-data-dir='+join(root,local ? 'build/dev-profile' : 'build/dev-website-profile')],{stdio:'inherit'});
 child.on('exit',(code,signal)=>{process.exitCode=signal?1:code;});

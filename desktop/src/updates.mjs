@@ -20,7 +20,8 @@ export function availableUpdate(rows, current, arch) {
     const archive = digest && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= maxZipSize
       ? { url: `${releaseBase}/download/morse-v${version}/${filename}`, digest, size: asset.size } : null;
     const notes = typeof row.body === 'string' ? row.body.trim().slice(0, 16000) : '';
-    best = { version, parts, url: `${releaseBase}/tag/morse-v${version}`, notes, archive };
+    const feedAvailable = row.assets.some(a=>a?.name==='appcast-mac-'+arch+'.xml' && Number.isSafeInteger(a.size) && a.size>0);
+    best = { version, parts, feedAvailable, url: `${releaseBase}/tag/morse-v${version}`, notes, archive };
   }
   if (!best) return null;
   const { parts, ...release } = best;

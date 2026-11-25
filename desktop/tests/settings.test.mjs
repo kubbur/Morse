@@ -74,13 +74,13 @@ test('keyboard sidetone uses the selected envelope and releases from the level r
   }
 });
 
-test('Mac and browser settings, course reset and recovery controls in an offline WebKit view',{skip:process.platform!=='darwin',timeout:65000},async t=>{
+test('Mac and browser settings, course reset and recovery controls in an offline WebKit view',{skip:process.platform!=='darwin',timeout:90000},async t=>{
   const dir=await mkdtemp(join(tmpdir(),'morse-settings-view-'));
   try {
     const binary=join(dir,'view'), fixtures=join(root,'tests/fixtures');
     execFileSync('xcrun',['clang','-fobjc-arc','-Wno-deprecated-declarations','-framework','WebKit','-framework','AppKit','-framework','Foundation',join(fixtures,'settings-view.m'),'-o',binary]);
     const staged=await stageApp(join(dir,'staged')), setup=await readFile(join(fixtures,'settings-bootstrap.js'),'utf8');
-    for(const mode of ['browser','mac-local','mac-staging']) await t.test(mode,async()=>{
+    for(const mode of ['browser','mac-local','mac-staging','mac-website']) await t.test(mode,async()=>{
       const bootstrap=join(dir,mode+'.js');
       await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state:oldSave()})+';\n'+setup);
       const base=mode==='browser' ? root : staged;

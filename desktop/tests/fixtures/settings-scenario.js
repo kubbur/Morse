@@ -29,7 +29,6 @@
     get('morse-update').click();
     expect(get('update-notes').open && get('update-notes-text').textContent.includes('<em>') && !get('update-notes-text').children.length,'Release notes presentation');
     get('update-auto').click(); expect(get('update-auto').checked,'Automatic update choice');
-    get('update-install').click(); await wait(()=>get('update-install').textContent==='Restart and install','Download action');
     get('update-install').click(); expect(window.testInstallRequested,'Install action');
   } else expect(!get('mac-updates'),'Mac updater in browser');
   if(mac) await wait(()=>get('sound-choices').textContent.includes('Use Paddle'),'Native migration unavailable');
@@ -66,13 +65,14 @@
   get('reset-audio').click();
   expect(current().settings.tone===1150 && current().settings.wpm===32 && current().settings.curve==='smooth','Reset envelope also changed quick controls');
   tab('journey');
-  if(fixture.mode==='mac-local') expect(get('leaderboard-message').textContent.includes('disconnected') && !testRequests.includes('scores/leaderboard'),'Live leaderboard claimed locally');
+  if(fixture.mode==='mac-local') expect(get('leaderboard-message').textContent==='Offline practice' && !testRequests.includes('scores/leaderboard'),'Live leaderboard claimed locally');
   else {
     await wait(()=>testRequests.includes('scores/leaderboard'),'Public ranking read');
-    if(mac) expect(get('leaderboard-title').textContent==='Local test leaderboard','Test board source missing');
+    if(fixture.mode==='mac-staging') expect(get('leaderboard-title').textContent==='Local test leaderboard','Test board source missing');
   }
   expect(get('copying-styles').textContent.includes('No answers recorded') && !get('copying-styles').textContent.includes('Ready'),'Copying status');
-  get('journey-recovery').click();
+  expect(!get('journey-recovery'),'Duplicate progress dialog button');
+  get('open-progress').click();
   expect(!get('station-empty') && !get('saved-learner'),'Multiple learner controls');
   expect(!get('earlier-saves').hidden && get('earlier-exports').children.length===1,'Old learner export');
   let download;
@@ -109,8 +109,8 @@
   expect(testState().profiles.length===2 && testState().profiles[1].stats.xp===11,'Earlier save changed');
   if(get('guidance-dialog').open) get('guidance-close').click();
   get('open-progress').click();
-  if(fixture.mode==='mac-local') {
-    expect(get('pair-devices').hidden && get('station-recovery').disabled && get('recovery-help').textContent.includes('Export progress'),'Local-build recovery instructions');
+  if(['mac-local','mac-website'].includes(fixture.mode)) {
+    expect(get('pair-devices').hidden && get('station-recovery').disabled && get('private-sync').hidden,'Local-build recovery instructions');
   } else {
     expect(get('pair-devices').textContent==='Enable private sync','Initial private link action');
     get('pair-devices').click();
@@ -152,8 +152,25 @@
     throw Error('Send fixture state: '+JSON.stringify({visibility:document.visibilityState,hidden:document.hidden,
       dialogs:[...document.querySelectorAll('dialog[open]')].map(n=>n.id),disabled:get('send-listen').disabled}));
   }
+  // Let the view change and any native dialog focus restoration finish before
+  // measuring practice. Start where the player has scrolled to see their sending.
+  await document.fonts?.ready;
+  await tick(); await tick();
+  window.scrollTo(0,Math.max(0,get('send-capture').getBoundingClientRect().top+scrollY-160));
+  await tick();
+  const positions = () => ['send-capture','send-feedback','send-metrics'].map(id => {
+    const r=get(id).getBoundingClientRect();
+    return [Math.round(r.top),Math.round(r.top+scrollY),Math.round(r.height)];
+  });
+  const above = () => ['send-title','sender','send-instruction','send-exercise','send-target','send-pattern','send-listen','send-input-status'].map(id=>{
+    const r=get(id).getBoundingClientRect(); return [id,Math.round(r.top+scrollY),Math.round(r.height)];
+  });
+  const initialAbove = JSON.stringify(above());
+  const initialPositions=JSON.stringify(positions());
+  const stable=where=>expect(JSON.stringify(positions())===initialPositions,'Send layout moved '+where+' '+initialPositions+' '+JSON.stringify(positions())+' '+initialAbove+' '+JSON.stringify(above()));
   get('send-listen').click();
   await wait(()=>heard.length && get('send-feedback').textContent.includes('pause'),'Hear EE');
+  stable('after playback');
   function key(down,time) {
     const event=new KeyboardEvent(down?'keydown':'keyup',{bubbles:true,cancelable:true,code:'Space',key:' '});
     Object.defineProperty(event,'timeStamp',{value:time}); document.body.dispatchEvent(event);
@@ -165,12 +182,16 @@
   const targets=get('send-trace').querySelectorAll('.trace-target'), sent=get('send-trace').querySelectorAll('.trace-sent');
   expect(targets.length===2 && sent[0].style.left===targets[0].style.left && sent[0].style.width===targets[0].style.width,'Target and capture scale');
   expect(parseFloat(sent[1].style.left)>parseFloat(targets[1].style.left) && get('send-trace').textContent.includes('20 ms late'),'Late letter gap');
+  stable('during input');
   await wait(()=>get('send-feedback').textContent.includes('Correct'),'Grade actual edges');
+  stable('when graded');
   expect(!get('send-next'),'Next exercise appeared after grading');
   await wait(()=>heard.length===2 && get('send-trace').textContent.includes('Last attempt'),'Automatic next and retained comparison');
+  stable('on automatic advance');
   key(true,6000);key(false,6120);
   await wait(()=>get('send-feedback').textContent.includes('Replaying'),'Missed exercise retry');
   await wait(()=>heard.length===3 && heard[2]===heard[1],'Automatic replay');
+  stable('after a retry');
   if (fixture.mode==='browser') {
     function sendEE(start) { key(true,start); key(false,start+40); key(true,start+160); key(false,start+200); }
     sendEE(8000);
@@ -184,6 +205,33 @@
   }
   change('send-level',8); await tick();
   expect(get('send-trace').hidden && !get('send-decoded').textContent,'Blind exercise revealed its target or showed an empty dash');
+  if (mac) {
+    Object.defineProperty(document,'hasFocus',{configurable:true,value:()=>true});
+    change('send-source','paddle'); testPaddleReady();
+    await wait(()=>get('send-input-status').textContent.includes('Paddle ready'),'Native paddle status');
+    await tick();
+    get('send-listen').click();
+    await wait(()=>get('send-feedback').textContent.includes('then pause'),'Native playback completed');
+    const box = node => {
+      const r=node.getBoundingClientRect();
+      return [Math.round(r.top),Math.round(r.height),Math.round(r.width)];
+    };
+    const panel = () => JSON.stringify(['send-capture','send-decoded','send-feedback'].map(id=>box(get(id))));
+    const empty = panel();
+    expect(!get('send-decoded').textContent && get('send-decoded').offsetHeight>0,'Empty decoded line lost its reserved space');
+    testPaddleElement(0,0);
+    let graph;
+    for (const [start,end,text] of [[1000,1040,'E'],[1080,1200,'A'],[1240,1280,'R']]) {
+      testPaddleElement(1,start);testPaddleElement(2,end);
+      await wait(()=>get('send-decoded').textContent===text && !get('send-trace').hidden,'Native decoded '+text);
+      expect(panel()===empty,'White letter resized panel or shifted feedback for '+text);
+      const plot=JSON.stringify(box(get('send-trace').querySelector('.trace-plot')).slice(0,2));
+      if (graph) expect(plot===graph,'White letter shifted the graph for '+text);
+      graph=plot;
+    }
+    get('send-retry').click(); await tick();
+    expect(!get('send-decoded').textContent && panel()===empty,'Clearing the white R resized the panel');
+  }
   get('send-help').click();
   await wait(()=>!get('send-trace').hidden && get('send-trace').querySelector('.trace-target'),'Revealed pattern timing guide');
   window.testComplete=true;

@@ -319,7 +319,7 @@ export class SendingUI {
       $('send-feedback').textContent = this.source === 'straight' ? 'Tap the key to listen, then send the answer. Checking is automatic.' : 'Tap dit (E) to listen, then send the answer. Checking is automatic.';
       this.renderExercise();
     }
-    if (!reset) { this.render(); this.focusKey(); }
+    if (!reset) this.render();
   }
 
   abort(message = '', { preservePaddles = false, keepComparison = false } = {}) {
@@ -374,7 +374,7 @@ export class SendingUI {
       if (generation !== this.playGeneration || item !== this.item) return;
       $('send-feedback').textContent = result.completed ? stage.kind === 'reply' ? 'Send your reply, then pause. Checking is automatic.' : 'Send the signal back, then pause. Checking is automatic.' : 'Playback paused. Tap dit (E) to hear it again.';
     } catch (error) { if (generation === this.playGeneration) $('send-feedback').textContent = error.message; }
-    finally { if (generation === this.playGeneration) { this.playing = false; this.audioFinished = false; this.updateMute(); this.renderExercise(); this.focusKey(); } }
+    finally { if (generation === this.playGeneration) { this.playing = false; this.audioFinished = false; this.updateMute(); this.renderExercise(); } }
   }
 
   ready() {

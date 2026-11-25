@@ -11,7 +11,7 @@ npm ci
 npm start
 ```
 
-`npm start` launches an isolated development profile with hardware disabled. To try private sync and score sharing locally, run `npm run staging` in another terminal. The packaged Mac app saves locally. It has no production leaderboard or private-sync connection.
+`npm start` uses a separate development profile and the running website at `https://morse.kubbur.digital`. For loopback testing, run `npm run staging` and `npm start -- --staging` in separate terminals. Development launches disable physical hardware. Packaged practice stays available offline.
 
 The web server takes its proxy and edge addresses from `MORSE_TRUSTED_PROXY_IP` and `MORSE_EDGE_IP`. Configure a previous HTTPS origin through `MORSE_LEGACY_ORIGINS` when moving browser saves. If multiple origins are listed, select the source with `MORSE_MOVE_FROM_ORIGIN`.
 
@@ -38,6 +38,21 @@ The default macOS build signs ad hoc. For a Developer ID build, configure a Deve
 
 Practice assets and course data are bundled. The renderer uses a sandbox and context isolation. Local progress and pending requests share a SQLite transaction. Progress exports contain learner data and exclude device credentials. Paddle settings and calibration stay on the Mac.
 
-The running release checks GitHub for the matching product and architecture. An update download is checked against the size and SHA-256 reported by GitHub before the macOS updater verifies the application signature. Closing the last window leaves Morse running. Choose **Quit Morse** to exit.
+Morse checks GitHub for the matching product and architecture. The first build that uses Sparkle must be installed manually over 1.1.0. For subsequent updates, Sparkle checks the archive’s Ed25519 signature against the public key embedded in the installed app. An unconfigured development build offers **Download update**. Closing the last window leaves Morse running.
+
+For a release with in-app installation, set `MORSE_UPDATE_PUBLIC_KEY_FILE` to a file containing the base64-encoded 32-byte public key before packaging both architectures. Keep the matching PKCS#8 Ed25519 private key in publisher-controlled secret storage with an offline recovery copy. The optional `MORSE_SPARKLE_ARCHIVE` selects an offline copy of the pinned SDK. After checking the final ZIPs, pipe the private key directly from protected storage to `node scripts/appcast.mjs`. This creates `appcast-mac-arm64.xml` and `appcast-mac-x64.xml`. Attach the two feeds and the exact ZIPs to the same stable GitHub release. Exercise `node tests/sparkle-upgrade.mjs` on a logged-in Mac before publishing. It uses disposable signing keys, two distinct ad hoc app bundles and a temporary database.
+
+## Website cutover
+
+The existing site can return rankings to this Mac build. Private linking and score uploads activate when the same origin serves `GET /api/v2/capabilities` with protocol 2. Once available, open **Saved progress → Enable private sync → Pair another device** in the browser that has the desired progress. Paste the link in **Saved progress** on the Mac, join, compare the codes and approve in the browser. The browser can then generate a recovery code. Work lost before the server receives it cannot be recovered from the server.
+
+Before switching the running site:
+
+1. Build a separately tagged container with the existing deployment Dockerfile, replacing `server.mjs`, `lib/` and `public/` with this candidate. Keep the existing reverse proxy, hostname and original container image. The current deployment mounts its database at `/data/sync.sqlite`.
+2. Identify the live database and its backup destination. Pause writes for the final copy. With Node 24, run `node scripts/backup.mjs snapshot DATABASE BACKUP_PARENT` and `node scripts/backup.mjs restore SNAPSHOT_DIRECTORY NEW_DIRECTORY`. Both steps validate SQLite and the restore verifies its checksum. Retain the original volume. Give the candidate its own writable volume containing the restored `trainer.sqlite` and set its `MORSE_SYNC_PATH` accordingly.
+3. Check the restored profile and leaderboard counts and historical XP locally. In an isolated copy, pair a browser and Mac, earn distinct results on both, retry one submission, and recover into an empty profile. Once approved, switch traffic and check public rankings and the capabilities response. Previously open browser tabs need to reload. They keep unsent progress locally.
+4. For rollback, stop new writes and snapshot the candidate volume. Switch traffic back to the original image and original volume. Keep both snapshots. Work accepted only by the candidate needs reconciliation before resuming writes on the old service.
+
+A live backup still needs a host-specific schedule, retention and a restore from an off-host copy. The included restore tests use disposable databases.
 
 Electron and Chromium license notices are inside the app. The trainer’s notices are in `website/THIRD-PARTY-LICENSES.md`.

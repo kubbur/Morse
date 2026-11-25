@@ -1,4 +1,4 @@
-import { app, autoUpdater, BrowserWindow, Menu, dialog, session, shell, ipcMain, powerMonitor, safeStorage, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, dialog, session, shell, ipcMain, powerMonitor, safeStorage, nativeImage } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { join, isAbsolute, resolve } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
@@ -7,17 +7,17 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { bundledTrainer } from './bundled-trainer.mjs';
 import { PaddleService } from './paddle-service.mjs';
 import { LearnerDB } from './learner-db.mjs';
-import { stagingClient } from './staging-client.mjs';
+import { websiteClient } from './website-client.mjs';
 import { checkUpdate } from './updates.mjs';
-import { UpdateManager } from './update-manager.mjs';
-import { downloadArchive, prepareMacUpdate } from './update-archive.mjs';
+import { macInstaller, UpdateManager } from './update-manager.mjs';
 
 app.setName('Morse');
 process.umask(0o077);
 const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url));
-let window, db, paddle, updates, updateTimer, exchange, closing = false, stopping = false, restartForUpdate = false;
+let window, db, paddle, updates, updateTimer, exchange, closing = false, stopping = false;
 const isolated = app.commandLine.hasSwitch('morse-isolated');
 const staged = app.commandLine.hasSwitch('morse-staging');
+const syncMode = staged ? 'staging' : isolated && !app.commandLine.hasSwitch('morse-website') ? 'offline' : 'website';
 if (isolated || staged) {
   const path = app.commandLine.getSwitchValue('user-data-dir');
   const personal = resolve(app.getPath('appData'), 'Morse');
@@ -40,7 +40,7 @@ function trusted(event) {
 }
 function registerIPC() {
   for (const [name, fn] of Object.entries({
-    'learner-load': legacy=>db.load(legacy),
+    'learner-load': legacy=>db.load(legacy,syncMode === 'website'),
     'learner-save': (raw,rev)=>({revision:db.save(raw,rev)}),
   })) ipcMain.on(name,(event,...args)=>{
     try { if (!trusted(event)) throw Error(); event.returnValue=fn(...args); }
@@ -57,9 +57,11 @@ function registerIPC() {
     if (!window.isFocused() || stopping) return updates.state();
     if (action === 'check') void updates.check();
     if (action === 'automatic') updates.setAutomatic(value);
-    if (action === 'download') void updates.prepareDownload(true);
+    if (action === 'install') {
+      if (updates.state().installable) await updates.install(saveBeforeUpdate);
+      else if (updates.release) await shell.openExternal(updates.release.archive?.url || updates.release.url);
+    }
     if (action === 'release' && updates.release) await shell.openExternal(updates.release.url);
-    if (action === 'restart' && updates.wantsInstall(true)) { restartForUpdate = true; app.quit(); }
     return updates.state();
   });
 }
@@ -89,7 +91,7 @@ function createWindow() {
     webPreferences: {
       preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), partition: 'persist:morse', sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false,
-      devTools: !app.isPackaged, additionalArguments: staged ? ['--morse-local-sync'] : [],
+      devTools: !app.isPackaged, additionalArguments: ['--morse-sync='+syncMode],
     },
   });
   const contents = window.webContents;
@@ -160,35 +162,30 @@ else {
     event.preventDefault();
     if (stopping) return;
     stopping = true;
-    const restart = restartForUpdate;
-    restartForUpdate = false;
-    let saved = true;
-    const installing = updates?.wantsInstall(restart) && await updates.installAtQuit(restart, async () => {
-      saved = await saveBeforeUpdate().catch(() => false); return saved;
-    });
-    if (!saved || (restart && !installing)) { stopping = false; return; }
+    if ((updates?.installRequested || updates?.automatic) && !await saveBeforeUpdate().catch(() => false)) {
+      stopping = false; updates.saveFailed(); return;
+    }
     clearInterval(updateTimer);
     try { await paddle?.stop(); } finally {
       closing = true;
-      if (installing && restart) { autoUpdater.quitAndInstall(); }
-      else app.quit();
+      app.quit();
     }
   });
   // Keep SQLite available for the window's final pagehide save. A subsequent
-  // before-quit from our own quit or from Squirrel must pass through.
+  // before-quit from our own quit or the Mac updater must pass through.
   app.on('will-quit', () => { db?.close(); db = null; });
   app.whenReady().then(async () => {
     const dir=app.getPath('userData');
     await mkdir(dir,{recursive:true,mode:0o700});
     db=new LearnerDB(join(dir,'morse-learners-v2.sqlite'));
-    if (process.platform === 'darwin') autoUpdater.on('error', () => { /* prepareMacUpdate reports failures in Settings. */ });
-    const version = app.getVersion(), cache = join(dir, 'updates');
+    const version = app.getVersion();
     const notes = await readFile(new URL('../assets/release-notes.json', import.meta.url), 'utf8').then(JSON.parse).catch(() => ({}));
-    updates = new UpdateManager({ version, installedNotes: notes?.[version] || '', enabled: app.isPackaged && process.platform === 'darwin' && !isolated && !staged,
+    const updateEnabled = app.isPackaged && process.platform === 'darwin' && !isolated && !staged;
+    updates = new UpdateManager({ version, installedNotes: notes?.[version] || '', enabled: updateEnabled,
       automatic: db.automaticUpdates, storeAutomatic: value => { db.automaticUpdates = value; },
-      lookup: () => checkUpdate(version, process.arch), download: (release, signal) => downloadArchive(cache, release, signal),
-      stage: release => prepareMacUpdate(autoUpdater, cache, release), changed: state => publish('update-state', state) });
-    exchange=stagingClient(db.db,safeStorage,staged);
+      lookup: () => checkUpdate(version, process.arch), installer: updateEnabled ? await macInstaller(process.resourcesPath).catch(() => null) : null,
+      changed: state => publish('update-state', state) });
+    exchange=websiteClient(db.db,safeStorage,syncMode);
     const browserSession=session.fromPartition('persist:morse');
     browserSession.protocol.handle('http',await bundledTrainer(join(app.getAppPath(),'website/public')));
     installSessionPolicy(); registerIPC();

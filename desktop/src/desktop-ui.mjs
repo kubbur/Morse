@@ -69,7 +69,7 @@ if (api) {
     <button type="button" class="button primary" id="update-install" hidden>Install update</button>
     <button type="button" class="text-button" id="update-release" hidden>Open GitHub release</button></div>
     <div class="field"><label><input type="checkbox" id="update-auto"> Automatically update</label>
-    <small>Download in the background and install when you quit Morse.</small></div>
+    <small>Let Morse check for and download updates in the background.</small></div>
     <details id="update-notes"><summary>What’s new</summary><p class="update-notes small-copy" id="update-notes-text"></p></details>`;
   document.querySelector('#view-lab .lab-grid').append(updates);
   const notice=document.createElement('button');
@@ -83,17 +83,15 @@ if (api) {
   function drawUpdate(state) {
     if (!state) return;
     updateState=state;
-    const busy=['checking','downloading','installing'].includes(state.phase);
-    const messages={checking:'Checking GitHub…',downloading:'Downloading and verifying the update…',installing:'Preparing the update…'};
+    const busy=state.phase==='checking';
     $('mac-version').textContent='Installed version '+state.version;
-    $('update-status').textContent=state.message || messages[state.phase] ||
-      (state.ready ? 'Morse '+state.available+' is ready to install.' : state.available ? 'Morse '+state.available+' is available.' :
+    $('update-status').textContent=state.message || (busy ? 'Checking GitHub…' : state.available ? 'Morse '+state.available+' is available.' :
         !state.enabled ? 'Update checks are disabled in this test session.' : state.phase==='checked' ? 'You’re up to date.' : '');
     $('update-check').disabled=!state.enabled || busy;
-    $('update-auto').checked=state.automatic; $('update-auto').disabled=!state.enabled || state.phase==='installing';
+    $('update-auto').checked=state.automatic; $('update-auto').disabled=!state.automaticSupported;
     $('update-release').hidden=!state.available;
-    $('update-install').hidden=!state.installable; $('update-install').disabled=busy;
-    $('update-install').textContent=state.ready ? 'Restart and install' : 'Install update';
+    $('update-install').hidden=!state.available; $('update-install').disabled=busy;
+    $('update-install').textContent=state.installable ? 'Install update' : 'Download update';
     notice.hidden=!state.available; notice.textContent='Update available';
     $('update-notes-text').textContent=(state.available ? state.notes : state.installedNotes) || 'No release notes were provided for this version.';
   }
@@ -103,7 +101,7 @@ if (api) {
   });
   $('update-check').onclick=()=>action('check');
   $('update-auto').onchange=e=>action('automatic',e.target.checked);
-  $('update-install').onclick=()=>action(updateState?.ready ? 'restart' : 'download');
+  $('update-install').onclick=()=>action('install');
   $('update-release').onclick=()=>action('release');
   api.onUpdate(drawUpdate);
   void action('state').then(drawUpdate);

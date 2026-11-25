@@ -5,6 +5,7 @@ import { dirname, join, resolve, extname } from 'node:path';
 import { isIP } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { practiceWorker } from './lib/offline-worker.mjs';
+import { Exchange } from './lib/exchange.mjs';
 import { SyncStore, SyncError, credential, syncCookie } from './lib/sync-store.mjs';
 import { parseProgressJson } from './public/js/import-validation.mjs';
 
@@ -94,7 +95,7 @@ export async function createApp(config = configuration(), { log = console.warn, 
     files.set('/move-progress.html', { type: file.type, content: Buffer.from(html) });
   }
   if (exchange) files.set('/practice-worker.mjs',{content:practiceWorker(files),type:MIME['.mjs']});
-  const store = syncStore || new SyncStore(config.syncPath);
+  const store = syncStore || exchange?.private || new SyncStore(config.syncPath);
   const rates = new Map();
   let inflight = 0;
   function allowed(key, limit) {
@@ -131,7 +132,12 @@ export async function createApp(config = configuration(), { log = console.warn, 
       return reject(403, 'Forbidden');
     }
     if (req.url.startsWith('/api/v2/')) {
-      if (!exchange) return reject(503, 'Staging service unavailable');
+      if (!exchange) return reject(404, 'Not found');
+      if (req.url === '/api/v2/capabilities') {
+        if (req.method !== 'GET') return reject(405, 'Use GET');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({application:'morse',protocol:2,privateSync:true,scores:true}));
+      }
       void exchange.handle(req,res); return;
     }
     if (req.url.startsWith('/api/sync/')) {
@@ -233,7 +239,7 @@ export async function createApp(config = configuration(), { log = console.warn, 
   server.setTimeout(15000, socket => socket.destroy());
   server.maxRequestsPerSocket = 1000;
   server.on('clientError', (_, socket) => socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'));
-  server.on('close', () => { if (!syncStore) store.close(); });
+  server.on('close', () => { if (!syncStore && !exchange) store.close(); });
   return server;
 }
 
@@ -241,7 +247,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const config = configuration();
   const port = Number(process.env.PORT || (config.mode === 'local' ? new URL(config.publicOrigin).port || 3000 : 8000));
   const host = config.mode === 'local' ? '127.0.0.1' : '0.0.0.0';
-  const server = await createApp(config);
+  if (config.mode === 'production' && config.syncPath === ':memory:') throw Error('Set MORSE_SYNC_PATH to the persistent website database.');
+  const exchange = new Exchange(config.syncPath);
+  const server = await createApp(config, {exchange});
+  server.once('close', () => exchange.close());
   server.listen(port, host, () => console.log(`Morse listening on ${host}:${port}; public origin ${config.publicOrigin}`));
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
     server.close(() => process.exit(0));

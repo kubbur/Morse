@@ -98,6 +98,20 @@ let recoveryBusy = false, recoveryGeneration = 0;
 let identityDirty = false;
 let leaderboardLoading = false;
 let leaderboardUpdated = 0;
+const mac = window.morseMac;
+const pairingOrigin = mac ? (mac.syncMode === 'staging' ? 'http://127.0.0.1:38764' : 'https://morse.kubbur.digital') : location.origin;
+let service = {privateSync: !mac, scores: !mac, leaderboard: !mac};
+async function refreshService() {
+  if (!mac) return;
+  try {
+    const next = await mac.exchange('capabilities');
+    if (next.status !== 200) return;
+    const newlyAvailable = !service.scores && next.scores;
+    service = next;
+    if (deviceSync) renderDeviceSync(deviceSync.status);
+    if (newlyAvailable) resumeStations();
+  } catch { /* Practice and saving continue offline. */ }
+}
 if (pairingInvitation) { history.replaceState(null, '', '#practice'); callsignIntroPending = false; }
 rememberCallsignIntro();
 const dialogOpeners = new WeakMap();
@@ -1119,7 +1133,15 @@ function renderSavedProgress() {
   }));
   $('storage-note').textContent = window.morseMac ? 'Your progress is saved on this Mac. Export a copy to keep it elsewhere.' :
     'Your progress is saved in this browser. Export a copy before clearing site data.';
-  const h=storage.row(p.id).history;
+  const row = storage.row(p.id);
+  const held = row.previousScores || [];
+  $('previous-results').hidden = !held.length;
+  if (held.length) {
+    const xp = held.reduce((sum,r)=>sum+r.xp,0);
+    $('previous-results-summary').textContent = held.length+' previously unsent results · '+xp.toLocaleString()+' XP for '+p.callsign+'. Public scores from earlier manual imports may overlap.';
+    $('share-previous-results').disabled = !p.leaderboard || !p.callsign;
+  }
+  const h=row.history;
   $('legacy-scores').hidden=h?.decision!=='pending';
   if (h?.decision==='pending' && $('publish-history').hidden) $('legacy-score-summary').textContent=h.xp.toLocaleString()+' XP from the previous desktop app. This stays private until you confirm.';
   if (!identityDirty) {
@@ -1129,13 +1151,10 @@ function renderSavedProgress() {
 }
 
 async function refreshLeaderboard(force = false) {
-  if (window.morseMac) {
-    if (!window.morseMac.stagingEnabled) {
-      $('refresh-leaderboard').hidden = true;
-      $('leaderboard-message').textContent = 'The live leaderboard is disconnected in this version. Eligible scores stay on this Mac while sharing is on.';
-      return;
-    }
-    $('leaderboard-title').textContent = 'Local test leaderboard';
+  if (mac?.syncMode === 'staging') $('leaderboard-title').textContent = 'Local test leaderboard';
+  if (mac?.syncMode === 'offline') {
+    $('leaderboard-message').textContent = 'Offline practice';
+    return;
   }
   if (!deviceSync || leaderboardLoading || !force && Date.now() - leaderboardUpdated < 10000) return;
   leaderboardLoading = true;
@@ -1180,19 +1199,19 @@ function clearMorseData() {
 }
 
 function renderDeviceSync(status) {
-  $('sync-status').textContent = status.message;
-  const available = !window.morseMac || window.morseMac.stagingEnabled;
+  const available = service.privateSync;
+  $('private-sync').hidden = !available && !status.connected && !deviceSync?.meta();
+  $('sync-status').textContent = status.connected && !available ? 'Saved here · waiting to sync' : status.message;
   const linked = available && status.connected && !status.waiting;
   $('station-recovery').disabled = !linked || recoveryBusy;
   $('pair-entry').hidden = !available;
-  $('station-adopt').hidden = !!window.morseMac || status.connected;
   $('pair-devices').textContent = linked ? 'Pair another device' : 'Enable private sync';
-  $('recovery-help').textContent = !available ? 'Recovery codes require private sync. Use Export progress to keep a copy you can restore.' :
-    status.waiting ? 'Approve the pairing on your other device before generating a recovery code.' : linked ? 'Generate a code here and store it somewhere private. Generating a new code replaces the previous one.' :
+  $('recovery-help').textContent = status.waiting ? 'Approve the pairing on your other device before generating a recovery code.' : linked ? 'Generate a code here and store it somewhere private. Generating a new code replaces the previous one.' :
     'Choose Enable private sync on the device that holds your progress, then choose Generate recovery code.';
   if (!linked) { $('recovery-issued').hidden = true; $('recovery-output').textContent = ''; }
-  $('sync-description').textContent = available ? 'To link to an existing profile, use its pairing link below. Recovery includes only progress that reached the server.' :
-    'This version saves progress on your Mac. Private sync is unavailable.';
+  $('sync-description').textContent = linked ? 'Only progress that has reached the website can be recovered.' : mac
+    ? 'On the website, open Saved progress, enable private sync, then choose Pair another device. Paste the link here and approve the matching code on the website.'
+    : 'Enable private sync here, then choose Pair another device. Only progress that has reached the website can be recovered.';
   if (deviceSync?.scoreError) $('callsign-message').textContent=deviceSync.scoreError;
   $('sync-status').dataset.error = String(!!status.error);
   const devices = status.devices || [];
@@ -1518,7 +1537,7 @@ function changeView(next, { lesson = false } = {}) {
   view = next;
   history.replaceState(null, '', `#${next}`);
   render();
-  if (next === 'journey') refreshLeaderboard();
+  if (next === 'journey') { void refreshService(); refreshLeaderboard(); }
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (next === 'lab' && !$('sound-choice').hidden) $('sound-choice').scrollIntoView({ block:'nearest' });
   if (lesson) {
@@ -1852,7 +1871,7 @@ $('choose-lesson').addEventListener('click', () => changeView('lab', { lesson: t
 $('fix-lesson').addEventListener('click', () => changeView('lab', { lesson: true }));
 $('reset-audio').addEventListener('click', () => { changeSettings({ rise: DEFAULT_SETTINGS.rise, fall: DEFAULT_SETTINGS.fall, curve: DEFAULT_SETTINGS.curve }); announce('Tone envelope reset.'); });
 $('theme-toggle').addEventListener('click', () => { state.theme = state.theme === 'dark' ? 'light' : 'dark'; persist(); renderHeader(); });
-$('open-progress').addEventListener('click', () => openDialog('progress-dialog'));
+$('open-progress').addEventListener('click', () => { openDialog('progress-dialog'); void refreshService(); });
 $('open-help').addEventListener('click', () => openDialog('help-dialog'));
 $('practice-weak').addEventListener('click', () => {
   const weak = weakCharacters();
@@ -2151,7 +2170,7 @@ function stationFor(id) {
   if (learnerStations.has(id)) return learnerStations.get(id);
   const local = () => state.profiles.find(p => p.id === id);
   const station = new Station({
-    mac: window.morseMac, storage: storage.forLearner(id), getProfile: local,
+    mac, canPublish: () => service.scores, canSync: () => service.privateSync, storage: storage.forLearner(id), getProfile: local,
     ready: () => !!local() && (id !== state.activeId || !playing && !continuous && !composing && !sender?.busy && !sender?.nextTimer && !$$('dialog').some(d => d.open && !['progress-dialog', 'callsign-intro-dialog'].includes(d.id) && !(d === $('guidance-dialog') && focusCardOpen()))),
     applyProfile(shared, options) {
       if (id === state.activeId) return acceptSyncedProfile(shared, options);
@@ -2220,9 +2239,6 @@ $('save-callsign').addEventListener('click', event => pairingAction(event.curren
   identityDirty = false; renderSavedProgress(); leaderboardUpdated = 0;
   $('callsign-message').textContent = listed ? 'Callsign saved. Eligible scores will be submitted when connected.' : 'Callsign saved. Score sharing is off.';
 }));
-$('journey-recovery').addEventListener('click', () => {
-  openDialog('progress-dialog'); $('device-sync-title').scrollIntoView({ block:'start' });
-});
 $('refresh-leaderboard').addEventListener('click', () => refreshLeaderboard(true));
 $('delete-all-data').addEventListener('click', () => {
   cancelImport(); cancelProgressReset();
@@ -2236,6 +2252,7 @@ $('confirm-delete-data').addEventListener('click', event => pairingAction(event.
 }));
 $('pair-devices').addEventListener('click', event => pairingAction(event.currentTarget, async () => {
   const invite = deviceSync.status.connected;
+  if (!mac && !invite && await adoptWebsiteProfile()) return;
   const result = await deviceSync.start(deviceLabel(), { invite });
   if (!invite) {
     renderDeviceSync(deviceSync.status);
@@ -2243,7 +2260,7 @@ $('pair-devices').addEventListener('click', event => pairingAction(event.current
     return;
   }
   pairingOffer = result.invitation;
-  const link = `${window.morseMac ? 'http://127.0.0.1:38764' : location.origin}/#pair=${pairingOffer}`;
+  const link = `${pairingOrigin}/#pair=${pairingOffer}`;
   $('pair-link').value = link; showPairQr(link);
   $('pair-offer').hidden = false;
   renderDeviceSync(deviceSync.status);
@@ -2271,22 +2288,31 @@ $('sync-devices').addEventListener('click', event => {
   const button = event.target.closest('[data-disconnect]');
   if (button) pairingAction(button, () => deviceSync.disconnect(button.dataset.disconnect));
 });
-$('station-adopt').onclick=e=>pairingAction(e.currentTarget,async()=>{
+async function adoptWebsiteProfile() {
+  // The old HttpOnly browser credential can prove ownership when sync is explicitly enabled.
+  let result;
+  try { result = await deviceSync.request('adopt'); }
+  catch (error) { if (error.status === 403) return false; throw error; }
   deviceSync.backup();
   let previous;
   try { previous=JSON.parse(storage.storage.getItem('morse.devices.v1')); } catch { /* Missing legacy baseline. */ }
-  if (previous?.replacement || previous?.pending?.replace) throw new Error('A previous import or reset is pending. Finish it on the existing website before adopting this browser.');
-  const result=await deviceSync.request('adopt'), current=syncProfile(profile());
+  const current=syncProfile(profile());
   let baseline=previous?.epoch===result.epoch ? previous.base : null;
   if (baseline && previous.pending && previous.pending.seq<=result.seq) baseline=previous.pending.profile;
   const merged=baseline ? mergeProgress(baseline,current,result.profile)
     : pairedProgress(result.profile,current,result.profile,storage.row().foundation || current).profile;
   storage.atomic(()=>{
-    acceptSyncedProfile(merged);
-    deviceSync.save({version:1,base:result.profile,epoch:result.epoch,seq:result.seq,revision:result.revision});
+    if (!previous?.replacement && !previous?.pending) acceptSyncedProfile(merged);
+    const meta = {version:1,base:result.profile,epoch:result.epoch,seq:result.seq,revision:result.revision};
+    if (previous?.replacement || previous?.pending) {
+      // Continue the device's original sequence. Lost acknowledgements are idempotent.
+      // The existing journal also retains the baseline used by offline imports and resets.
+      deviceSync.save(previous);
+    } else deviceSync.save(meta);
   });
   deviceSync.schedule(0);
-});
+  return true;
+}
 let pendingRecovery = null;
 $('recover-replace').onclick=e=>pairingAction(e.currentTarget,async()=>{
   if (!pendingRecovery) return;
@@ -2294,7 +2320,8 @@ $('recover-replace').onclick=e=>pairingAction(e.currentTarget,async()=>{
   pendingRecovery=null; $('recovery-replacement').hidden=true;
 });
 $('station-redeem').onclick=e=>pairingAction(e.currentTarget,async()=>{
-  const value=$('station-code').value.trim(), invite=/(?:^|#pair=)([A-Za-z0-9_-]{43})$/.exec(value);
+  const value=$('station-code').value.trim();
+  const invite = value.startsWith(pairingOrigin+'/#pair=') ? /^([A-Za-z0-9_-]{43})$/.exec(value.slice((pairingOrigin+'/#pair=').length)) : null;
   $('station-code').value='';
   if (invite) { pairingInvitation=invite[1]; renderDeviceSync(deviceSync.status); }
   else if (/^[A-Za-z0-9_-]{32}$/.test(value)) {
@@ -2309,7 +2336,7 @@ $('station-redeem').onclick=e=>pairingAction(e.currentTarget,async()=>{
   else throw new Error('Enter a pairing link or a recovery code from a linked device.');
 });
 $('station-recovery').onclick=async e=>{
-  if (recoveryBusy || !deviceSync.status.connected || deviceSync.status.waiting || window.morseMac && !window.morseMac.stagingEnabled) return;
+  if (recoveryBusy || !deviceSync.status.connected || deviceSync.status.waiting || !service.privateSync) return;
   const generation = ++recoveryGeneration, id = profile().id;
   recoveryBusy = true; e.currentTarget.disabled = true;
   $('pair-message').textContent = ''; $('recovery-issued').hidden = true; $('recovery-output').textContent = '';
@@ -2325,6 +2352,9 @@ $('progress-dialog').addEventListener('close',()=>{
   recoveryGeneration++; pendingRecovery=null; $('recovery-replacement').hidden=true;
   $('recovery-issued').hidden=true; $('recovery-output').textContent=''; $('station-code').value=''; $('publish-history').hidden=true;
 });
+for (const [button,publish] of [['share-previous-results',true],['keep-previous-results',false]]) {
+  $(button).onclick = () => { storage.decidePreviousScores(profile(),publish); deviceSync.changed(); renderSavedProgress(); };
+}
 $('preview-history').onclick=e=>pairingAction(e.currentTarget,async()=>{
   const p=profile(), row=storage.row(p.id);
   if (!p.leaderboard || !p.callsign) throw new Error('Enable score sharing for your callsign before previewing a submission.');
@@ -2341,12 +2371,14 @@ $('publish-history').onclick=()=>{
   deviceSync.changed(); renderSavedProgress();
 };
 $('keep-history').onclick=()=>{storage.atomic(()=>{storage.row().history.decision='private';}); renderSavedProgress();};
-window.addEventListener('online', resumeStations);
+window.addEventListener('online', () => { void refreshService(); resumeStations(); });
+window.addEventListener('focus', refreshService);
 window.addEventListener('focus', () => { if (deviceSync.meta()) deviceSync.schedule(0); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && deviceSync.meta()) deviceSync.schedule(0); });
 if (pairingInvitation || initialView === 'progress') { openDialog('progress-dialog'); renderDeviceSync(deviceSync.status); }
 else if (!showCallsignIntro() && !showLessonGuidance()) focusAnswer({ select: profile().round?.completed });
 persist();
+void refreshService();
 resumeStations();
 if (!window.morseMac && navigator.serviceWorker && ['/', '/index.html'].includes(location.pathname)) {
   navigator.serviceWorker.register('/practice-worker.mjs',{updateViaCache:'none'}).catch(()=>{});

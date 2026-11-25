@@ -20,9 +20,13 @@ export class LearnerDB {
   set automaticUpdates(value) {
     this.db.prepare('INSERT INTO update_preference VALUES(1,?) ON CONFLICT(id) DO UPDATE SET automatic=excluded.automatic').run(value ? 1 : 0);
   }
-  load(legacy) {
+  load(legacy, beforeWebsite = false) {
     const existing = this.db.prepare('SELECT revision,raw FROM learner WHERE id=1').get();
-    if (existing) { validate(existing.raw); return existing; }
+    if (existing) {
+      const previous = validate(existing.raw);
+      if (beforeWebsite && !previous.delivery?.website) this.db.prepare('INSERT OR IGNORE INTO originals VALUES (?,?)').run('before-website-v2',existing.raw);
+      return existing;
+    }
     if (!legacy) return { revision: 0, raw: null };
     // Keep even a damaged original. Opening it must never create an empty replacement.
     this.db.prepare('INSERT OR IGNORE INTO originals VALUES (?,?)').run('desktop-v1', legacy);

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
-import { stagingClient } from '../src/staging-client.mjs';
+import { siteOrigin, websiteClient } from '../src/website-client.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { newProfile, newState, importState, resetListeningProgress, resetSendingProgress, sanitizeSettings, STORAGE_KEY } from '../website/public/js/progress.mjs';
 import { PracticeStorage } from '../website/public/js/practice-storage.mjs';
@@ -254,7 +254,7 @@ test('staging client, HTTP handler and encrypted credential boundary agree on bo
    return new Response(output,{status,headers});
  };
  try {
-   const client=stagingClient(db.db,cipher,true,fetcher);
+   const client=websiteClient(db.db,cipher,'staging',fetcher);
    const p=newProfile(), scope=p.id;
    const call=(action,body={})=>client(action,{scope,body});
    assert.equal((await call('scores/session')).status,200);

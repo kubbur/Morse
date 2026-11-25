@@ -24,6 +24,16 @@ export class PracticeStorage {
         if (mac && p.stats.xp) row.history = { xp: p.stats.xp, decision: 'pending' };
       }
     }
+    if (mac?.syncMode === 'website' && !this.delivery.website) {
+      for (const row of Object.values(this.delivery.learners)) {
+        if (row.scores.length) row.previousScores = row.scores;
+        row.scores = [];
+        if (row.history?.decision === 'queued') row.history.decision = 'pending';
+        // Earlier private connections and credentials belonged to the local test service.
+        row.private = null;
+      }
+      this.delivery.website = 1;
+    }
     this.owner = existing?.activeId; this.committed = this.raw;
     if (existing) {
       delete existing.delivery; this.raw=JSON.stringify(existing);
@@ -119,10 +129,18 @@ export class PracticeStorage {
     const row = this.row(profile.id);
     row.choiceSet=true;
     if (callsign !== profile.callsign || sharing !== profile.leaderboard) {
-      row.generation++; row.scores = []; row.needsConsent = !!(sharing || profile.leaderboard || row.needsConsent);
+      row.generation++; row.scores = []; delete row.previousScores; row.needsConsent = !!(sharing || profile.leaderboard || row.needsConsent);
       if (row.history?.decision==='queued') row.history.decision='pending';
     }
     Object.assign(profile, { callsign, leaderboard: sharing });
+  }
+  decidePreviousScores(profile, publish) {
+    this.atomic(() => {
+      const row=this.row(profile.id);
+      if (publish && (!profile.leaderboard || !profile.callsign)) throw Error('Enable score sharing for your callsign first.');
+      if (publish) row.scores = row.scores.concat(row.previousScores || []);
+      delete row.previousScores;
+    });
   }
   result(profile, kind, xp, id = crypto.randomUUID()) {
     if (xp>0) {

@@ -15,7 +15,9 @@ const hardware = { type:'status', source:'off', phase:'waiting', output:'auto', 
 function snapshot() { return { connected:true, profile:serverProfile, seq:0, revision:1, epoch:'fixture-epoch', devices:[] }; }
 function exchange(action,body) {
   requests.push(action);
+  if (action==='capabilities') return {status:200, privateSync:config.mode==='mac-staging', scores:config.mode==='mac-staging', leaderboard:config.mode!=='mac-local'};
   if (action==='scores/leaderboard') return {entries:[]};
+  if (action==='private/adopt') return {status:403,error:'No earlier browser credential.'};
   if (action==='private/start') {
     serverProfile=body.profile;
     return body.invite===false ? snapshot() : {...snapshot(),invitation:'i'.repeat(43),invite:{expiresAt:Date.now()+300000}};
@@ -26,22 +28,21 @@ function exchange(action,body) {
 }
 if (config.mode.startsWith('mac')) {
   const update = {version:'1.1.0-dev.5',installedNotes:'Local release notes',enabled:true,
-    automatic:false,available:'',notes:'',installable:false,ready:false,phase:'idle',message:''};
+    automatic:false,automaticSupported:true,available:'',notes:'',installable:false,ready:false,phase:'idle',message:''};
   let updateChanged;
   window.morseMac = {
-    stagingEnabled: config.mode==='mac-staging', onUpdate(fn){updateChanged=fn;},
+    syncMode: config.mode==='mac-staging' ? 'staging' : config.mode==='mac-website' ? 'website' : 'offline', onUpdate(fn){updateChanged=fn;},
     async update(action,value){
       if (action==='check') Object.assign(update,{available:'2.0.0',phase:'checked',installable:true,notes:'New timing display\n<em>Release text</em>'});
       if (action==='automatic') update.automatic=value;
-      if (action==='download') update.ready=true;
-      if (action==='restart') window.testInstallRequested=true;
+      if (action==='install') window.testInstallRequested=true;
       if (action!=='state') updateChanged({...update});
       return {...update};
     },
     onPaddle(fn){ callbacks.push(fn); },
     loadSave(old){ raw ??= old; return {raw,revision}; },
     save(next,at){ if(at!==revision) throw Error('Unexpected test save revision'); raw=next;return {revision:++revision}; },
-    async exchange(action,{body}){ return exchange(action,body); },
+    async exchange(action,{body}={}){ return exchange(action,body); },
     async paddle(op,value){
       commands.push(op);
       if(op==='input') hardware.source=value;
@@ -67,3 +68,9 @@ window.testRequests=requests;
 window.testSound=()=>lastSound;
 
 window.testPaddleReady=()=>{ Object.assign(hardware,{phase:'ready',outputReady:true,canArm:true}); callbacks.forEach(fn=>fn({...hardware})); };
+
+let fixtureSequence = 0;
+window.testPaddleElement = (kind, milliseconds) => {
+  const row={type:'element',kind,seq:++fixtureSequence,epoch:hardware.epoch,session:hardware.session,rate:48000,frame:milliseconds*48};
+  callbacks.forEach(fn=>fn(row));
+};

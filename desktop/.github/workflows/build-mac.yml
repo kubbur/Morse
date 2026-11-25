@@ -32,6 +32,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run test:native
+      - name: Install a signed Sparkle update and relaunch with saved progress
+        run: node tests/sparkle-upgrade.mjs
       - name: Package an ad-hoc test build
         run: node scripts/package.mjs darwin ${{ matrix.architecture }}
       - name: Check the Mac code signature

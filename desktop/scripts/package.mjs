@@ -1,4 +1,5 @@
 import { buildNative } from './native.mjs';
+import { addSparkle, bundleVersion } from './sparkle.mjs';
 import { packager } from '@electron/packager';
 import { flipFuses, FuseVersion, FuseV1Options, getCurrentFuseWire } from '@electron/fuses';
 import { sign } from '@electron/osx-sign';
@@ -20,7 +21,7 @@ for (const arch of architectures) {
   const [directory] = await packager({
     dir: input, out, platform, arch, name: 'Morse', executableName: 'Morse',
     appBundleId: 'digital.kubbur.morse', appCategoryType: 'public.app-category.education',
-    appVersion: pkg.version, buildVersion: pkg.version.split('-')[0], electronVersion: pkg.devDependencies.electron,
+    appVersion: pkg.version, buildVersion: bundleVersion(pkg.version), electronVersion: pkg.devDependencies.electron,
     overwrite: true, prune: false, asar: true, icon: join(root, 'assets/icon.icns'),
     extendInfo: { NSMicrophoneUsageDescription: 'Read the two paddle contacts through the wired headset adapter.' },
     download: { cacheRoot: process.env.ELECTRON_CACHE || join(root, 'build/downloads') },
@@ -46,6 +47,7 @@ for (const arch of architectures) {
   let signing = 'not-applicable';
   if (platform === 'darwin') {
     if (process.platform === 'darwin') {
+      await addSparkle(bundle,arch);
       const identity = process.env.MORSE_SIGN_IDENTITY || '-';
       await sign({ app: bundle, identity, platform: 'darwin', type: 'distribution',
         identityValidation: identity !== '-', gatekeeperAssess: false,

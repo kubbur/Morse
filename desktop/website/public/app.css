@@ -496,8 +496,9 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 .send-heading h2{font-size:clamp(22px,3vw,32px);margin:8px 0}
 .send-heading .signal-level{margin:0;font-size:14px}
 .send-level-select{width:min(290px,40%);font-size:14px}
-#send-instruction{font-size:15px;line-height:1.5;margin:20px 0}
-.send-exercise{position:relative;text-align:center;padding:24px 16px;background:var(--bg);border:1px solid var(--border);border-radius:18px;min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+#send-instruction{min-block-size:2lh;font-size:15px;line-height:1.5;margin:20px 0}
+.send-exercise{position:relative;text-align:center;padding:24px 16px;background:var(--bg);border:1px solid var(--border);border-radius:18px;block-size:clamp(230px,25vh,280px);overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:12px}
+.send-exercise>*{flex-shrink:0}
 .send-target-label{font-size:11px;font-weight:700;letter-spacing:.15em;color:var(--muted)}
 .send-target{font-family:var(--mono);font-size:clamp(44px,8vw,76px);font-weight:700;line-height:1.15;color:var(--accent);overflow-wrap:anywhere;max-width:100%}
 .send-target.long-target{font-size:clamp(23px,5vw,40px)}
@@ -510,11 +511,10 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 #send-context{margin:0;max-width:600px}
 .send-input-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;color:var(--muted);font-size:12px;line-height:1.5;margin:20px 0 10px}
 .send-input-bar #send-speed-label{white-space:nowrap;font-family:var(--mono)}
-.send-capture{border:2px solid var(--border);border-radius:16px;min-height:100px;padding:12px 18px;background:var(--bg);transition:border-color .12s}
+.send-capture{box-sizing:border-box;display:grid;grid-template-rows:16px 38px minmax(0,1fr);height:194px;min-width:0;padding:12px 18px;border:2px solid var(--border);border-radius:16px;background:var(--bg);transition:border-color .12s}
 .send-capture>.eyebrow{font-size:10px}
-.send-capture output{display:block;font:600 25px/1.5 var(--mono);min-height:38px;overflow-wrap:anywhere}
-.send-capture output:empty{display:none}
-.send-trace{margin-top:8px;min-width:0}
+.send-capture output{display:block;font:600 25px/1.5 var(--mono);min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:thin}
+.send-trace{margin-top:4px;min-width:0;min-height:0;overflow-y:auto}
 .trace-legend{display:flex;align-items:center;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--muted)}
 .trace-target-key,.trace-sent-key{display:inline-flex;align-items:center;gap:6px}
 .trace-target-key:before,.trace-sent-key:before{content:'';width:22px;box-sizing:border-box;border-radius:3px}
@@ -541,6 +541,8 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 #send-paddles .button{flex:1}
 .send-feedback{min-height:42px;line-height:1.4;font-size:14px;margin:14px 0 0}
 .send-metrics{display:flex;gap:18px;font:13px/1.5 var(--mono);color:var(--muted);min-height:20px;margin-bottom:6px}
+.send-metrics[hidden]{display:flex!important;visibility:hidden}
+@media(max-width:600px){#send-instruction{min-block-size:3lh}.send-capture{height:214px}.send-input-state{flex-basis:100%;min-height:2lh}}
 .send-attempt-actions{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 .send-attempt-actions .button{min-height:40px;padding:8px 16px;font-size:14px}
 .send-progress{margin-top:22px;padding-top:20px;border-top:1px solid var(--border)}
@@ -575,7 +577,7 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
  .send-heading .signal-level{font-size:12px}
  .send-level-select{width:42%;padding:10px;font-size:12px}
  #send-instruction{font-size:13px;margin:15px 0}
- .send-exercise{padding:20px 10px;min-height:170px;gap:10px}
+ .send-exercise{padding:20px 10px;block-size:clamp(224px,30vh,270px);gap:10px}
  .send-pattern{gap:10px}
  .send-pattern i{height:8px;min-width:8px}.send-pattern i.dash{min-width:24px}
  .send-input-bar{align-items:flex-start;gap:10px;flex-wrap:wrap;margin-top:14px;font-size:11px}
