@@ -11,6 +11,7 @@ typedef struct {
     unsigned frames;
     atomic_bool live;
     atomic_int fault;
+    _Atomic(uint64_t) capturedFrames;
 } PhoneIO;
 
 static void queued(PhoneIO *io, AudioQueueRef queue, AudioQueueBufferRef b) {
@@ -29,7 +30,9 @@ static void input(void *context, AudioQueueRef q, AudioQueueBufferRef b, const A
                   UInt32 packets, const AudioStreamPacketDescription *descriptions) {
     PhoneIO *io = context;
     if (!atomic_load(&io->live)) return;
-    phoneInput(io->core, b->mAudioData, b->mAudioDataByteSize / sizeof(float));
+    unsigned frames = b->mAudioDataByteSize / sizeof(float);
+    phoneInput(io->core, b->mAudioData, frames);
+    atomic_fetch_add(&io->capturedFrames, frames);
     queued(io, q, b);
 }
 static void dispose(PhoneIO *io) {
@@ -51,13 +54,16 @@ static OSStatus prepare(PhoneIO *io, AVAudioSessionPortDescription *port, unsign
     OSStatus code = recording ? AudioQueueNewInput(&f,input,io,NULL,NULL,0,target) :
                                 AudioQueueNewOutput(&f,output,io,NULL,NULL,0,target);
     if (code) return code;
-    // Queue channel assignments are bound to a port UID and a 1-based port-local channel.
-    AudioQueueChannelAssignment map[2] = {0};
-    for (unsigned i=0; i<channels; ++i) {
-        map[i].mDeviceUID = (__bridge CFStringRef)port.UID;
-        map[i].mChannelNumber = i + 1;
+    // In multiRoute, bind every queue to its own port. The contacts-only session
+    // uses the default mapping only after verifying a single wired input and output.
+    if (port) {
+        AudioQueueChannelAssignment map[2] = {0};
+        for (unsigned i=0; i<channels; ++i) {
+            map[i].mDeviceUID = (__bridge CFStringRef)port.UID;
+            map[i].mChannelNumber = i + 1;
+        }
+        code = AudioQueueSetProperty(*target,kAudioQueueProperty_ChannelAssignments,map,channels*sizeof(map[0]));
     }
-    code = AudioQueueSetProperty(*target,kAudioQueueProperty_ChannelAssignments,map,channels*sizeof(map[0]));
     for (unsigned i=0; i<3 && !code; ++i) {
         AudioQueueBufferRef b = NULL;
         code = AudioQueueAllocateBuffer(*target, io->frames * f.mBytesPerFrame, &b);
@@ -68,10 +74,12 @@ static OSStatus prepare(PhoneIO *io, AVAudioSessionPortDescription *port, unsign
     return code;
 }
 
+static NSDictionary *portInfo(AVAudioSessionPortDescription *p) {
+    return @{@"type":p.portType, @"name":p.portName, @"channels":@(p.channels.count)};
+}
 static NSArray *ports(NSArray<AVAudioSessionPortDescription *> *items) {
     NSMutableArray *result = [NSMutableArray array];
-    for (AVAudioSessionPortDescription *p in items)
-        [result addObject:@{@"type":p.portType,@"name":p.portName,@"channels":@(p.channels.count)}];
+    for (AVAudioSessionPortDescription *p in items) [result addObject:portInfo(p)];
     return result;
 }
 static AVAudioSessionPortDescription *singlePort(NSArray<AVAudioSessionPortDescription *> *items,
@@ -83,9 +91,9 @@ static AVAudioSessionPortDescription *singlePort(NSArray<AVAudioSessionPortDescr
     }
     return match;
 }
-static NSString *routeKey(AVAudioSession *s) {
-    NSMutableArray *parts = [NSMutableArray arrayWithObject:@(s.sampleRate)];
-    for (NSArray *side in @[s.currentRoute.inputs,s.currentRoute.outputs]) {
+static NSString *routeKey(AVAudioSessionRouteDescription *route, double rate) {
+    NSMutableArray *parts = [NSMutableArray arrayWithObject:@(rate)];
+    for (NSArray *side in @[route.inputs,route.outputs]) {
         [parts addObject:@"|"];
         for (AVAudioSessionPortDescription *p in side) [parts addObject:@[p.UID,p.portType,@(p.channels.count)]];
     }
@@ -97,8 +105,12 @@ static NSString *routeKey(AVAudioSession *s) {
 @implementation PaddleAudio {
     PhoneIO *_io;
     BOOL _wanted, _foreground, _granted, _requesting, _interrupted, _configuredSession, _ready, _reverse, _mute;
+    BOOL _contactsOnly, _hadWiredInput;
     unsigned _session, _epoch, _sequence;
     NSString *_detail, *_routes, *_promptID;
+    NSString *_requestedInputUID, *_inputRequest;
+    NSDictionary *_previousSpeakerAttempt;
+    NSTimeInterval _nextRouteCheck;
     NSDictionary *_sound;
     AVAudioSessionPortDescription *_speaker;
     NSTimer *_timer;
@@ -119,16 +131,33 @@ static NSString *routeKey(AVAudioSession *s) {
 }
 - (void)batch:(NSArray *)rows { if (self.publish && rows.count) self.publish(rows); }
 - (NSDictionary *)status {
+    BOOL speakerActive = _io && _io->speaker;
     return @{@"type":@"status",@"source":_wanted?@"paddle":@"off",
-        @"phase":_ready?@"ready":_io?@"calibrating":@"waiting",@"outputReady":@(_io!=NULL),
-        @"output":_io?@"iPhone speaker":@"System output",@"sharedSound":@YES,@"typing":@NO,
+        @"phase":_ready?@"ready":_io?@"calibrating":@"waiting",@"outputReady":@(speakerActive),
+        @"output":speakerActive?@"iPhone speaker":@"System output",@"sharedSound":@(!_contactsOnly),@"typing":@NO,
         @"hasReverse":@NO,@"reverse":@(_reverse),@"session":@(_session),@"epoch":@(_epoch),@"detail":_detail ?: @""};
 }
-- (NSDictionary *)snapshot {
+- (NSDictionary *)routeReport {
     AVAudioSession *s = AVAudioSession.sharedInstance;
-    return @{@"status":[self status],@"inputs":ports(s.currentRoute.inputs),@"outputs":ports(s.currentRoute.outputs),
+    AVAudioSessionRouteDescription *route = s.currentRoute;
+    AVAudioSessionPortDescription *preferred = s.preferredInput;
+    return @{@"status":[self status],@"testMode":_contactsOnly?@"contacts":@"speaker",
+        @"category":s.category,@"mode":s.mode,@"availableInputs":ports(s.availableInputs),
+        @"preferredInput":preferred ? portInfo(preferred) : (id)NSNull.null,
+        @"inputRequest":_inputRequest ?: @"No input request made.",
+        @"inputs":ports(route.inputs),@"outputs":ports(route.outputs),
         @"rate":@(s.sampleRate),@"mask":@(_io ? phoneMask(_io->core) : 0),
+        @"speakerActive":@(_io && _io->speaker),@"capturedFrames":@(_io ? atomic_load(&_io->capturedFrames) : 0),
         @"audibleFrames":@(_io ? phoneAudibleFrames(_io->core) : 0),@"active":@(_io != NULL)};
+}
+- (NSDictionary *)snapshot {
+    // An available mic can appear before iOS changes the active route.
+    if (_configuredSession && !_io && NSProcessInfo.processInfo.systemUptime >= _nextRouteCheck) [self openRoute];
+    NSMutableDictionary *report = [[self routeReport] mutableCopy];
+    report[@"build"] = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"";
+    report[@"canTestContacts"] = @(_wanted && _granted && _foreground && !_interrupted && !_io && !_contactsOnly);
+    if (_previousSpeakerAttempt) report[@"previousSpeakerAttempt"] = _previousSpeakerAttempt;
+    return report;
 }
 - (void)clearIO {
     [self stopPrompt:nil];
@@ -141,8 +170,11 @@ static NSString *routeKey(AVAudioSession *s) {
     [self clearIO];
     if (_configuredSession) {
         _configuredSession = NO;
-        [AVAudioSession.sharedInstance setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
+        AVAudioSession *s = AVAudioSession.sharedInstance;
+        if (_requestedInputUID && [s.preferredInput.UID isEqual:_requestedInputUID]) [s setPreferredInput:nil error:nil];
+        [s setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
     }
+    _requestedInputUID = nil; _inputRequest = nil; _hadWiredInput = NO;
     [self batch:@[[self status]]];
 }
 - (void)applySound {
@@ -153,45 +185,90 @@ static NSString *routeKey(AVAudioSession *s) {
     phoneMute(_io->core,_mute);
     phoneReverse(_io->core,_reverse);
 }
+- (void)requestWiredInput:(AVAudioSession *)s types:(NSArray<NSString *> *)types {
+    AVAudioSessionPortDescription *active = singlePort(s.currentRoute.inputs,types,1);
+    if (active) {
+        _hadWiredInput = YES;
+        _inputRequest = [active.UID isEqual:_requestedInputUID] ? @"iOS activated the requested wired microphone."
+                                                               : @"Wired microphone is active.";
+        return;
+    }
+    if (_hadWiredInput) { _hadWiredInput = NO; _requestedInputUID = nil; }
+    // Inactive ports can have zero channel descriptions until iOS selects them.
+    AVAudioSessionPortDescription *candidate = singlePort(s.availableInputs,types,0);
+    if (!candidate) {
+        _requestedInputUID = nil; _inputRequest = @"No unique wired microphone is available to request."; return;
+    }
+    if ([_requestedInputUID isEqual:candidate.UID]) return;
+    if (_io) [self clearIO];
+    _requestedInputUID = [candidate.UID copy];
+    NSError *error = nil;
+    if ([s setPreferredInput:candidate error:&error]) _inputRequest = @"Requested the wired microphone.";
+    else _inputRequest = [NSString stringWithFormat:@"Wired microphone request failed (%ld): %@",
+                          (long)error.code,error.localizedDescription ?: @"Unknown error"];
+}
 - (void)openRoute {
     if (!_foreground || _interrupted || !_wanted || !_granted) return;
+    _nextRouteCheck = NSProcessInfo.processInfo.systemUptime + 1.;
     AVAudioSession *s = AVAudioSession.sharedInstance;
     NSError *error = nil;
     if (!_configuredSession) {
-        if (![s setCategory:AVAudioSessionCategoryMultiRoute mode:AVAudioSessionModeDualRoute
-                     options:AVAudioSessionCategoryOptionAllowBluetoothHFP error:&error] || ![s setActive:YES error:&error]) {
-            _detail = error.localizedDescription ?: @"iOS could not activate dual-route audio.";
+        AVAudioSessionCategory category = _contactsOnly ? AVAudioSessionCategoryPlayAndRecord : AVAudioSessionCategoryMultiRoute;
+        AVAudioSessionMode mode = _contactsOnly ? AVAudioSessionModeDefault : AVAudioSessionModeDualRoute;
+        AVAudioSessionCategoryOptions options = _contactsOnly ? 0 : AVAudioSessionCategoryOptionAllowBluetoothHFP;
+        if (![s setCategory:category mode:mode options:options error:&error] || ![s setActive:YES error:&error]) {
+            _detail = error.localizedDescription ?: @"iOS could not activate the audio session.";
             [self batch:@[[self status]]]; return;
         }
         _configuredSession = YES;
     }
-    NSString *key = routeKey(s);
+    NSArray *inputTypes = @[AVAudioSessionPortHeadsetMic,AVAudioSessionPortUSBAudio];
+    [self requestWiredInput:s types:inputTypes];
+    AVAudioSessionRouteDescription *route = s.currentRoute;
+    double rate = s.sampleRate;
+    NSString *key = routeKey(route,rate);
     if ([_routes isEqual:key]) return;
     [self clearIO]; _routes = key;
-    AVAudioSessionPortDescription *mic = singlePort(s.currentRoute.inputs,@[AVAudioSessionPortHeadsetMic,AVAudioSessionPortUSBAudio],1);
-    AVAudioSessionPortDescription *wire = singlePort(s.currentRoute.outputs,@[AVAudioSessionPortHeadphones,AVAudioSessionPortUSBAudio],2);
-    _speaker = singlePort(s.currentRoute.outputs,@[AVAudioSessionPortBuiltInSpeaker],1);
-    if (!mic || !wire || !_speaker) {
-        _detail = @"Waiting for a wired mic, stereo wired output and iPhone speaker on the same route.";
+    AVAudioSessionPortDescription *mic = singlePort(route.inputs,inputTypes,1);
+    AVAudioSessionPortDescription *wire = singlePort(route.outputs,@[AVAudioSessionPortHeadphones,AVAudioSessionPortUSBAudio],2);
+    _speaker = _contactsOnly ? nil : singlePort(route.outputs,@[AVAudioSessionPortBuiltInSpeaker],1);
+    NSString *waiting = nil;
+    if (!mic) waiting = @"Waiting for iOS to activate the wired microphone.";
+    else if (!wire) waiting = @"Waiting for two wired output channels for the paddle sensing tones.";
+    else if (!_contactsOnly && !_speaker) waiting = @"The wired ports are active. Waiting for the iPhone speaker.";
+    else if (_contactsOnly && (route.inputs.count != 1 || route.outputs.count != 1))
+        waiting = @"The contacts test needs one wired input and one wired output.";
+    if (waiting) {
+        _detail = waiting;
         [self batch:@[[self status]]]; return;
     }
     PhoneIO *io = calloc(1,sizeof(*io));
-    if (!io || !(io->core = phoneCreate(s.sampleRate))) {
+    if (!io || !(io->core = phoneCreate(rate))) {
         free(io); _detail = @"The reported audio sample rate or buffer allocation is unavailable.";
         [self batch:@[[self status]]]; return;
     }
     _io = io; [self applySound];
-    io->frames = MAX(64u, (unsigned)lround(s.sampleRate * .003));
+    io->frames = MAX(64u, (unsigned)lround(rate * .003));
     atomic_init(&io->live, true);
-    OSStatus code = prepare(io,mic,1,s.sampleRate,&io->input,YES);
-    if (!code) code = prepare(io,wire,2,s.sampleRate,&io->pilots,NO);
-    if (!code) code = prepare(io,_speaker,1,s.sampleRate,&io->speaker,NO);
-    if (!code) code = AudioQueueStart(io->speaker,NULL);
-    if (!code) code = AudioQueueStart(io->pilots,NULL);
-    if (!code) code = AudioQueueStart(io->input,NULL);
+    atomic_init(&io->fault, 0);
+    atomic_init(&io->capturedFrames, 0);
+    AudioQueueRef *targets[] = {&io->input,&io->pilots,&io->speaker};
+    AVAudioSessionPortDescription *devices[] = {mic,wire,_speaker};
+    NSArray *names = @[@"wired microphone",@"wired sensing tones",@"iPhone speaker"];
+    unsigned count = _contactsOnly ? 2 : 3;
+    OSStatus code = noErr;
+    NSString *operation = nil;
+    for (unsigned i=0; i<count && !code; ++i) {
+        code = prepare(io,_contactsOnly ? nil : devices[i],i == 1 ? 2 : 1,rate,targets[i],i == 0);
+        if (code) operation = [@"prepare " stringByAppendingString:names[i]];
+    }
+    for (unsigned i=count; i>0 && !code; --i) {
+        code = AudioQueueStart(*targets[i-1],NULL);
+        if (code) operation = [@"start " stringByAppendingString:names[i-1]];
+    }
     if (code) {
         [self clearIO]; _routes = key;
-        _detail = [NSString stringWithFormat:@"iOS rejected the audio channel assignment or queue (%d).",(int)code];
+        _detail = [NSString stringWithFormat:@"Could not %@ (OSStatus %d).",operation,(int)code];
         [self batch:@[[self status]]]; return;
     }
     _detail = @"Calibrating. Release both paddles.";
@@ -225,7 +302,9 @@ static NSString *routeKey(AVAudioSession *s) {
     }
     BOOL ready = phoneReady(_io->core);
     if (_ready != ready) {
-        _ready = ready; _detail = ready ? @"Wired paddles and iPhone speaker ready." : @"Calibrating. Release both paddles.";
+        _ready = ready;
+        _detail = ready ? (_contactsOnly ? @"Reading wired paddle contacts." : @"Wired paddles and iPhone speaker ready.")
+                        : @"Calibrating. Release both paddles.";
         [rows addObject:[self status]];
     }
     ElementEvent e;
@@ -237,13 +316,20 @@ static NSString *routeKey(AVAudioSession *s) {
 - (NSDictionary *)command:(NSString *)name value:(id)value {
     if ([name isEqual:@"input"]) {
         BOOL wanted = [value isEqual:@"paddle"];
-        if (wanted != _wanted) {
+        if (wanted != _wanted || _contactsOnly) {
+            if (wanted && _contactsOnly) [self deactivate];
+            _contactsOnly = NO; _previousSpeakerAttempt = nil;
             _wanted = wanted;
             if (wanted) [self start]; else { _detail = @"Audio converter off."; [self deactivate]; }
         }
     } else if ([name isEqual:@"probe"]) {
-        _wanted = YES; _mute = NO; _reverse = NO; _sound = nil;
-        [self deactivate]; [self start];
+        BOOL contactsOnly = [value isEqual:@"contacts"];
+        if (!contactsOnly) _previousSpeakerAttempt = nil;
+        else if (_wanted && !_contactsOnly) _previousSpeakerAttempt = [self routeReport];
+        [self deactivate];
+        _contactsOnly = contactsOnly; _wanted = YES; _mute = NO; _reverse = NO; _sound = nil;
+        _detail = contactsOnly ? @"Opening wired contact test." : @"Opening paddle and iPhone speaker test.";
+        [self start];
     } else if ([name isEqual:@"status"]) [self batch:@[[self status]]];
     else if ([name isEqual:@"reverse"]) { _reverse = [value boolValue]; [self applySound]; }
     else if ([name isEqual:@"mute"]) { _mute = [value boolValue]; if (_io) phoneMute(_io->core,_mute); }

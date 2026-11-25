@@ -5,11 +5,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static int scenario(unsigned rate, unsigned side) {
+static int scenario(unsigned rate, unsigned side, bool withSpeaker) {
     PhoneCore *core = phoneCreate(rate);
     if (!core) return 1;
     const unsigned block = 128;
-    float pilots[256], mic[128], speaker[128];
+    float pilots[256], mic[128], speaker[128] = {0};
     unsigned contacts = 0, starts = 0, stops = 0, failed = 0;
     bool open = false;
     uint64_t start = 0;
@@ -22,7 +22,7 @@ static int scenario(unsigned rate, unsigned side) {
                      pilots[2*i+1] * (.0003f + ((held & 2) ? .012f : 0));
         phoneInput(core, mic, block);
         if (phoneReady(core)) contacts |= 1u << phoneMask(core);
-        phoneSpeaker(core, speaker, block);
+        if (withSpeaker) phoneSpeaker(core, speaker, block);
         ElementEvent event;
         bool marked[128];
         for (unsigned i = 0; i < block; ++i) marked[i] = open;
@@ -43,16 +43,21 @@ static int scenario(unsigned rate, unsigned side) {
         for (unsigned i = 0; i < block; ++i)
             if (!isfinite(speaker[i]) || (!marked[i] && fabsf(speaker[i]) > .00001f)) failed = 1;
     }
+    bool expectMarks = side && withSpeaker;
     if (!(contacts & (1u << side)) || phoneMask(core) || !phoneReady(core) || starts != stops ||
-        (side ? (!starts || !phoneAudibleFrames(core)) : (starts || phoneAudibleFrames(core))) ||
-        (side == 3 && starts < 2)) failed = 1;
+        (expectMarks ? (!starts || !phoneAudibleFrames(core)) : (starts || phoneAudibleFrames(core))) ||
+        (withSpeaker && side == 3 && starts < 2)) failed = 1;
     phoneDestroy(core);
-    if (failed) fprintf(stderr, "Failed at %u Hz, contacts %u, starts %u, stops %u\n", rate, side, starts, stops);
+    if (failed) fprintf(stderr, "Failed at %u Hz, contacts %u, speaker %d, starts %u, stops %u\n",
+                        rate, side, withSpeaker, starts, stops);
     return failed;
 }
 int main(void) {
-    for (unsigned side = 0; side < 4; ++side)
-        if (scenario(44100, side) || scenario(48000, side)) return EXIT_FAILURE;
-    puts("Simulated released, left, right and both passed at 44.1 and 48 kHz, with matching speaker PCM and scoring edges.");
+    const unsigned rates[] = {44100, 48000};
+    for (unsigned i = 0; i < 2; ++i)
+        for (unsigned side = 0; side < 4; ++side)
+            if (scenario(rates[i], side, true) || scenario(rates[i], side, false)) return EXIT_FAILURE;
+    puts("Simulated released, left, right and both passed at 44.1 and 48 kHz in both modes.");
+    puts("Speaker PCM matched scoring edges. Contacts-only produced zero speaker frames and zero scoring marks.");
     return EXIT_SUCCESS;
 }
