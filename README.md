@@ -8,12 +8,12 @@ Morse code listening and sending practice for Mac and the web.
 
 | File | Download |
 | --- | --- |
-| **Morse for Mac 1.1.0** | [Apple Silicon](https://github.com/kubbur/Morse/releases/download/morse-v1.1.0/Morse-1.1.0-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/download/morse-v1.1.0/Morse-1.1.0-mac-x64.zip) |
+| **Morse for Mac 1.1.1** | [Apple Silicon](https://github.com/kubbur/Morse/releases/download/morse-v1.1.1/Morse-1.1.1-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/download/morse-v1.1.1/Morse-1.1.1-mac-x64.zip) |
 | **Paddle and converter assembly guide** | [PDF with BOM and wiring diagrams](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf) |
 
 Requires macOS 13 or later. Unzip the download and move **Morse.app** to **Applications**. These builds are signed ad hoc. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
 
-Morse works offline. Open **Saved progress** to export or import a save. Version 1.1.0 keeps scores and private progress on this Mac. [Release notes](desktop/RELEASE.md)
+Morse saves progress on your Mac and works offline. Open **Saved progress** to export or import a save. The Mac can display the website leaderboard. Private pairing and score uploads require the website’s version 2 service. [Release notes](desktop/RELEASE.md)
 
 ## Using a paddle
 
@@ -34,4 +34,4 @@ The separate Morse Paddle companion is still available for the browser trainer. 
 
 - [`desktop/`](desktop/) — trainer source, tests and Mac packaging. [Build instructions](desktop/README.md).
 - [`Source/`](Source/) — native paddle engine and standalone companion. [Companion build instructions](Source/README.md).
-- [Trainer source ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.0/Morse-1.1.0-source.zip).
+- [Trainer source ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.1/Morse-1.1.1-source.zip) · [Website update ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.1/Morse-1.1.1-web.zip).

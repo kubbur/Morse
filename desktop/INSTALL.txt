@@ -1,4 +1,4 @@
-Morse for Mac 1.1.0
+Morse for Mac 1.1.1
 
 Requires macOS 13 or later. Use the arm64 ZIP for Apple Silicon or the x64 ZIP
 for Intel. Unzip the download and move Morse.app to Applications.
@@ -21,10 +21,16 @@ same scale. To type into another app, enable Write in the focused app in
 Settings, allow Accessibility access and release both paddles after switching
 to the text field.
 
+Settings → Input controls when the next sending signal plays. Set the pause
+from your last mark or choose to press E after grading. Under Key input →
+Paddles · keyboard, set the dot and dash keys and show or hide the screen buttons.
+
 Progress is saved on this Mac. Use Saved progress → Export progress to keep a
-copy elsewhere. This release has no connection to the live leaderboard or
-private sync service. Settings → Updates includes release notes and an update
-check. Automatic updates are off by default.
+copy elsewhere. The Mac can read the website leaderboard. Score uploads and
+private linking require the website’s version 2 service. Settings → Updates
+shows release notes and checks GitHub for your Mac’s download. Install this
+version manually over 1.1.0. Future signed updates can be installed from
+within Morse. Automatic updates are off by default.
 
 This download is signed ad hoc and has not been notarized by Apple.
 If macOS asks for approval, see https://support.apple.com/en-us/102445.

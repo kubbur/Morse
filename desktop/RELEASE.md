@@ -1,21 +1,19 @@
-## What’s new in Morse 1.1.0
+## What’s new in Morse 1.1.1
 
-- Practise listening and sending offline in one Mac app. Plug in the paddle and choose **Audio converter (3.5 mm)** or **VBand USB adapter** under **Settings → Input**. VBand uses left Control for dit and right Control for dah. You can swap them.
-- One native keyer now drives the paddle sidetone, sending scores and typed characters. Choose iambic A or B. The wired audio path can detect clean contacts earlier. End-to-end latency depends on the adapter and output device.
-- **Your sending** overlays your marks on the target on a millisecond scale. Correct exercises advance automatically. In unassisted lessons the target appears after grading or when you reveal it.
-- Listen and Send share speed, spacing, pitch and volume. Adjust them in **Send → Input and speed**. Paddle calibration, output, envelope and the optional **Write in the focused app** switch are in Settings.
-- **Settings → Updates** shows what’s new and checks GitHub for your Mac’s build. Automatic updates are off by default. If macOS cannot apply an update in the app, download the ZIP for your Mac from GitHub.
+- In **Settings → Input**, choose when the next sending signal plays. **Play after a pause** waits 0.5–15 seconds from your last mark, with a 2-second default. At slow spacing speeds, Morse gives you time to finish a word gap. **Wait for E to continue** keeps the result on screen until you press **E** or send one dit. A correct answer advances and a missed answer replays.
+- Under **Key input → Paddles · keyboard**, choose the dot and dash keys and show or hide the on-screen paddles. The defaults are **Z** for dot and **X** for dash.
+- The **Your sending** display keeps its height as letters and timing feedback appear. **Saved progress** brings the pairing and recovery controls together.
+- The Mac can display rankings from the website. Private pairing and score uploads require the site's version 2 service. Offline practice and local progress exports remain available.
+- **Settings → Updates** shows what’s new. After this manual upgrade from 1.1.0, Morse can install future updates signed with the Morse release key. Automatic updates are off by default.
 
 ## Install or upgrade
 
-Requires macOS 13 or later. Choose **arm64** for Apple Silicon or **x64** for Intel. Unzip the download, move **Morse.app** to Applications and open it. These builds use ad hoc signatures. Apple has not notarized them. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
+Choose **arm64** for Apple Silicon or **x64** for Intel. Both require macOS 13 or later. In your current app, use **Saved progress → Export progress**, then quit Morse. Unzip the download and move **Morse.app** to Applications. Install 1.1.1 manually when upgrading from 1.1.0. These downloads use ad hoc signatures. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
 
-Before upgrading, open **Saved progress → Export progress** in your current app. Quit Morse and the old Morse Paddle companion before opening 1.1.0. Morse reuses the 1.0.0 desktop profile and imports compatible paddle settings. The audio converter may need Microphone permission and calibration. Enable Accessibility only if you want to type in other apps.
+The release opens your existing Morse profile. Preview builds use a separate profile. To move preview progress, export it there and review the replacement shown under **Saved progress → Import progress**.
 
-Development builds kept a separate practice profile. To bring that progress into 1.1.0, export it from the development build, then review the import in **Saved progress**. Import replaces the selected learner’s progress.
+## Website package and rollback
 
-## Online features and rollback
+The web ZIP contains the browser trainer, server and Docker build files. The live service needs its own deployment. Only progress that reached the server can be recovered from it.
 
-Version 1.1.0 keeps practice and scores on your Mac. The desktop does not read or upload to the live website leaderboard. Private sync and recovery codes are available only in local testing. Keep a progress export on another device for recovery.
-
-To return to 1.0.0, export any new work, quit Morse, reinstall the previous app and use your pre-upgrade export if needed. The original Mac downloads, separate Paddle app and assembly guide are in the [1.0.0 release](https://github.com/kubbur/Morse/releases/tag/morse-v1.0.0).
+To return to 1.1.0, first export any new progress, then quit Morse and reinstall your previous Mac build. Keep the pre-upgrade export in case you need to restore it. [Morse 1.1.0 downloads](https://github.com/kubbur/Morse/releases/tag/morse-v1.1.0)

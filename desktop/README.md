@@ -1,6 +1,6 @@
 # Morse for Mac
 
-Morse 1.1.0 includes the listening and sending trainer and a native paddle engine. Download the Apple Silicon or Intel app for macOS 13 or later. [Downloads and setup](https://github.com/kubbur/Morse/releases/tag/morse-v1.1.0) · [Release notes](RELEASE.md) · [Browser trainer](https://morse.kubbur.digital/)
+Morse includes the listening and sending trainer and a native paddle engine. Download the Apple Silicon or Intel app for macOS 13 or later. [Downloads and setup](https://github.com/kubbur/Morse/releases/latest) · [Release notes](RELEASE.md) · [Browser trainer](https://morse.kubbur.digital/)
 
 ## Run and build
 
@@ -40,7 +40,16 @@ Practice assets and course data are bundled. The renderer uses a sandbox and con
 
 Morse checks GitHub for the matching product and architecture. The first build that uses Sparkle must be installed manually over 1.1.0. For subsequent updates, Sparkle checks the archive’s Ed25519 signature against the public key embedded in the installed app. An unconfigured development build offers **Download update**. Closing the last window leaves Morse running.
 
-For a release with in-app installation, set `MORSE_UPDATE_PUBLIC_KEY_FILE` to a file containing the base64-encoded 32-byte public key before packaging both architectures. Keep the matching PKCS#8 Ed25519 private key in publisher-controlled secret storage with an offline recovery copy. The optional `MORSE_SPARKLE_ARCHIVE` selects an offline copy of the pinned SDK. After checking the final ZIPs, pipe the private key directly from protected storage to `node scripts/appcast.mjs`. This creates `appcast-mac-arm64.xml` and `appcast-mac-x64.xml`. Attach the two feeds and the exact ZIPs to the same stable GitHub release. Exercise `node tests/sparkle-upgrade.mjs` on a logged-in Mac before publishing. It uses disposable signing keys, two distinct ad hoc app bundles and a temporary database.
+Stable builds embed the release public key in `assets/sparkle-public-key.txt`. The development and test builds can use `MORSE_UPDATE_PUBLIC_KEY_FILE` for a separate key. The optional `MORSE_SPARKLE_ARCHIVE` selects an offline copy of the pinned SDK.
+
+The publisher’s Mac holds the private Ed25519 key in the login Keychain under the Sparkle service and account `digital.kubbur.morse`. Keep an encrypted recovery copy under the publisher’s control. After verifying the final arm64 and x64 ZIPs in `dist/`, run the following from `desktop/` on that Mac.
+
+```sh
+xcrun swiftc -O scripts/sparkle-key.swift -o build/MorseReleaseKey
+node scripts/appcast.mjs --keychain
+```
+
+The helper returns the public key or an archive signature. The appcast tool verifies both signatures and checks the public key, version, bundle identifier and feed URL inside each ZIP. Attach both XML feeds and the exact ZIPs to the same stable GitHub release. The integration test `node tests/sparkle-upgrade.mjs` installs a signed update and checks the restored progress in an isolated macOS fixture.
 
 ## Website cutover
 
