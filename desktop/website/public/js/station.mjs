@@ -1,6 +1,6 @@
 import { DeviceSync } from './device-sync.mjs';
 import { newProfile } from './progress.mjs';
-import { syncProfile, syncChanged } from './sync-data.mjs';
+import { syncProfile, syncChanged, hasLocalChanges, playbackOnDevice } from './sync-data.mjs';
 
 export class Station extends DeviceSync {
   constructor(options) {
@@ -100,23 +100,27 @@ export class Station extends DeviceSync {
   }
   apply(meta) {
     if (!meta?.remote || meta.pending || meta.replacement || !this.ready()) return meta;
-    if (meta.force && meta.previous && syncChanged(meta.previous.base,syncProfile(this.getProfile()))) {
+    if (meta.force && meta.previous && hasLocalChanges(meta.previous,syncProfile(this.getProfile()))) {
       const retry={version:1,...meta.previous};
       this.save(retry);this.schedule(0);return retry;
     }
     delete meta.previous;
     const applied=this.storage.atomic(()=>super.apply(meta));
-    if (!applied?.pending && applied?.base && !syncChanged(applied.base,syncProfile(this.getProfile()))) super.report({message:'Synced',error:false});
+    this.report({message:'Synced',error:false}, applied);
     return applied;
   }
-  report(changes) {
-    super.report(changes);
-    if (this.status.connected && this.status.message==='Synced') {
-      const m=this.meta();
-      if (m?.pending || m?.replacement || m?.force || m?.remote || m?.base && syncChanged(m.base,syncProfile(this.getProfile()))) {
-        this.status.message='Saved here · waiting to sync'; this.onStatus(this.status);
-      }
+  report(changes, meta) {
+    if (changes.message === 'Synced' && meta?.base) {
+      const local = syncProfile(this.getProfile());
+      const remote = meta.remote || meta.base;
+      const settings = remote.sending?.settings || {};
+      changes.localPlaybackOnly = !Object.hasOwn(settings,'continueMode') || !Object.hasOwn(settings,'pauseSeconds');
+      if (changes.waiting || (changes.waiting === undefined && this.status.waiting)) changes.message = 'Waiting for approval';
+      else if (meta.pending || meta.replacement) changes.message = 'Changes waiting to upload';
+      else if (meta.force || (meta.remote && syncChanged(playbackOnDevice(meta.base, local.sending.settings), playbackOnDevice(meta.remote, local.sending.settings)))) changes.message = 'Applying website progress';
+      else changes.message = hasLocalChanges(meta, local) ? 'Changes waiting to upload' : 'Progress synced';
     }
+    super.report(changes);
   }
   receive(result,meta) {
     if (result.connected && !this.status.connected && this.getProfile().leaderboard) {
@@ -124,10 +128,10 @@ export class Station extends DeviceSync {
       this.queueScores();
     }
     if (meta && result.connected && meta.epoch!==result.epoch && !meta.pending) {
-      if (syncChanged(meta.base,syncProfile(this.getProfile()))) {
+      if (hasLocalChanges(meta,syncProfile(this.getProfile()))) {
         this.schedule(0); return meta;
       }
-      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision};
+      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback};
       const received=super.receive(result,meta);
       if (received?.force) {received.previous=previous;this.save(received);}
       return received;

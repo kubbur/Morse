@@ -1200,8 +1200,10 @@ function clearMorseData() {
 
 function renderDeviceSync(status) {
   const available = service.privateSync;
-  $('private-sync').hidden = !available && !status.connected && !deviceSync?.meta();
-  $('sync-status').textContent = status.connected && !available ? 'Saved here · waiting to sync' : status.message;
+  const linkUnavailable = !available && (status.connected || !!deviceSync?.meta());
+  $('private-sync').hidden = !available && !linkUnavailable;
+  const syncMessage = linkUnavailable ? 'Website unavailable · saved on this device' : status.message;
+  if ($('sync-status').textContent !== syncMessage) $('sync-status').textContent = syncMessage;
   const linked = available && status.connected && !status.waiting;
   $('station-recovery').disabled = !linked || recoveryBusy;
   $('pair-entry').hidden = !available;
@@ -1209,9 +1211,13 @@ function renderDeviceSync(status) {
   $('recovery-help').textContent = status.waiting ? 'Approve the pairing on your other device before generating a recovery code.' : linked ? 'Generate a code here and store it somewhere private. Generating a new code replaces the previous one.' :
     'Choose Enable private sync on the device that holds your progress, then choose Generate recovery code.';
   if (!linked) { $('recovery-issued').hidden = true; $('recovery-output').textContent = ''; }
-  $('sync-description').textContent = linked ? 'Only progress that has reached the website can be recovered.' : mac
-    ? 'On the website, open Saved progress, enable private sync, then choose Pair another device. Paste the link here and approve the matching code on the website.'
-    : 'Enable private sync here, then choose Pair another device. Only progress that has reached the website can be recovered.';
+  let description;
+  if (linkUnavailable) description = 'Morse will check again when the website is available.';
+  else if (linked && status.localPlaybackOnly) description = 'Your sending pause and “Wait for E” preference are currently saved on this device.';
+  else if (linked) description = 'Only progress that has reached the website can be recovered.';
+  else if (mac) description = 'On the website, open Saved progress, enable private sync, then choose Pair another device. Paste the link here and approve the matching code on the website.';
+  else description = 'Enable private sync here, then choose Pair another device. Only progress that has reached the website can be recovered.';
+  $('sync-description').textContent = description;
   if (deviceSync?.scoreError) $('callsign-message').textContent=deviceSync.scoreError;
   $('sync-status').dataset.error = String(!!status.error);
   const devices = status.devices || [];

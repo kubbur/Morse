@@ -111,6 +111,92 @@ test('private recovery opens last synced profile in a clean device and revocatio
    assert.equal(e.private.get('SELECT count(*) AS n FROM stations').n,0);
  }finally{e.close();}
 });
+
+test('recovery from the earlier v2 website settles, preserves playback choices and resumes full sync after upgrade', async t => {
+  const server = new Exchange(':memory:');
+  t.after(() => server.close());
+  const browser = fixture(server);
+  browser.earn(40);
+  await browser.station.start('Browser');
+  const {code} = await browser.station.request('recovery-code');
+  let legacy = true, pushes = 0, loseAck = false;
+  const mac = fixture(server, async (action, payload, send) => {
+    const result = await send(action, payload);
+    if (legacy && result.profile) {
+      delete result.profile.sending.settings.continueMode;
+      delete result.profile.sending.settings.pauseSeconds;
+    }
+    if (action === 'private/push') {
+      pushes++;
+      if (loseAck) { loseAck = false; throw Error('Connection lost after commit'); }
+    }
+    return result;
+  });
+  const phases = [];
+  mac.station.onStatus = status => phases.push(status.message);
+  mac.p.sending.settings.pauseSeconds = 5;
+  await mac.station.recover(code);
+  assert.equal(mac.p.stats.xp, 40);
+  assert.equal(mac.p.sending.settings.pauseSeconds, 5);
+  assert.equal(mac.station.status.localPlaybackOnly, true);
+  phases.length = 0;
+  await mac.station.flush(); await mac.station.flush();
+  assert.deepEqual([...new Set(phases)], ['Progress synced']);
+  assert.equal(pushes, 0);
+
+  mac.p.sending.settings.continueMode = 'manual';
+  mac.earn(10); loseAck = true;
+  await assert.rejects(mac.station.flush(), /Connection lost/);
+  assert.ok(mac.station.meta().pending);
+  // A newer edit while the original request awaits a receipt must survive replay.
+  mac.p.sending.settings.pauseSeconds = 7;
+  await mac.station.flush();
+  assert.equal(mac.p.sending.settings.pauseSeconds, 7);
+  assert.equal(mac.station.status.message, 'Changes waiting to upload');
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(pushes, 3);
+  assert.equal(mac.station.status.message, 'Progress synced');
+  assert.equal(mac.station.meta().base.sending.settings.pauseSeconds, undefined);
+  assert.equal(mac.p.sending.settings.continueMode, 'manual');
+  assert.equal((await browser.station.request('status')).profile.stats.xp, 50);
+
+  legacy = false;
+  browser.p.settings.goal = 25;
+  await browser.station.flush();
+  await mac.station.flush();
+  assert.equal(mac.station.status.localPlaybackOnly, false);
+  assert.equal(mac.p.settings.goal, 25);
+  assert.equal(mac.p.sending.settings.pauseSeconds, 7);
+  mac.p.sending.settings.pauseSeconds = 8;
+  await mac.station.flush(); await browser.station.flush();
+  assert.equal(browser.p.sending.settings.pauseSeconds, 8);
+  assert.equal(browser.p.stats.xp, 50);
+  assert.equal(mac.station.status.message, 'Progress synced');
+});
+
+test('an existing 1.1.1 journal with missing playback defaults polls without a new upload', async t => {
+  const server = new Exchange(':memory:');
+  t.after(() => server.close());
+  const f = fixture(server);
+  await f.station.start('Mac');
+  const journal = f.station.meta();
+  delete journal.base.sending.settings.continueMode;
+  delete journal.base.sending.settings.pauseSeconds;
+  delete journal.localPlayback;
+  f.station.save(journal);
+  const requests = [];
+  f.station.requestImpl = async (action, payload) => {
+    requests.push(action);
+    const answer = await f.transport(action, payload);
+    delete answer.profile.sending.settings.continueMode;
+    delete answer.profile.sending.settings.pauseSeconds;
+    return answer;
+  };
+  await f.station.flush(); await f.station.flush();
+  assert.deepEqual(requests, ['private/status','private/status']);
+  assert.equal(f.station.status.message, 'Progress synced');
+  assert.equal(f.station.status.localPlaybackOnly, true);
+});
 test('sqlite backup restores offline in a separate database after source changes',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'morse-restore-'));
  const source=join(dir,'source.sqlite');

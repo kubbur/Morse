@@ -4,7 +4,7 @@ import { sanitizePacing } from './recognition.mjs';
 import { emptyFocus } from './focus-level.mjs';
 import { mergeSessions } from './sessions.mjs';
 import { recentReview, REVIEW_WINDOW } from './review.mjs';
-import { mergeSending } from './sending.mjs';
+import { DEFAULT_SENDING_SETTINGS, mergeSending } from './sending.mjs';
 
 export const MAX_SYNC_BYTES = 1_000_000;
 const clone = value => structuredClone(value);
@@ -55,6 +55,20 @@ export function syncProfile(input) {
 
 export function syncChanged(base, local) {
   return !same(base, local);
+}
+
+// Earlier v2 websites omit playback preferences from their saved profiles.
+// Keep the raw server acknowledgement in the journal. Fill only omitted
+// values when comparing or applying it on this device.
+export function playbackOnDevice(profile, fallback = DEFAULT_SENDING_SETTINGS) {
+  const settings = profile.sending?.settings || {};
+  if (Object.hasOwn(settings, 'continueMode') && Object.hasOwn(settings, 'pauseSeconds')) return profile;
+  const { continueMode = fallback.continueMode, pauseSeconds = fallback.pauseSeconds, ...rest } = settings;
+  return { ...profile, sending: { ...profile.sending, settings: { ...rest, continueMode, pauseSeconds } } };
+}
+
+export function hasLocalChanges(meta, local) {
+  return syncChanged(playbackOnDevice(meta.base, meta.localPlayback), local);
 }
 
 // A three-way merge applies only work performed since this device's acknowledged

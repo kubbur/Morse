@@ -1,4 +1,4 @@
-import { syncProfile, mergeProgress, syncChanged } from './sync-data.mjs';
+import { syncProfile, mergeProgress, syncChanged, playbackOnDevice, hasLocalChanges } from './sync-data.mjs';
 import { parseProgressJson } from './import-validation.mjs';
 
 export const SYNC_KEY = 'morse.devices.v1';
@@ -73,10 +73,9 @@ export class DeviceSync {
   receive(result, meta) {
     if (result.erased) { this.save(null); this.onErased(); this.report({ connected: false, devices: [], invite: null, waiting: null, message: 'Your data was deleted', error: false }); return null; }
     if (meta && result.epoch === meta.epoch && result.revision < meta.revision) return meta;
-    this.report({ invite: null, waiting: null, ...result, profile: undefined, message: result.connected ? 'Synced' : 'Saved on this device', error: false });
     if (!result.connected) {
-      if (meta) this.report({ message: 'Disconnected · progress is saved here' });
       this.save(null);
+      this.report({ invite: null, waiting: null, ...result, profile: undefined, message: meta ? 'Disconnected · progress is saved here' : 'Saved on this device', error: false });
       return null;
     }
     if (!meta) {
@@ -88,17 +87,25 @@ export class DeviceSync {
       this.backup();
       meta = { version: 1, epoch: result.epoch, seq: result.seq, base: result.profile, revision: result.revision, force: true, remote: result.profile };
     } else if (result.profile) {
-      meta.remote = result.profile;
+      if (meta.force || meta.remote || syncChanged(meta.base, result.profile)) meta.remote = result.profile;
       meta.revision = result.revision;
     }
     this.save(meta);
+    this.report({ invite: null, waiting: null, ...result, profile: undefined, message: 'Synced', error: false }, meta);
     return meta;
   }
   apply(meta) {
     if (!meta?.remote || meta.pending || meta.replacement || !this.ready()) return meta;
     const replace = meta.force;
     const local = syncProfile(this.getProfile());
-    const merged = replace ? meta.remote : mergeProgress(meta.base, local, meta.remote);
+    const remote = playbackOnDevice(meta.remote, local.sending.settings);
+    const merged = replace ? remote : mergeProgress(meta.base, local, remote);
+    if (remote !== meta.remote) {
+      // A push may have been followed by another edit while in flight. Remember
+      // the attempted values, so the newer edit still gets its own request.
+      const { continueMode, pauseSeconds } = replace ? local.sending.settings : playbackOnDevice(meta.base, meta.localPlayback).sending.settings;
+      meta.localPlayback = { continueMode, pauseSeconds };
+    } else delete meta.localPlayback;
     // Save the baseline before applying. The app's normal persistence may queue
     // another tick, but can never upload the downloaded counters as fresh work.
     meta.base = meta.remote;
@@ -114,7 +121,7 @@ export class DeviceSync {
       if (!meta) return;
       if (meta.force) { this.apply(meta); return; }
       const local = syncProfile(this.getProfile());
-      if (!meta.pending && (meta.replacement || syncChanged(meta.base, local))) {
+      if (!meta.pending && (meta.replacement || hasLocalChanges(meta, local))) {
         meta.pending = { seq: meta.seq + 1, epoch: meta.epoch, base: meta.base, profile: local, replace: !!meta.replacement, reason: meta.replacementReason || 'import', replacement: meta.replacement || null };
         this.save(meta); // persist the exact request before any network operation
       }
@@ -138,7 +145,7 @@ export class DeviceSync {
         meta.pending = null;
         if (pending.replacement === meta.replacement) meta.replacement = null;
         this.save(meta);
-        this.report({ invite: null, waiting: null, ...result, profile: undefined, message: meta.replacement ? 'Syncing…' : 'Synced', error: false });
+        this.report({ invite: null, waiting: null, ...result, profile: undefined, message: 'Synced', error: false }, meta);
         this.apply(meta);
       } else this.apply(this.receive(result, meta));
     });
