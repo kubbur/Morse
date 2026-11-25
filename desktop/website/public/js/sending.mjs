@@ -64,10 +64,15 @@ export function sanitizeSending(input) {
   return result;
 }
 
+export function sendingGapType(milliseconds, time) {
+  if (milliseconds >= (time.letterGap * 1000 + time.wordGap * 1000) / 2) return 'word';
+  return milliseconds >= 2 * time.dit * 1000 ? 'letter' : 'element';
+}
+
 function capture(edges, settings) {
   if (!Array.isArray(edges) || !edges.length || edges.length > 4096) throw new Error('No complete key presses.');
   const time = timing(settings.wpm, settings.farnsworth);
-  const unit = time.dit * 1000, letter = time.letterGap * 1000, word = time.wordGap * 1000;
+  const unit = time.dit * 1000;
   let last = -1;
   const marks = [], gaps = [];
   for (let i = 0; i < edges.length; i++) {
@@ -88,7 +93,7 @@ function capture(edges, settings) {
       // Farnsworth stretches inter-character gaps, not the recognition unit.
       // A readable standard character gap should decode as a boundary and get
       // "too short" spacing feedback, rather than merging letters into I/M/etc.
-      gap.type = gap.duration >= (letter + word) / 2 ? 'word' : gap.duration >= 2 * unit ? 'letter' : 'element';
+      gap.type = sendingGapType(gap.duration, time);
       if (gap.type === 'word') wordIndex++;
     }
     if (!group || gap?.type !== 'element') {

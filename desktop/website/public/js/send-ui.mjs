@@ -74,7 +74,7 @@ export class SendingUI {
   constructor({ getProfile, persist, active, inputSettingsOpen = () => false, soundChoice = () => false, onEarn = () => {} }) {
     Object.assign(this, { getProfile, persist, active, inputSettingsOpen, soundChoice, onEarn });
     this.audio = new MorseAudio(); this.tone = new KeyTone();
-    this.trace = new SendingTraceView($('send-trace'));
+    this.trace = new SendingTraceView($('send-trace'), $('send-hit'));
     this.edges = []; this.source = loadInput(); $('send-source').value = this.source; this.contacts = { dit: false, dah: false };
     this.keyboardPaddles = loadKeyboardPaddles();
     this.heldCodes = new Map();
@@ -518,7 +518,8 @@ export class SendingUI {
     }
     const complete = !!this.result?.valid;
     const showTarget = this.stage.guided || this.revealed || complete;
-    const data = sendingTrace(showTarget ? this.item.target : '', this.settings, this.edges);
+    const data = sendingTrace(showTarget ? this.item.target : '', this.settings, this.edges,
+      { keyerTimed: this.source !== 'straight', tolerance: this.stage.tolerance });
     this.trace.set(data, '', complete);
     if (complete) this.lastTrace = {data, target:this.item.target};
   }

@@ -122,7 +122,8 @@
         </div>
         <div class="send-input-bar"><div class="send-input-state"><span id="send-input-status" role="status">Choose a paddle adapter or keyboard input.</span></div><button type="button" class="text-button" id="send-timing-choice" data-view="lab" hidden>Choose saved sound settings</button><span id="send-speed-label">30 WPM · standard spacing</span></div>
         <div class="send-capture" id="send-capture" role="group" aria-label="Your transmission">
-          <span class="eyebrow">YOUR SENDING</span><output id="send-decoded" aria-label="Decoded Morse"></output>
+          <span class="eyebrow">YOUR SENDING</span>
+          <div class="send-readout"><output id="send-decoded" aria-label="Decoded Morse"></output><span id="send-hit" class="trace-verdict" hidden><strong class="trace-call"></strong><span class="trace-streak"></span></span></div>
           <div class="send-trace" id="send-trace" hidden>
             <div class="trace-legend"><span class="trace-target-key">Target</span><span class="trace-sent-key">You</span><span class="trace-caption"></span></div>
             <div class="trace-scroll" tabindex="0" role="region" aria-label="Signal timing from your first press"><div class="trace-plot" role="img"></div></div>
