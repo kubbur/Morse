@@ -4,27 +4,37 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-static int scenario(unsigned rate, unsigned side, bool withSpeaker) {
+static int scenario(unsigned rate, unsigned side, bool withSpeaker, unsigned block, const int16_t *loop) {
     PhoneCore *core = phoneCreate(rate);
     if (!core) return 1;
-    const unsigned block = 128;
-    float pilots[256], mic[128], speaker[128] = {0};
+    const unsigned channels = loop ? 2 : 1;
+    float pilots[2*block], mic[channels*block], speaker[block];
+    memset(speaker, 0, sizeof(speaker));
     unsigned contacts = 0, starts = 0, stops = 0, failed = 0;
     bool open = false;
     uint64_t start = 0;
     unsigned dot = (unsigned)lround(rate * .040);
     for (unsigned frame = 0; frame < 3*rate; frame += block) {
         unsigned held = frame >= 2*rate && frame < 2*rate + rate/4 ? side : 0;
-        phonePilots(core, pilots, block);
-        for (unsigned i = 0; i < block; ++i)
-            mic[i] = pilots[2*i] * (.0004f + ((held & 1) ? .029f : 0)) +
-                     pilots[2*i+1] * (.0003f + ((held & 2) ? .012f : 0));
-        phoneInput(core, mic, block);
+        if (loop) {
+            for (unsigned i = 0; i < block; ++i) {
+                unsigned index = 2*((frame+i) % PhonePilotLoopRate);
+                pilots[2*i] = loop[index]/32768.f;
+                pilots[2*i+1] = loop[index+1]/32768.f;
+            }
+        } else phonePilots(core, pilots, block);
+        for (unsigned i = 0; i < block; ++i) {
+            float volts = pilots[2*i] * (.0004f + ((held & 1) ? .029f : 0)) +
+                          pilots[2*i+1] * (.0003f + ((held & 2) ? .012f : 0));
+            for (unsigned ch = 0; ch < channels; ++ch) mic[channels*i+ch] = volts;
+        }
+        phoneInput(core, mic, block, channels);
         if (phoneReady(core)) contacts |= 1u << phoneMask(core);
         if (withSpeaker) phoneSpeaker(core, speaker, block);
         ElementEvent event;
-        bool marked[128];
+        bool marked[block];
         for (unsigned i = 0; i < block; ++i) marked[i] = open;
         while (phoneEvent(core, &event)) {
             if (!event.kind) continue;
@@ -98,14 +108,35 @@ static int meterScenario(unsigned rate, unsigned channels) {
     return failed;
 }
 int main(void) {
+    if (phoneQueueFrames(48000,.023) != 1104 || phoneQueueFrames(44100,1014./44100) != 1014 ||
+        phoneQueueFrames(48000,.003) != 144 || phoneQueueFrames(48000,0) != 1200) {
+        fputs("Audio queue sizing failed for a measured I/O duration.\n",stderr);
+        return EXIT_FAILURE;
+    }
     const unsigned rates[] = {44100, 48000};
     for (unsigned i = 0; i < 2; ++i) {
         if (meterScenario(rates[i],1) || meterScenario(rates[i],2)) return EXIT_FAILURE;
-        for (unsigned side = 0; side < 4; ++side)
-            if (scenario(rates[i], side, true) || scenario(rates[i], side, false)) return EXIT_FAILURE;
+        const unsigned blocks[] = {128, phoneQueueFrames(rates[i],.023)};
+        for (unsigned b = 0; b < 2; ++b)
+            for (unsigned side = 0; side < 4; ++side)
+                if (scenario(rates[i],side,true,blocks[b],NULL) || scenario(rates[i],side,false,blocks[b],NULL)) return EXIT_FAILURE;
     }
+    static int16_t loop[2*PhonePilotLoopRate];
+    phonePilotLoopPCM16(loop);
+    for (unsigned i = 0; i < PhonePilotLoopRate; ++i) {
+        double phase = 2*M_PI*i/PhonePilotLoopRate;
+        if (fabs(loop[2*i] - 32767*.25*sin(1000*phase)) > 1 ||
+            fabs(loop[2*i+1] - 32767*.25*sin(1600*phase)) > 1) {
+            fputs("The stereo pilot loop differs from the sensing tones.\n",stderr);
+            return EXIT_FAILURE;
+        }
+    }
+    for (unsigned side = 0; side < 4; ++side)
+        if (scenario(PhonePilotLoopRate,side,false,1200,loop)) return EXIT_FAILURE;
     puts("Jack meter passed silence, off-frequency audio and independent stereo returns at both sample rates.");
     puts("Simulated released, left, right and both passed at 44.1 and 48 kHz in both modes.");
+    puts("The same contacts, speaker and scoring checks passed with 23 ms audio buffers.");
+    puts("The native player's stereo loop passed sample checks and all four contacts on a dual-mono microphone return.");
     puts("Speaker PCM matched scoring edges. Contacts-only produced zero speaker frames and zero scoring marks.");
     return EXIT_SUCCESS;
 }

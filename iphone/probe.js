@@ -79,6 +79,12 @@ function draw(row) {
   const status=row.status, label = p => p.map(x => x.name+' ('+x.type+', '+x.channels+' ch)').join(', ') || 'none';
   $('routes').textContent = 'Active input  '+label(row.inputs)+'\nActive output  '+label(row.outputs)+
     '\nAvailable inputs  '+label(row.availableInputs)+'\nSample rate  '+row.rate+' Hz';
+  if (row.wiredOutputBuffers) {
+    $('routes').textContent += '\nWired output  '+row.wiredOutputBuffers+' buffers × '+row.queueBufferFrames+' frames'+
+      '\niOS I/O cycle  '+(1000*row.ioBufferSeconds).toFixed(1)+' ms';
+    if (row.capturedFrames >= row.rate)
+      $('routes').textContent += '\nOutput / input frame count  '+Math.round(100*row.returnedWiredOutputFrames/row.capturedFrames)+'%';
+  }
   const ready = row.active && status.phase === 'ready';
   $('left').classList.toggle('down',!!(ready && (row.mask & 1)));
   $('right').classList.toggle('down',!!(ready && (row.mask & 2)));
@@ -88,7 +94,15 @@ function draw(row) {
   showTest(row.testMode);
   if (row.testMode === 'reference') { drawComparison(row.jackComparison); return; }
   if (row.testMode === 'signal') { drawMeter(row); return; }
-  $('contacts').hidden = !row.canTestContacts;
+  $('contact-signal').hidden = row.testMode !== 'contacts';
+  if (row.testMode === 'contacts') {
+    const levels = row.contactSignal?.channels;
+    const db = n => n === null ? '−∞' : n.toFixed(1);
+    $('contact-signal').textContent = [
+      row.contactPlayerRunning ? 'Sending 1 kHz left and 1.6 kHz right through the wired output.' : '',
+      ...(levels || []).map(ch=>'Mic '+ch.channel+' · 1 kHz '+db(ch.hz1000DBFS)+' dBFS · 1.6 kHz '+db(ch.hz1600DBFS)+' dBFS')
+    ].filter(Boolean).join('\n');
+  }
   if (!ready) { reset(); $('step').textContent=''; return; }
   if (index < steps.length) {
     if (row.mask === steps[index][0]) {
@@ -123,13 +137,13 @@ async function start(mode) {
   }
   $('reference').disabled=true; $('reference-mic').disabled=true; $('reference-stop').disabled=true;
   $('mark').disabled=true; $('signal-step').textContent=''; $('signal-note').textContent='';
-  $('start').disabled=true; $('signal').disabled=true; $('contacts').hidden=true; $('copy').disabled=true;
+  $('start').disabled=true; $('signal').disabled=true; $('contacts').disabled=true; $('copy').disabled=true;
   try {
     const reply=await post({op:'paddle',name:'probe',value:mode});
     if (reply?.error) throw new Error(reply.error);
     started=true; $('start').textContent='Retry with iPhone speaker';
   } catch (error) { $('state').textContent=error.message || 'Could not start the adapter test.'; }
-  finally { switching=false; $('start').disabled=false; $('signal').disabled=false; $('reference').disabled=false; $('copy').disabled=false; }
+  finally { switching=false; $('start').disabled=false; $('signal').disabled=false; $('reference').disabled=false; $('contacts').disabled=false; $('copy').disabled=false; }
   await poll();
 }
 $('start').onclick=()=>start('speaker');

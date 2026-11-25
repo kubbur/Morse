@@ -21,6 +21,13 @@ struct PhoneCore {
     _Atomic(uint64_t) audible;
 };
 
+unsigned phoneQueueFrames(double rate, double hardwareBufferSeconds) {
+    if (!isfinite(rate) || rate < 8000 || rate > 384000) return 0;
+    // iOS can pull playback in whole hardware cycles. Keep one complete cycle in each queued buffer.
+    double seconds = hardwareBufferSeconds > 0 && hardwareBufferSeconds <= 1 ? hardwareBufferSeconds : .025;
+    return (unsigned)fmax(64, lround(rate * fmax(seconds, .003)));
+}
+
 // A route owns one core. Its three queues are disposed before another route initializes
 // the release detector's sample-rate tables.
 PhoneCore *phoneCreate(double rate) {
@@ -42,8 +49,23 @@ void phoneDestroy(PhoneCore *c) { free(c); }
 void phonePilots(PhoneCore *c, float *stereo, unsigned frames) {
     tones(&c->generator, stereo, frames, c->keyer.rate);
 }
-void phoneInput(PhoneCore *c, const float *mono, unsigned frames) {
-    acceptInput(&c->detector, NULL, mono, frames);
+void phonePilotLoopPCM16(int16_t *stereo) {
+    enum { block = PhonePilotLoopRate / 100 };
+    Generator generator = {0};
+    float samples[2 * block];
+    // Finish the release generator's fade-in before the loop. Both tones complete whole cycles in 10 ms.
+    tones(&generator,samples,block,PhonePilotLoopRate);
+    for (unsigned offset = 0; offset < PhonePilotLoopRate; offset += block) {
+        tones(&generator,samples,block,PhonePilotLoopRate);
+        for (unsigned i = 0; i < 2 * block; ++i)
+            stereo[2*offset+i] = (int16_t)lrintf(32767 * samples[i]);
+    }
+}
+void phoneInput(PhoneCore *c, float *pcm, unsigned frames, unsigned channels) {
+    // The converter has a single mic contact. USB adapters can expose it as dual mono.
+    if (channels == 2)
+        for (unsigned i=0; i<frames; ++i) pcm[i] = .5f * (pcm[2*i]+pcm[2*i+1]);
+    acceptInput(&c->detector, NULL, pcm, frames);
     atomic_store(&c->physical, (unsigned)c->detector.stable);
     atomic_store(&c->ready, c->detector.calibrated >= SettleBlocks + IdleBlocks && !c->detector.waitForRelease);
 }

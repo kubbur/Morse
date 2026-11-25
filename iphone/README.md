@@ -17,11 +17,12 @@ The manual workflow accepts any compatible source ref. A change to the builder o
 1. Install the IPA, then disconnect the phone from the Mac. Attach the USB‑C headphone adapter, converter and paddle.
 2. Open **Morse → Start adapter test**, allow microphone access and release both paddles during calibration.
 3. Follow the prompts for left, release, right, release, both and release. The 1 kHz and 1.6 kHz sensing signals use the adapter’s stereo output. Its microphone contact carries the return. Confirm hearing the keyed sound from the phone speaker to record a full pass.
-4. If the speaker test is waiting for a route, tap **Test paddle contacts only**. This uses a regular recording and playback session to test the wired return independently. **Retry with iPhone speaker** starts a fresh combined test.
+4. **Test paddle contacts only** is also available directly from the opening screen. It starts wired microphone capture, then loops the release's 1 kHz left and 1.6 kHz right sensing tones with the same native player used in **Compare jack output**. The contact lights and per-channel tone readings use that capture. **Retry with iPhone speaker** starts a fresh combined test.
 5. Tap **Copy test report**. The report includes available and active inputs, the wired microphone request, outputs, captured frames, observed contacts and the speaker result. A contacts-only report also includes the previous speaker route attempt.
 6. Open **Trainer** for the bundled Listen and Send lessons. In **Settings → Input**, select **Audio converter (3.5 mm)** to practise with the physical paddle. The native keyer drives the sidetone and the scorer from one audio-frame clock.
 
 **Measure jack audio** shows live broadband RMS and peak levels for each wired input channel (up to two). The output display shows system volume, returned buffer counts and the digital peaks of the last returned tone buffer.
+The audio queues size each buffer for the active iOS I/O cycle. The route display includes the queue size and the ratio of returned output frames to captured input frames after the first second.
 
 Mark released, left, right and both in order. Hold each position until its measurement finishes. The app sends silence, then the 1 kHz left and 1.6 kHz right tones. After the output queue acknowledges each change, the meter discards the first 250 ms and measures the following 250 ms. **Copy test report** includes broadband and tone levels in dBFS for each channel. A null level represents digital zero. If stereo output is unavailable the probe can still measure incoming audio.
 

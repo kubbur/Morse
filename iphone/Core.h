@@ -4,10 +4,13 @@
 #include "ElementStream.h"
 
 typedef struct PhoneCore PhoneCore;
+unsigned phoneQueueFrames(double rate, double hardwareBufferSeconds);
 PhoneCore *phoneCreate(double rate);
 void phoneDestroy(PhoneCore *core);
 void phonePilots(PhoneCore *core, float *stereo, unsigned frames);
-void phoneInput(PhoneCore *core, const float *mono, unsigned frames);
+enum { PhonePilotLoopRate = 48000 };
+void phonePilotLoopPCM16(int16_t *stereo);
+void phoneInput(PhoneCore *core, float *interleaved, unsigned frames, unsigned channels);
 void phoneSpeaker(PhoneCore *core, float *mono, unsigned frames);
 void phoneSound(PhoneCore *core, unsigned wpm, unsigned spacing, unsigned pitch,
                 unsigned volume, unsigned rise, unsigned fall, unsigned curve, bool modeB);
