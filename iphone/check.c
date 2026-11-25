@@ -32,7 +32,12 @@ static int scenario(unsigned rate, unsigned side, bool withSpeaker, unsigned blo
         }
         phoneInput(core, mic, block, channels);
         if (phoneReady(core)) contacts |= 1u << phoneMask(core);
-        if (withSpeaker) phoneSpeaker(core, speaker, block);
+        if (withSpeaker) {
+            unsigned returned = phoneSpeaker(core, speaker, block);
+            unsigned measured = 0;
+            for (unsigned i=0; i<block; ++i) if (fabsf(speaker[i]) > .0001f) ++measured;
+            if (returned != measured) failed = 1;
+        }
         ElementEvent event;
         bool marked[block];
         for (unsigned i = 0; i < block; ++i) marked[i] = open;
@@ -132,7 +137,8 @@ int main(void) {
         }
     }
     for (unsigned side = 0; side < 4; ++side)
-        if (scenario(PhonePilotLoopRate,side,false,1200,loop)) return EXIT_FAILURE;
+        if (scenario(PhonePilotLoopRate,side,false,1200,loop) ||
+            scenario(PhonePilotLoopRate,side,true,1200,loop)) return EXIT_FAILURE;
     puts("Jack meter passed silence, off-frequency audio and independent stereo returns at both sample rates.");
     puts("Simulated released, left, right and both passed at 44.1 and 48 kHz in both modes.");
     puts("The same contacts, speaker and scoring checks passed with 23 ms audio buffers.");

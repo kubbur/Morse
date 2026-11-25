@@ -11,7 +11,7 @@ void phonePilots(PhoneCore *core, float *stereo, unsigned frames);
 enum { PhonePilotLoopRate = 48000 };
 void phonePilotLoopPCM16(int16_t *stereo);
 void phoneInput(PhoneCore *core, float *interleaved, unsigned frames, unsigned channels);
-void phoneSpeaker(PhoneCore *core, float *mono, unsigned frames);
+unsigned phoneSpeaker(PhoneCore *core, float *mono, unsigned frames);
 void phoneSound(PhoneCore *core, unsigned wpm, unsigned spacing, unsigned pitch,
                 unsigned volume, unsigned rise, unsigned fall, unsigned curve, bool modeB);
 void phoneMute(PhoneCore *core, bool muted);

@@ -12,19 +12,25 @@ const holds = ['Release both paddles','Hold only the left paddle','Hold only the
 function reset() {
   index=0; since=null; observations=[]; audibleAtStart=0; $('heard').checked=false; $('heard').disabled=true; $('result').textContent='';
 }
-function canConfirmSpeaker() {
-  return index === steps.length && last?.active && last.status.phase === 'ready' &&
-    last.testMode === 'speaker' && last.speakerActive && last.audibleFrames > audibleAtStart;
+function listeningTest(row) { return row?.testMode === 'airpods' || row?.testMode === 'speaker'; }
+function destination(row) {
+  return row.testMode === 'airpods' ? (row.sidetoneOutput?.name || 'AirPods') : 'the iPhone speaker';
+}
+function canConfirmSound() {
+  if (!listeningTest(last) || !last.active || last.status.phase !== 'ready' || !last.contactPlayerRunning ||
+      !last.capturedFrames || !last.sidetoneOutput || !last.status.outputReady) return false;
+  return last.sidetoneDestination === last.testMode && index === steps.length && last.returnedSidetoneFrames > audibleAtStart;
 }
 function verdict() {
   if (last?.testMode === 'reference') return 'Jack output voltage comparison';
   if (last?.testMode === 'signal') {
     return last.jackAudio.measurements.length === positions.length ? 'Four labeled audio measurements collected' : 'Audio measurement incomplete';
   }
+  if (listeningTest(last) && last.routesExhausted) return 'No simultaneous paddle and sidetone output to '+destination(last)+'.';
   if (index !== steps.length) return 'Incomplete';
-  if (last?.testMode === 'contacts') return 'Contacts passed. iPhone speaker untested.';
-  if (!canConfirmSpeaker()) return 'Contacts passed. No keyed speaker audio was measured.';
-  return $('heard').checked ? 'Passed on this iPhone' : 'Contacts passed. Confirm where you heard the sidetone.';
+  if (last?.testMode === 'contacts') return 'Contacts passed. Sidetone untested.';
+  if (!canConfirmSound()) return 'Contacts passed. Waiting for keyed audio on '+destination(last)+'.';
+  return $('heard').checked ? 'Passed. Wired paddles with sidetone on '+destination(last)+'.' : 'Contacts passed. Confirm where you heard the sidetone.';
 }
 function showTest(mode) {
   $('signal-test').hidden = mode !== 'signal';
@@ -94,6 +100,11 @@ function draw(row) {
   showTest(row.testMode);
   if (row.testMode === 'reference') { drawComparison(row.jackComparison); return; }
   if (row.testMode === 'signal') { drawMeter(row); return; }
+  $('heard-label').textContent='I heard the keyed sidetone from '+destination(row)+'.';
+  if (listeningTest(row)) {
+    $('routes').textContent+='\nRouting mode  '+row.routeStrategy;
+    if (row.sidetoneOutput) $('routes').textContent+='\nSidetone  '+row.sidetoneOutput.name;
+  }
   $('contact-signal').hidden = row.testMode !== 'contacts';
   if (row.testMode === 'contacts') {
     const levels = row.contactSignal?.channels;
@@ -103,18 +114,24 @@ function draw(row) {
       ...(levels || []).map(ch=>'Mic '+ch.channel+' · 1 kHz '+db(ch.hz1000DBFS)+' dBFS · 1.6 kHz '+db(ch.hz1600DBFS)+' dBFS')
     ].filter(Boolean).join('\n');
   }
+  if (listeningTest(row) && row.routesExhausted) {
+    reset();
+    $('step').textContent=verdict();
+    $('result').textContent=(row.testMode === 'airpods' ? 'If your AirPods are connected to this iPhone, copy the test report.' : 'Copy the test report.');
+    return;
+  }
   if (!ready) { reset(); $('step').textContent=''; return; }
   if (index < steps.length) {
     if (row.mask === steps[index][0]) {
       since ??= performance.now();
       if (performance.now()-since >= 250) {
-        if (index === 0) audibleAtStart = row.audibleFrames;
+        if (index === 0) audibleAtStart = row.returnedSidetoneFrames;
         observations.push({mask:row.mask,time:new Date().toISOString(),audibleFrames:row.audibleFrames}); ++index; since=null;
       }
     } else since=null;
   }
   $('step').textContent = steps[index]?.[1] || 'All four electrical states observed.';
-  $('heard').disabled=!canConfirmSpeaker();
+  $('heard').disabled=!canConfirmSound();
   $('result').textContent=index===steps.length ? verdict() : '';
 }
 async function poll() {
@@ -137,16 +154,17 @@ async function start(mode) {
   }
   $('reference').disabled=true; $('reference-mic').disabled=true; $('reference-stop').disabled=true;
   $('mark').disabled=true; $('signal-step').textContent=''; $('signal-note').textContent='';
-  $('start').disabled=true; $('signal').disabled=true; $('contacts').disabled=true; $('copy').disabled=true;
+  $('start').disabled=true; $('airpods').disabled=true; $('signal').disabled=true; $('contacts').disabled=true; $('copy').disabled=true;
   try {
     const reply=await post({op:'paddle',name:'probe',value:mode});
     if (reply?.error) throw new Error(reply.error);
-    started=true; $('start').textContent='Retry with iPhone speaker';
+    started=true;
   } catch (error) { $('state').textContent=error.message || 'Could not start the adapter test.'; }
-  finally { switching=false; $('start').disabled=false; $('signal').disabled=false; $('reference').disabled=false; $('contacts').disabled=false; $('copy').disabled=false; }
+  finally { switching=false; $('start').disabled=false; $('airpods').disabled=false; $('signal').disabled=false; $('reference').disabled=false; $('contacts').disabled=false; $('copy').disabled=false; }
   await poll();
 }
 $('start').onclick=()=>start('speaker');
+$('airpods').onclick=()=>start('airpods');
 $('contacts').onclick=()=>start('contacts');
 $('signal').onclick=()=>start('signal');
 $('reference').onclick=()=>start('reference-playback');
@@ -164,10 +182,16 @@ $('mark').onclick=async () => {
   finally { marking=false; }
   await poll();
 };
-$('heard').onchange=() => {
+$('heard').onchange=async () => {
   $('result').textContent=verdict();
-  if ($('heard').checked && canConfirmSpeaker()) {
-    try { localStorage.setItem('morse.send-input.v1','paddle'); } catch { /* The input can still be selected in Settings. */ }
+  if ($('heard').checked && canConfirmSound()) {
+    const currentSession=session;
+    try {
+      const reply=await post({op:'paddle',name:'confirm-output',value:last.testMode});
+      if (session!==currentSession || !canConfirmSound()) return;
+      if (reply?.error) throw new Error(reply.error);
+      localStorage.setItem('morse.send-input.v1','paddle');
+    } catch (error) { $('result').textContent=error.message || 'Select the audio converter in Trainer settings.'; }
   }
 };
 $('copy').onclick=async () => {
@@ -177,7 +201,8 @@ $('copy').onclick=async () => {
     if (run!==generation || document.hidden) return;
     draw(row);
     const report={at:new Date().toISOString(),verdict:verdict(),observations,
-      heardFromSpeaker:!!(canConfirmSpeaker() && $('heard').checked),route:last};
+      heardFromSpeaker:!!(last.testMode==='speaker' && canConfirmSound() && $('heard').checked),
+      heardFromBluetooth:!!(last.testMode==='airpods' && canConfirmSound() && $('heard').checked),route:last};
     if (row.testMode === 'reference') report.meterVoltsAC={
       playbackOnly:meterVolts('playback-volts'), withWiredMic:meterVolts('mic-volts')
     };

@@ -69,12 +69,13 @@ void phoneInput(PhoneCore *c, float *pcm, unsigned frames, unsigned channels) {
     atomic_store(&c->physical, (unsigned)c->detector.stable);
     atomic_store(&c->ready, c->detector.calibrated >= SettleBlocks + IdleBlocks && !c->detector.waitForRelease);
 }
-void phoneSpeaker(PhoneCore *c, float *mono, unsigned frames) {
+unsigned phoneSpeaker(PhoneCore *c, float *mono, unsigned frames) {
     renderKeyer(&c->keyer, frames, mono);
     applySidetoneVolume(&c->keyer, mono, frames);
     unsigned audible = 0;
     for (unsigned i = 0; i < frames; ++i) if (fabsf(mono[i]) > .0001f) ++audible;
     if (audible) atomic_fetch_add(&c->audible, audible);
+    return audible;
 }
 void phoneSound(PhoneCore *c, unsigned wpm, unsigned spacing, unsigned pitch,
                 unsigned volume, unsigned rise, unsigned fall, unsigned curve, bool modeB) {

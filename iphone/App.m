@@ -130,7 +130,18 @@ static void serve(int fd, NSURL *root, unsigned port) {
     [config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:js injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
     [config.userContentController addScriptMessageHandlerWithReply:self contentWorld:WKContentWorld.pageWorld name:@"morse"];
     _web=[[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
-    _web.navigationDelegate=self; _web.UIDelegate=self; self.view=_web;
+    _web.navigationDelegate=self; _web.UIDelegate=self;
+    self.view.backgroundColor=UIColor.systemBackgroundColor;
+    _web.translatesAutoresizingMaskIntoConstraints=NO;
+    _web.scrollView.contentInsetAdjustmentBehavior=UIScrollViewContentInsetAdjustmentNever;
+    [self.view addSubview:_web];
+    UILayoutGuide *safe=self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [_web.topAnchor constraintEqualToAnchor:safe.topAnchor],
+        [_web.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+        [_web.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+        [_web.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor]
+    ]];
     __weak Trainer *weak=self;
     _audio.publish=^(NSArray *rows) {
         Trainer *trainer=weak;

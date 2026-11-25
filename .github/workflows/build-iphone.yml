@@ -54,3 +54,5 @@ jobs:
           name: Morse-iPhone
           path: artifacts/Morse-iPhone.ipa
           if-no-files-found: error
+      - name: Check the paddle test and Send tab on an iPhone simulator
+        run: python3 -B builder/iphone/tests/navigation.py source artifacts/Morse-iPhone.ipa

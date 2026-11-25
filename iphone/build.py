@@ -118,8 +118,18 @@ def check(core, work):
     subprocess.run([str(executable)], check=True)
 
 
+def compile_app(app, core, platform, target, extra_sources=()):
+    sdk = subprocess.check_output(["xcrun", "--sdk", platform, "--show-sdk-path"], text=True).strip()
+    sources = [KIT / name for name in ["App.m","PaddleAudio.m","Website.m","Core.m"]]
+    sources += [core / "Sidetone.c", core / "MorseTyping.c", *extra_sources]
+    subprocess.run(["xcrun", "--sdk", platform, "clang", "-isysroot", sdk, "-target", target,
+                    "-O2", "-fobjc-arc", "-fblocks", "-I", str(core), *map(str,sources),
+                    "-framework","UIKit","-framework","CoreGraphics","-framework","Foundation","-framework","AVFoundation",
+                    "-framework","AudioToolbox","-framework","WebKit","-framework","Security",
+                    "-o", str(app / "Morse")], check=True)
+
+
 def build(app, core, desktop, version, output):
-    sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"], text=True).strip()
     sdk_version = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-version"], text=True).strip()
     if tuple(map(int, sdk_version.split(".")[:2])) < (26, 2):
         raise ValueError("The paddle test requires an iPhoneOS SDK of 26.2 or later.")
@@ -140,13 +150,7 @@ def build(app, core, desktop, version, output):
         subprocess.run(["sips", "-z", str(pixels), str(pixels), str(desktop / "assets/icon.png"),
                         "--out", str(app / f"Icon60@{scale}x.png")], check=True, stdout=subprocess.DEVNULL)
     (app / "Info.plist").write_bytes(plistlib.dumps(info))
-    sources = [KIT / name for name in ["App.m","PaddleAudio.m","Website.m","Core.m"]]
-    sources += [core / "Sidetone.c", core / "MorseTyping.c"]
-    subprocess.run(["xcrun", "--sdk", "iphoneos", "clang", "-isysroot", sdk, "-target", "arm64-apple-ios"+MIN_IOS,
-                    "-O2", "-fobjc-arc", "-fblocks", "-I", str(core), *map(str,sources),
-                    "-framework","UIKit","-framework","CoreGraphics","-framework","Foundation","-framework","AVFoundation",
-                    "-framework","AudioToolbox","-framework","WebKit","-framework","Security",
-                    "-o", str(app / "Morse")], check=True)
+    compile_app(app, core, "iphoneos", "arm64-apple-ios"+MIN_IOS)
     # The installer supplies the user's development identity and device provisioning profile.
     subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
     subprocess.run(["codesign", "--verify", "--strict", str(app)], check=True)

@@ -9,6 +9,10 @@ typedef struct { unsigned tag; float peak[2]; } PilotBuffer;
 enum { BufferCount = 3 };
 static NSString * const ReferencePlayback = @"reference-playback";
 static NSString * const ReferenceMic = @"reference-mic";
+typedef NS_ENUM(NSUInteger, ListeningStrategy) { StandardMultiroute, DualMultiroute, PlayAndRecord };
+static NSString *strategyName(ListeningStrategy strategy) {
+    return (@[@"standard multiroute", @"dual route", @"play and record"])[strategy];
+}
 typedef struct {
     PhoneCore *core;
     PhoneSignalMeter *meter;
@@ -19,6 +23,8 @@ typedef struct {
     atomic_int fault;
     atomic_uint wantedTag, returnedTag;
     _Atomic(uint64_t) capturedFrames, toneFrames, silentFrames;
+    _Atomic(uint64_t) returnedSidetoneFrames, returnedSidetoneBuffers;
+    unsigned keyedFrames[BufferCount];
     PilotBuffer pilotBuffers[BufferCount];
     _Atomic(float) returnedTonePeak[2];
 } PhoneIO;
@@ -41,7 +47,7 @@ static void fillOutput(PhoneIO *io, AudioQueueRef queue, AudioQueueBufferRef b) 
                 for (unsigned ch=0; ch<2; ++ch) buffer->peak[ch] = fmaxf(buffer->peak[ch],fabsf(*pcm++));
         }
     }
-    else phoneSpeaker(io->core, b->mAudioData, io->frames);
+    else *(unsigned *)b->mUserData = phoneSpeaker(io->core, b->mAudioData, io->frames);
     b->mAudioDataByteSize = io->frames * sizeof(float) * (queue == io->pilots ? 2 : 1);
     queued(io, queue, b);
 }
@@ -56,6 +62,9 @@ static void output(void *context, AudioQueueRef queue, AudioQueueBufferRef b) {
             for (unsigned ch=0; ch<2; ++ch) atomic_store(&io->returnedTonePeak[ch],buffer->peak[ch]);
         atomic_fetch_add((tag & 1) ? &io->toneFrames : &io->silentFrames,io->frames);
         atomic_store(&io->returnedTag,tag);
+    } else if (queue == io->speaker) {
+        atomic_fetch_add(&io->returnedSidetoneFrames,*(unsigned *)b->mUserData);
+        atomic_fetch_add(&io->returnedSidetoneBuffers,1);
     }
     fillOutput(io,queue,b);
 }
@@ -112,6 +121,7 @@ static OSStatus prepare(PhoneIO *io, AVAudioSessionPortDescription *port, unsign
         code = AudioQueueAllocateBuffer(*target, io->frames * f.mBytesPerFrame, &b);
         if (code) break;
         if (*target == io->pilots) b->mUserData = &io->pilotBuffers[i];
+        if (*target == io->speaker) b->mUserData = &io->keyedFrames[i];
         if (recording) queued(io,*target,b); else fillOutput(io,*target,b);
         code = atomic_load(&io->fault);
     }
@@ -153,7 +163,8 @@ static NSString *routeKey(AVAudioSessionRouteDescription *route, double rate, un
     NSMutableArray *parts = [@[@(rate), @(bufferFrames)] mutableCopy];
     for (NSArray *side in @[route.inputs,route.outputs]) {
         [parts addObject:@"|"];
-        for (AVAudioSessionPortDescription *p in side) [parts addObject:@[p.UID,p.portType,@(p.channels.count)]];
+        for (AVAudioSessionPortDescription *p in side)
+            [parts addObject:@[p.UID,p.portType,[p.channels valueForKey:@"channelNumber"] ?: @[]]];
     }
     return parts.description;
 }
@@ -186,6 +197,10 @@ static NSData *paddlePilotWave(void) {
     PhoneIO *_io;
     BOOL _wanted, _foreground, _granted, _requesting, _interrupted, _configuredSession, _ready, _reverse, _mute;
     BOOL _contactsOnly, _hadWiredInput, _measuring;
+    BOOL _bluetoothOutput, _trialScheduled;
+    ListeningStrategy _strategy;
+    NSUInteger _trialGeneration;
+    NSMutableArray *_routeAttempts;
     unsigned _session, _epoch, _sequence;
     NSString *_detail, *_routes, *_promptID;
     NSString *_requestedInputUID, *_inputRequest;
@@ -194,6 +209,7 @@ static NSData *paddlePilotWave(void) {
     NSMutableDictionary *_referenceReadings;
     AVAudioPlayer *_wiredPlayer;
     NSTimeInterval _nextRouteCheck;
+    NSTimeInterval _fallbackStarted;
     NSString *_channelRequestRoute, *_channelRequest, *_capturePosition, *_captureNote;
     NSString *_inputFallback, *_outputIssue;
     NSDictionary *_liveReading, *_quietReading, *_freshCapture;
@@ -220,18 +236,28 @@ static NSData *paddlePilotWave(void) {
     return self;
 }
 - (void)batch:(NSArray *)rows { if (self.publish && rows.count) self.publish(rows); }
+- (NSString *)listeningDestination {
+    return _bluetoothOutput ? (_speaker.portName ?: @"AirPods or Bluetooth headphones") : @"iPhone speaker";
+}
 - (NSDictionary *)status {
-    BOOL speakerActive = _io && _io->speaker;
+    BOOL listening = _io && _io->speaker && _wiredPlayer.isPlaying;
     return @{@"type":@"status",@"source":_wanted?(_referenceMode?@"reference":@"paddle"):@"off",
-        @"phase":_ready?@"ready":_io?@"calibrating":@"waiting",@"outputReady":@(speakerActive),
-        @"output":speakerActive?@"iPhone speaker":@"System output",@"sharedSound":@(!_contactsOnly),@"typing":@NO,
+        @"phase":_ready?@"ready":_io?@"calibrating":@"waiting",@"outputReady":@(listening),
+        @"output":listening?[self listeningDestination]:@"System output",@"sharedSound":@(listening),@"typing":@NO,
         @"hasReverse":@NO,@"reverse":@(_reverse),@"session":@(_session),@"epoch":@(_epoch),@"detail":_detail ?: @""};
 }
 - (NSDictionary *)routeReport {
     AVAudioSession *s = AVAudioSession.sharedInstance;
     AVAudioSessionRouteDescription *route = s.currentRoute;
     AVAudioSessionPortDescription *preferred = s.preferredInput;
-    return @{@"status":[self status],@"testMode":_referenceMode?@"reference":_measuring?@"signal":_contactsOnly?@"contacts":@"speaker",
+    BOOL listening = _io && _io->speaker && _wiredPlayer.isPlaying;
+    return @{@"status":[self status],@"testMode":_referenceMode?@"reference":_measuring?@"signal":_contactsOnly?@"contacts":_bluetoothOutput?@"airpods":@"speaker",
+        @"routeStrategy":_contactsOnly ? @"wired diagnostic" : strategyName(_strategy),
+        @"routesExhausted":@(_wanted && !_contactsOnly && _strategy == PlayAndRecord && !listening),
+        @"sidetoneOutput":listening ? portInfo(_speaker) : (id)NSNull.null,
+        @"sidetoneDestination":listening ? (_bluetoothOutput ? @"airpods" : @"speaker") : (id)NSNull.null,
+        @"returnedSidetoneFrames":@(_io ? atomic_load(&_io->returnedSidetoneFrames) : 0),
+        @"returnedSidetoneBuffers":@(_io ? atomic_load(&_io->returnedSidetoneBuffers) : 0),
         @"category":s.category,@"mode":s.mode,@"availableInputs":ports(s.availableInputs),
         @"preferredInput":preferred ? portInfo(preferred) : (id)NSNull.null,
         @"inputRequest":_inputRequest ?: @"No input request made.",
@@ -242,7 +268,8 @@ static NSData *paddlePilotWave(void) {
         @"contactPlayerRunning":@(!_referenceMode && _wiredPlayer.isPlaying),
         @"returnedWiredOutputFrames":@(_io ? atomic_load(&_io->toneFrames) + atomic_load(&_io->silentFrames) : 0),
         @"mask":@(_io ? phoneMask(_io->core) : 0),
-        @"speakerActive":@(_io && _io->speaker),@"capturedFrames":@(_io ? atomic_load(&_io->capturedFrames) : 0),
+        @"speakerActive":@(listening && [_speaker.portType isEqual:AVAudioSessionPortBuiltInSpeaker]),
+        @"capturedFrames":@(_io ? atomic_load(&_io->capturedFrames) : 0),
         @"audibleFrames":@(_io ? phoneAudibleFrames(_io->core) : 0),@"active":@(_io != NULL)};
 }
 - (void)saveReferenceReading {
@@ -264,6 +291,7 @@ static NSData *paddlePilotWave(void) {
     report[@"build"] = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"";
     report[@"canTestContacts"] = @(_wanted && _granted && _foreground && !_interrupted && !_io && !_contactsOnly);
     if (_previousSpeakerAttempt) report[@"previousSpeakerAttempt"] = _previousSpeakerAttempt;
+    if (_routeAttempts.count) report[@"routeAttempts"] = [_routeAttempts copy];
     if (_contactsOnly && !_measuring && !_referenceMode && _liveReading) report[@"contactSignal"] = _liveReading;
     if (_referenceMode) {
         [self saveReferenceReading];
@@ -299,6 +327,7 @@ static NSData *paddlePilotWave(void) {
     [self batch:@[@{@"type":@"reset"}]];
 }
 - (void)deactivate {
+    ++_trialGeneration; _trialScheduled = NO;
     [self clearIO];
     if (_configuredSession) {
         _configuredSession = NO;
@@ -383,13 +412,14 @@ static NSData *paddlePilotWave(void) {
     } else _outputIssue = @"The current route has no isolated stereo wired output.";
     return AudioQueueStart(io->input,NULL);
 }
-- (NSString *)startWiredPlayer:(PhoneIO *)io rate:(double)rate {
+- (NSString *)startWiredPlayer:(PhoneIO *)io rate:(double)rate
+                    microphone:(AVAudioSessionPortDescription *)mic wiredOutput:(AVAudioSessionPortDescription *)wire {
     if (![_referenceMode isEqual:ReferencePlayback]) {
         AVAudioSession *s = AVAudioSession.sharedInstance;
         io->frames = (unsigned)ceil(rate * MAX(.025, s.IOBufferDuration));
-        io->inputChannels = (unsigned)MAX(1, MIN(2, s.inputNumberOfChannels));
+        io->inputChannels = mic ? (unsigned)MIN(2,mic.channels.count) : (unsigned)MAX(1, MIN(2, s.inputNumberOfChannels));
         if (io->detectContacts && !(io->meter = phoneMeterCreate(io->inputChannels))) return @"Could not open the contact signal meter.";
-        OSStatus code = prepare(io,nil,io->inputChannels,rate,&io->input,YES);
+        OSStatus code = prepare(io,mic,io->inputChannels,rate,&io->input,YES);
         if (!code) code = AudioQueueStart(io->input,NULL);
         if (code) return [NSString stringWithFormat:@"Could not start wired microphone capture (%d).",(int)code];
     }
@@ -402,6 +432,11 @@ static NSData *paddlePilotWave(void) {
         _wiredPlayer = [[AVAudioPlayer alloc] initWithData:paddlePilotWave() error:&error];
     }
     if (!_wiredPlayer) return error.localizedDescription ?: @"Could not open the wired test tones.";
+    if (wire) {
+        if (wire.channels.count < 2 || _wiredPlayer.numberOfChannels != 2)
+            return @"The wired player needs separate left and right channels.";
+        _wiredPlayer.channelAssignments = [wire.channels subarrayWithRange:NSMakeRange(0,2)];
+    }
     _wiredPlayer.numberOfLoops = -1;
     _wiredPlayer.volume = 1;
     if (![_wiredPlayer prepareToPlay] || ![_wiredPlayer play]) return @"iOS could not start wired playback.";
@@ -414,10 +449,13 @@ static NSData *paddlePilotWave(void) {
     AVAudioSession *s = AVAudioSession.sharedInstance;
     NSError *error = nil;
     if (!_configuredSession) {
-        AVAudioSessionCategory category = _contactsOnly ? AVAudioSessionCategoryPlayAndRecord : AVAudioSessionCategoryMultiRoute;
+        BOOL multi = !_contactsOnly && _strategy != PlayAndRecord;
+        BOOL dual = multi && _strategy == DualMultiroute;
+        AVAudioSessionCategory category = multi ? AVAudioSessionCategoryMultiRoute : AVAudioSessionCategoryPlayAndRecord;
         if (playbackOnly) category = AVAudioSessionCategoryPlayback;
-        AVAudioSessionMode mode = _contactsOnly ? AVAudioSessionModeDefault : AVAudioSessionModeDualRoute;
-        AVAudioSessionCategoryOptions options = _contactsOnly ? 0 : AVAudioSessionCategoryOptionAllowBluetoothHFP;
+        AVAudioSessionMode mode = dual ? AVAudioSessionModeDualRoute : AVAudioSessionModeDefault;
+        AVAudioSessionCategoryOptions options = dual ? AVAudioSessionCategoryOptionAllowBluetoothHFP : 0;
+        if (!_contactsOnly && !multi && _bluetoothOutput) options = AVAudioSessionCategoryOptionAllowBluetoothA2DP;
         if (![s setCategory:category mode:mode options:options error:&error] || ![s setActive:YES error:&error]) {
             _detail = error.localizedDescription ?: @"iOS could not activate the audio session.";
             [self batch:@[[self status]]]; return;
@@ -431,14 +469,19 @@ static NSData *paddlePilotWave(void) {
     double rate = s.sampleRate;
     unsigned bufferFrames = phoneQueueFrames(rate,s.IOBufferDuration);
     NSString *key = routeKey(route,rate,bufferFrames);
-    if (_measuring || _referenceMode) key = [key stringByAppendingFormat:@"|%ld|%ld",(long)s.inputNumberOfChannels,(long)s.outputNumberOfChannels];
+    key = [key stringByAppendingFormat:@"|%ld|%ld",(long)s.inputNumberOfChannels,(long)s.outputNumberOfChannels];
     if ([_routes isEqual:key]) return;
     [self clearIO]; _routes = key;
     AVAudioSessionPortDescription *mic = singlePort(route.inputs,inputTypes,1);
     AVAudioSessionPortDescription *wire = singlePort(route.outputs,@[AVAudioSessionPortHeadphones,AVAudioSessionPortUSBAudio],2);
-    _speaker = _contactsOnly ? nil : singlePort(route.outputs,@[AVAudioSessionPortBuiltInSpeaker],1);
+    NSArray *listenTypes = _bluetoothOutput ? @[AVAudioSessionPortBluetoothA2DP, AVAudioSessionPortBluetoothHFP, AVAudioSessionPortBluetoothLE] :
+                                               @[AVAudioSessionPortBuiltInSpeaker];
+    _speaker = _contactsOnly ? nil : singlePort(route.outputs,listenTypes,1);
+    BOOL combined = mic && wire && _speaker;
+    // After trying both multiroute modes, keep the proven isolated wired path live if available.
+    BOOL wiredFallback = !_contactsOnly && _strategy == PlayAndRecord && !combined;
     NSString *waiting = nil;
-    if (_contactsOnly && !_measuring) {
+    if ((_contactsOnly && !_measuring) || wiredFallback) {
         if (route.outputs.count != 1 || !singlePort(route.outputs,@[AVAudioSessionPortHeadphones,AVAudioSessionPortUSBAudio],0))
             waiting = @"Waiting for iOS to select the wired output. See the active route below.";
         else if (!playbackOnly && (route.inputs.count != 1 || !singlePort(route.inputs,inputTypes,0)))
@@ -451,7 +494,7 @@ static NSData *paddlePilotWave(void) {
         if (route.inputs.count != 1 || s.inputNumberOfChannels < 1) waiting = @"Waiting for the wired input channel.";
     }
     else if (!wire) waiting = @"Waiting for two wired output channels for the paddle sensing tones.";
-    else if (!_contactsOnly && !_speaker) waiting = @"The wired ports are active. Waiting for the iPhone speaker.";
+    else if (!_speaker) waiting = [NSString stringWithFormat:@"Wired audio is available. Checking for a separate %@ output.",[self listeningDestination]];
     if (waiting) {
         _detail = waiting;
         [self batch:@[[self status]]]; return;
@@ -470,32 +513,26 @@ static NSData *paddlePilotWave(void) {
     atomic_init(&io->capturedFrames, 0);
     atomic_init(&io->wantedTag,1); atomic_init(&io->returnedTag,0);
     atomic_init(&io->toneFrames,0); atomic_init(&io->silentFrames,0);
+    atomic_init(&io->returnedSidetoneFrames,0); atomic_init(&io->returnedSidetoneBuffers,0);
     for (unsigned ch=0; ch<2; ++ch) atomic_init(&io->returnedTonePeak[ch],0);
     OSStatus code = noErr;
     NSString *operation = nil;
-    if (_contactsOnly && !_measuring) {
-        NSString *failure = [self startWiredPlayer:io rate:rate];
+    if (!_measuring) {
+        // Start capture before playback, as in the contact test. Bind each stream when sharing a route.
+        NSString *failure = [self startWiredPlayer:io rate:rate microphone:combined ? mic : nil wiredOutput:combined ? wire : nil];
         if (failure) {
             [self clearIO]; _routes = key; _detail = failure;
             [self batch:@[[self status]]]; return;
         }
-    } else if (_measuring) {
+        if (combined) {
+            operation = [@"open the sidetone on " stringByAppendingString:[self listeningDestination]];
+            code = prepare(io,_speaker,1,rate,&io->speaker,NO);
+            if (!code) code = AudioQueueStart(io->speaker,NULL);
+        }
+    } else {
         operation = @"open the wired input meter";
         _positionReadings = [NSMutableArray array];
         code = [self startMeterQueues:io rate:rate drive:(wire && route.outputs.count == 1 && s.outputNumberOfChannels >= 2)];
-    } else {
-        AudioQueueRef *targets[] = {&io->input,&io->pilots,&io->speaker};
-        AVAudioSessionPortDescription *devices[] = {mic,wire,_speaker};
-        NSArray *names = @[@"wired microphone",@"wired sensing tones",@"iPhone speaker"];
-        unsigned count = 3;
-        for (unsigned i=0; i<count && !code; ++i) {
-            code = prepare(io,devices[i],i == 1 ? 2 : 1,rate,targets[i],i == 0);
-            if (code) operation = [@"prepare " stringByAppendingString:names[i]];
-        }
-        for (unsigned i=count; i>0 && !code; --i) {
-            code = AudioQueueStart(*targets[i-1],NULL);
-            if (code) operation = [@"start " stringByAppendingString:names[i-1]];
-        }
     }
     if (code) {
         [self clearIO]; _routes = key;
@@ -508,16 +545,40 @@ static NSData *paddlePilotWave(void) {
     _timer = [NSTimer timerWithTimeInterval:.025 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
     [NSRunLoop.mainRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
 }
+- (void)scheduleNextStrategy {
+    if (_contactsOnly || _strategy == PlayAndRecord || _trialScheduled) return;
+    NSUInteger generation = _trialGeneration;
+    _trialScheduled = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (self->_trialGeneration != generation) return;
+        self->_trialScheduled = NO;
+        if (!self->_wanted || !self->_foreground || self->_interrupted || self->_contactsOnly) return;
+        if (self->_configuredSession) [self openRoute];
+        PhoneIO *io = self->_io;
+        if (io && io->speaker && self->_wiredPlayer.isPlaying && atomic_load(&io->capturedFrames)
+            && atomic_load(&io->returnedSidetoneBuffers)) return;
+        NSDictionary *snapshot = [self routeReport];
+        [self->_routeAttempts addObject:[snapshot dictionaryWithValuesForKeys:
+            @[@"routeStrategy",@"mode",@"category",@"inputs",@"outputs",@"availableInputs",@"inputRequest",
+              @"status",@"capturedFrames",@"contactPlayerRunning",@"sidetoneOutput",@"returnedSidetoneBuffers"]]];
+        [self deactivate];
+        self->_strategy = self->_strategy == StandardMultiroute ? DualMultiroute : PlayAndRecord;
+        if (self->_strategy == PlayAndRecord) self->_fallbackStarted = NSProcessInfo.processInfo.systemUptime;
+        [self start];
+    });
+}
 - (void)start {
     if (!_wanted || !_foreground || _interrupted) return;
-    if (_granted || [_referenceMode isEqual:ReferencePlayback]) { [self openRoute]; return; }
+    if (_granted || [_referenceMode isEqual:ReferencePlayback]) {
+        [self openRoute]; [self scheduleNextStrategy]; return;
+    }
     if (_requesting) return;
     _requesting = YES;
     [AVAudioApplication requestRecordPermissionWithCompletionHandler:^(BOOL allowed) {
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_requesting = NO; self->_granted = allowed;
             if (!self->_wanted || !self->_foreground || self->_interrupted) return;
-            if (allowed || [self->_referenceMode isEqual:ReferencePlayback]) [self openRoute];
+            if (allowed || [self->_referenceMode isEqual:ReferencePlayback]) [self start];
             else { self->_detail = @"Allow microphone access for Morse in Settings."; [self batch:@[[self status]]]; }
         });
     }];
@@ -619,8 +680,10 @@ static NSData *paddlePilotWave(void) {
     BOOL ready = phoneReady(_io->core);
     if (_ready != ready) {
         _ready = ready;
-        _detail = ready ? (_contactsOnly ? @"Reading wired paddle contacts." : @"Wired paddles and iPhone speaker ready.")
-                        : @"Calibrating. Release both paddles.";
+        if (!ready) _detail = @"Calibrating. Release both paddles.";
+        else if (_contactsOnly) _detail = @"Reading wired paddle contacts.";
+        else if (_io->speaker) _detail = [NSString stringWithFormat:@"Wired paddles ready. Sidetone output is %@.",[self listeningDestination]];
+        else _detail = [NSString stringWithFormat:@"Reading wired paddles. iOS did not offer a separate %@ output.",[self listeningDestination]];
         [rows addObject:[self status]];
     }
     ElementEvent e;
@@ -636,6 +699,8 @@ static NSData *paddlePilotWave(void) {
             if (wanted && _contactsOnly) [self deactivate];
             _referenceMode = nil; _referenceReadings = nil;
             _contactsOnly = _measuring = NO; _previousSpeakerAttempt = nil;
+            _strategy = StandardMultiroute; _routeAttempts = [NSMutableArray array];
+            _bluetoothOutput = [NSUserDefaults.standardUserDefaults boolForKey:@"bluetooth-paddle-sidetone"];
             _wanted = wanted;
             if (wanted) [self start]; else { _detail = @"Audio converter off."; [self deactivate]; }
         }
@@ -652,16 +717,27 @@ static NSData *paddlePilotWave(void) {
         if (referenceMic) [self saveReferenceReading];
         BOOL measuring = [value isEqual:@"signal"];
         BOOL contactsOnly = measuring || [value isEqual:@"contacts"] || referencePlayback || referenceMic;
+        if (!contactsOnly && ![value isEqual:@"speaker"] && ![value isEqual:@"airpods"])
+            return @{@"error":@"Unknown adapter test."};
         if (!contactsOnly) _previousSpeakerAttempt = nil;
         else if (_wanted && !_contactsOnly) _previousSpeakerAttempt = [self routeReport];
         [self deactivate];
+        if (!contactsOnly) {
+            _strategy = StandardMultiroute; _routeAttempts = [NSMutableArray array];
+            _bluetoothOutput = [value isEqual:@"airpods"];
+        }
         _referenceMode = referencePlayback ? ReferencePlayback : (referenceMic ? ReferenceMic : nil);
         if (referencePlayback) _referenceReadings = [NSMutableDictionary dictionary];
         if (!_referenceMode) _referenceReadings = nil;
         _measuring = measuring; _contactsOnly = contactsOnly; _wanted = YES; _mute = NO; _reverse = NO; _sound = nil;
         _detail = _referenceMode ? @"Opening the reference tone." : measuring ? @"Opening the wired audio meter." :
-                  contactsOnly ? @"Opening wired contact test." : @"Opening paddle and iPhone speaker test.";
+                  contactsOnly ? @"Opening wired contact test." : @"Checking the wired paddle and sidetone output.";
         [self start];
+    } else if ([name isEqual:@"confirm-output"]) {
+        if (_contactsOnly || !_ready || !_io || !_io->speaker || !_wiredPlayer.isPlaying ||
+            !atomic_load(&_io->returnedSidetoneFrames) || ![value isEqual:(_bluetoothOutput ? @"airpods" : @"speaker")])
+            return @{@"error":@"The sidetone route changed. Check the current output."};
+        [NSUserDefaults.standardUserDefaults setBool:_bluetoothOutput forKey:@"bluetooth-paddle-sidetone"];
     } else if ([name isEqual:@"mark-signal"]) return [self markSignal:value];
     else if ([name isEqual:@"status"]) [self batch:@[[self status]]];
     else if ([name isEqual:@"reverse"]) { _reverse = [value boolValue]; [self applySound]; }
@@ -673,7 +749,17 @@ static NSData *paddlePilotWave(void) {
     return @{@"sequence":@(_sequence)};
 }
 - (void)route:(NSNotification *)note {
-    dispatch_async(dispatch_get_main_queue(), ^{ if (self->_configuredSession) [self openRoute]; });
+    NSUInteger reason = [note.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!self->_configuredSession) return;
+        if (!self->_contactsOnly && self->_strategy == PlayAndRecord && reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable
+            && NSProcessInfo.processInfo.systemUptime - self->_fallbackStarted > 1.) {
+            [self deactivate]; self->_strategy = StandardMultiroute;
+            [self->_routeAttempts removeAllObjects]; [self start]; return;
+        }
+        [self openRoute];
+        if (!self->_io || !self->_io->speaker) [self scheduleNextStrategy];
+    });
 }
 - (void)interrupt:(NSNotification *)note {
     BOOL began = [note.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan;
@@ -690,7 +776,13 @@ static NSData *paddlePilotWave(void) {
     });
 }
 - (void)suspend { _foreground = NO; _detail = @"Audio paused."; [self deactivate]; }
-- (void)resume { _foreground = YES; [self start]; }
+- (void)resume {
+    _foreground = YES;
+    if (!_configuredSession && _wanted && !_contactsOnly) {
+        _strategy = StandardMultiroute; [_routeAttempts removeAllObjects];
+    }
+    [self start];
+}
 
 // Browser lesson timelines are rendered on the explicitly assigned speaker while the
 // adapter is active. This player never generates or grades paddle elements.
@@ -726,7 +818,7 @@ static NSData *wave(NSArray *tones, NSDictionary *settings) {
     [self stopPrompt:nil];
     NSString *identifier=plan[@"id"];
     if (!_io || !_speaker || ![identifier isKindOfClass:NSString.class]) {
-        reply(@{@"error":@"The speaker route is unavailable."}); return;
+        reply(@{@"error":@"The sidetone output is unavailable."}); return;
     }
     _promptID=[identifier copy]; _promptReply=[reply copy];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
@@ -740,7 +832,7 @@ static NSData *wave(NSArray *tones, NSDictionary *settings) {
             if (channel) self->_prompt.channelAssignments=@[channel];
             if (!channel || ![self->_prompt play]) {
                 PhoneReply pending=self->_promptReply; self->_promptReply=nil; [self stopPrompt:nil];
-                pending(@{@"error":error.localizedDescription ?: @"Could not play the lesson on the iPhone speaker."}); return;
+                pending(@{@"error":error.localizedDescription ?: @"Could not play the lesson on the selected output."}); return;
             }
             [self batch:@[@{@"type":@"prompt-start",@"id":identifier,@"elapsed":@(self->_prompt.currentTime)}]];
         });
