@@ -19,3 +19,17 @@ unsigned phoneMask(PhoneCore *core);
 unsigned phoneEpoch(PhoneCore *core);
 bool phoneEvent(PhoneCore *core, ElementEvent *event);
 uint64_t phoneAudibleFrames(PhoneCore *core);
+
+// A probe reads one or two interleaved input channels independently. A reading
+// spans 25 complete 10 ms windows with the same acknowledged output setting.
+typedef struct PhoneSignalMeter PhoneSignalMeter;
+typedef struct { double rms, peak, tone[2]; } PhoneSignalLevel;
+typedef struct {
+    unsigned outputTag, ordinal, frames;
+    uint64_t endFrame;
+    PhoneSignalLevel channels[2];
+} PhoneSignalReading;
+PhoneSignalMeter *phoneMeterCreate(unsigned channels);
+void phoneMeterDestroy(PhoneSignalMeter *meter);
+void phoneMeterInput(PhoneSignalMeter *meter, const float *input, unsigned frames, unsigned outputTag);
+bool phoneMeterRead(PhoneSignalMeter *meter, PhoneSignalReading *reading);

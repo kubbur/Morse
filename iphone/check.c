@@ -52,11 +52,59 @@ static int scenario(unsigned rate, unsigned side, bool withSpeaker) {
                         rate, side, withSpeaker, starts, stops);
     return failed;
 }
+static bool nearLevel(double actual, double expected) {
+    return isfinite(actual) && fabs(actual-expected) < .0001;
+}
+static int meterScenario(unsigned rate, unsigned channels) {
+    PhoneCore *core = phoneCreate(rate);
+    if (!core) return 1;
+    PhoneSignalMeter *meter = phoneMeterCreate(channels);
+    if (!meter) { phoneDestroy(core); return 1; }
+    const unsigned window = 25*(unsigned)lround(rate*.01);
+    float source[254], pilots[254];
+    PhoneSignalReading r;
+    bool failed = false;
+    for (unsigned phase=0; phase<3; ++phase) {
+        unsigned length = phase == 2 ? 2*window : window;
+        for (unsigned pos=0; pos<length;) {
+            unsigned n = length-pos < 127 ? length-pos : 127;
+            phonePilots(core,pilots,n);
+            for (unsigned i=0; i<n; ++i) {
+                double unrelated = .125*sin(2*M_PI*400*(pos+i)/rate);
+                source[channels*i] = phase==0 ? unrelated : phase==1 ? 0 : .4f*pilots[2*i];
+                if (channels==2) source[channels*i+1] = phase==2 ? -.4f*pilots[2*i]+.2f*pilots[2*i+1] : 0;
+            }
+            phoneMeterInput(meter,source,n,phase+1);
+            pos+=n;
+        }
+        bool received = phoneMeterRead(meter,&r);
+        if (phase==2 && received) received = phoneMeterRead(meter,&r);
+        if (!received) { failed = true; break; }
+        if (r.outputTag != phase+1 || r.ordinal != (phase==2 ? 2u : 1u) || r.frames != window) failed=true;
+        PhoneSignalLevel a = r.channels[0], b = r.channels[1];
+        double rms = phase==0 ? .125/sqrt(2) : phase==1 ? 0 : .1/sqrt(2);
+        if (!nearLevel(a.rms,rms) || !nearLevel(a.tone[0],phase==2 ? .1 : 0) || !nearLevel(a.tone[1],0)) failed=true;
+        if (phase==0 && !nearLevel(a.peak,.125)) failed=true;
+        if (phase==1 && (a.peak || b.peak)) failed=true;
+        if (channels==2 && (!nearLevel(b.rms,phase==2 ? sqrt((.1*.1+.05*.05)/2) : 0) ||
+            !nearLevel(b.tone[0],phase==2 ? .1 : 0) || !nearLevel(b.tone[1],phase==2 ? .05 : 0))) failed=true;
+        if (phoneMeterRead(meter,&r)) failed=true;
+        // A partial buffer from the previous drive setting must never enter the next reading.
+        for (unsigned i=0;i<17*channels;++i) source[i]=1;
+        phoneMeterInput(meter,source,17,phase+1);
+    }
+    phoneMeterDestroy(meter); phoneDestroy(core);
+    if (failed) fprintf(stderr,"Signal meter failed at %u Hz, %u input channels\n",rate,channels);
+    return failed;
+}
 int main(void) {
     const unsigned rates[] = {44100, 48000};
-    for (unsigned i = 0; i < 2; ++i)
+    for (unsigned i = 0; i < 2; ++i) {
+        if (meterScenario(rates[i],1) || meterScenario(rates[i],2)) return EXIT_FAILURE;
         for (unsigned side = 0; side < 4; ++side)
             if (scenario(rates[i], side, true) || scenario(rates[i], side, false)) return EXIT_FAILURE;
+    }
+    puts("Jack meter passed silence, off-frequency audio and independent stereo returns at both sample rates.");
     puts("Simulated released, left, right and both passed at 44.1 and 48 kHz in both modes.");
     puts("Speaker PCM matched scoring edges. Contacts-only produced zero speaker frames and zero scoring marks.");
     return EXIT_SUCCESS;
