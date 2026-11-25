@@ -17,6 +17,7 @@ function canConfirmSpeaker() {
     last.testMode === 'speaker' && last.speakerActive && last.audibleFrames > audibleAtStart;
 }
 function verdict() {
+  if (last?.testMode === 'reference') return 'Jack output voltage comparison';
   if (last?.testMode === 'signal') {
     return last.jackAudio.measurements.length === positions.length ? 'Four labeled audio measurements collected' : 'Audio measurement incomplete';
   }
@@ -25,9 +26,31 @@ function verdict() {
   if (!canConfirmSpeaker()) return 'Contacts passed. No keyed speaker audio was measured.';
   return $('heard').checked ? 'Passed on this iPhone' : 'Contacts passed. Confirm where you heard the sidetone.';
 }
-function showMeter(enabled) {
-  $('signal-test').hidden = !enabled;
-  $('contact-test').hidden = enabled;
+function showTest(mode) {
+  $('signal-test').hidden = mode !== 'signal';
+  $('reference-test').hidden = mode !== 'reference';
+  $('contact-test').hidden = mode === 'signal' || mode === 'reference';
+}
+function drawComparison(test) {
+  const a = test.phases['reference-playback'], b = test.phases['reference-mic'];
+  const names = ports => ports.map(p => p.name+' ('+p.type+')').join(', ') || 'none';
+  for (const [id, reading] of [['playback-route',a], ['mic-route',b]]) {
+    $(id).textContent = reading ? [
+      reading.detail,
+      'Output  '+names(reading.outputs)+' · Volume '+Math.round(reading.systemOutputVolume*100)+'%',
+      'Input  '+names(reading.inputs),
+      ...(id === 'mic-route' ? [reading.capturedFrames.toLocaleString()+' input frames captured'] : [])
+    ].join('\n') : 'Awaiting test.';
+  }
+  $('reference-mic').disabled = switching || test.phase !== 'reference-playback';
+  $('reference-stop').disabled = switching || test.stopped;
+  $('mic-volts').disabled = !b;
+  $('reference-volume').textContent = a && b && Math.abs(a.systemOutputVolume-b.systemOutputVolume) > .001 ?
+    'Volume changed. Match the playback-only reading at '+Math.round(a.systemOutputVolume*100)+'% before comparing.' : '';
+}
+function meterVolts(id) {
+  const value = $(id).value.trim().replace(',', '.');
+  return /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) && Number.isFinite(Number(value)) ? Number(value) : null;
 }
 function drawMeter(row) {
   const m = row.jackAudio;
@@ -62,7 +85,8 @@ function draw(row) {
   if (!started) return;
   if (session !== status.session) { reset(); session=status.session; }
   $('state').textContent=status.detail;
-  showMeter(row.testMode === 'signal');
+  showTest(row.testMode);
+  if (row.testMode === 'reference') { drawComparison(row.jackComparison); return; }
   if (row.testMode === 'signal') { drawMeter(row); return; }
   $('contacts').hidden = !row.canTestContacts;
   if (!ready) { reset(); $('step').textContent=''; return; }
@@ -91,19 +115,29 @@ async function start(mode) {
   if (switching) return;
   ++generation; reset(); session=null; last=null; started=false; switching=true;
   $('state').textContent='Opening the wired audio route…'; $('step').textContent='';
-  showMeter(mode === 'signal'); $('levels').textContent='Waiting for samples.'; $('drive').textContent='';
+  showTest(mode.startsWith('reference-') ? 'reference' : mode); $('levels').textContent='Waiting for samples.'; $('drive').textContent='';
+  if (mode === 'reference-playback') {
+    $('playback-volts').value=''; $('mic-volts').value='';
+    $('playback-route').textContent='Opening playback…'; $('mic-route').textContent='Awaiting test.';
+    $('reference-volume').textContent='';
+  }
+  $('reference').disabled=true; $('reference-mic').disabled=true; $('reference-stop').disabled=true;
   $('mark').disabled=true; $('signal-step').textContent=''; $('signal-note').textContent='';
   $('start').disabled=true; $('signal').disabled=true; $('contacts').hidden=true; $('copy').disabled=true;
   try {
-    await post({op:'paddle',name:'probe',value:mode});
+    const reply=await post({op:'paddle',name:'probe',value:mode});
+    if (reply?.error) throw new Error(reply.error);
     started=true; $('start').textContent='Retry with iPhone speaker';
-  } catch { $('state').textContent='Could not start the adapter test.'; }
-  finally { switching=false; $('start').disabled=false; $('signal').disabled=false; $('copy').disabled=false; }
+  } catch (error) { $('state').textContent=error.message || 'Could not start the adapter test.'; }
+  finally { switching=false; $('start').disabled=false; $('signal').disabled=false; $('reference').disabled=false; $('copy').disabled=false; }
   await poll();
 }
 $('start').onclick=()=>start('speaker');
 $('contacts').onclick=()=>start('contacts');
 $('signal').onclick=()=>start('signal');
+$('reference').onclick=()=>start('reference-playback');
+$('reference-mic').onclick=()=>start('reference-mic');
+$('reference-stop').onclick=()=>start('reference-stop');
 $('mark').onclick=async () => {
   const m=last?.jackAudio, run=generation;
   if (!m?.live || switching || marking || m.measuringPosition || m.measurements.length >= positions.length) return;
@@ -130,6 +164,9 @@ $('copy').onclick=async () => {
     draw(row);
     const report={at:new Date().toISOString(),verdict:verdict(),observations,
       heardFromSpeaker:!!(canConfirmSpeaker() && $('heard').checked),route:last};
+    if (row.testMode === 'reference') report.meterVoltsAC={
+      playbackOnly:meterVolts('playback-volts'), withWiredMic:meterVolts('mic-volts')
+    };
     const pretty=JSON.stringify(report,null,2);
     await post({op:'copy',text:pretty.length < 16000 ? pretty : JSON.stringify(report)}); $('copy').textContent='Copied';
   } catch { $('copy').textContent='Copy failed. Try again'; }

@@ -9,10 +9,12 @@ p{margin:.5rem 0}button{font:inherit;border:1px solid currentColor;border-radius
 button:disabled{opacity:.38}.primary{background:#146f60;color:white;border-color:#146f60}
 .contacts{display:flex;gap:.45rem;margin:1rem 0}.contacts span{flex:1;text-align:center;border:1px solid #818985;border-radius:.6rem;padding:.72rem .2rem}
 .contacts .down{background:#126b56;border-color:#126b56;color:white}.routes{font-size:.88rem;white-space:pre-line;color:inherit;opacity:.83}
-#step{font-weight:650}label{display:block;margin:1rem 0}input{width:1.15rem;height:1.15rem;vertical-align:middle}
+#step{font-weight:650}label{display:block;margin:1rem 0}input[type=checkbox]{width:1.15rem;height:1.15rem;vertical-align:middle}
+.volts{font:inherit;width:5rem;padding:.2rem .4rem}
 </style></head><body>
 <h1>Paddle test</h1><p>Connect the paddle and converter to the USB‑C adapter. Leave both paddles up to start.</p>
 <button class="primary" type="button" id="start">Start adapter test</button>
+<button type="button" id="reference">Compare jack output</button>
 <button type="button" id="signal">Measure jack audio</button>
 <p id="state" aria-live="polite">Ready to start.</p>
 <div id="contact-test">
@@ -26,6 +28,17 @@ button:disabled{opacity:.38}.primary{background:#146f60;color:white;border-color
 <h2>Headphone output</h2><div id="drive" class="routes"></div>
 <p id="signal-step" aria-live="polite"></p>
 <button id="mark" type="button" disabled>Mark released</button><p id="signal-note" role="status"></p>
+</section>
+<section id="reference-test" hidden>
+<h2>1 kHz left channel · −18 dBFS</h2>
+<p>Measure AC volts from tip to sleeve on the paddle-end plug. Use the same iPhone volume for both readings.</p>
+<h2>Playback only</h2><div id="playback-route" class="routes"></div>
+<label>Meter reading (optional) <input class="volts" id="playback-volts" inputmode="decimal" aria-label="Playback only volts"> V AC</label>
+<button id="reference-mic" type="button">Enable wired mic</button>
+<h2>With wired mic</h2><div id="mic-route" class="routes"></div>
+<label>Meter reading (optional) <input class="volts" id="mic-volts" inputmode="decimal" aria-label="With wired mic volts"> V AC</label>
+<p id="reference-volume" role="status"></p>
+<button id="reference-stop" type="button">Stop tone</button>
 </section>
 <p id="result" role="status"></p><h2>Audio route</h2><div id="routes" class="routes">Waiting for iOS.</div>
 <p><button id="copy" type="button">Copy test report</button></p><script type="module" src="/probe.js"></script>

@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
 """Build a sideloadable Morse IPA from a release source ZIP or repository checkout."""
 import argparse
+import math
 import os
 import plistlib
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import wave
 import zipfile
 from pathlib import Path, PurePosixPath
 
 KIT = Path(__file__).resolve().parent
 MIN_IOS = "26.2"
+
+
+def write_jack_reference(path):
+    # Exactly 1,000 complete cycles in one second at 48 kHz. Only the left channel is driven.
+    peak = 32767 * 10 ** (-18 / 20)
+    cycle = b"".join(struct.pack("<hh", round(peak * math.sin(math.tau * n / 48)), 0)
+                     for n in range(48))
+    with wave.open(str(path), "wb") as output:
+        output.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
+        output.writeframes(cycle * 1000)
 
 
 def unpack(archive, destination):
@@ -83,6 +96,7 @@ def stage(source, work):
     app = work / "Payload/Morse.app"
     web = app / "Trainer"
     shutil.copytree(desktop / "website/public", web)
+    write_jack_reference(app / "JackReference.wav")
     for name in ["phone.js", "probe.html", "probe.js", "phone-audio.mjs"]:
         shutil.copyfile(KIT / name, web / name)
     # Both lesson modules import this adapter. Keep the original player for ordinary playback;
@@ -146,7 +160,8 @@ def build(app, core, desktop, version, output):
                     archive.write(file, file.relative_to(app.parent.parent))
         with zipfile.ZipFile(pending) as archive:
             if archive.testzip() or not {"Payload/Morse.app/Morse","Payload/Morse.app/Trainer/index.html",
-                                         "Payload/Morse.app/Trainer/probe.html"} <= set(archive.namelist()):
+                                         "Payload/Morse.app/Trainer/probe.html",
+                                         "Payload/Morse.app/JackReference.wav"} <= set(archive.namelist()):
                 raise ValueError("IPA validation failed.")
         os.replace(pending, output)
     finally:
