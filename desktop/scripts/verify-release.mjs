@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { listPackage, extractFile, statFile, getRawHeader } from '@electron/asar';
 import { getCurrentFuseWire, FuseV1Options } from '@electron/fuses';
 import { root, stageApp } from './stage.mjs';
+import { macInstaller } from '../src/update-manager.mjs';
 
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const report = JSON.parse(await readFile(join(root, 'dist/darwin-build.json'), 'utf8'));
@@ -39,6 +40,12 @@ for (const build of report.builds) {
   for (const key of [FuseV1Options.OnlyLoadAppFromAsar, FuseV1Options.EnableEmbeddedAsarIntegrityValidation]) assert.equal(fuses[key], 49);
   assert.equal(hash(await readFile(join(root, 'dist', build.file))), build.sha256);
   const archive = validateArchive(build.file, build.architecture);
+  if (archive.sparkleFeed && process.platform === 'darwin' && build.architecture === process.arch) {
+    const updater = await macInstaller(join(bundle,'Contents/Resources'));
+    assert.equal(typeof updater?.configure, 'function');
+    assert.equal(typeof updater?.install, 'function');
+    archive.updaterModuleLoaded = true;
+  }
   assert.equal(archive.asarSha256, hash(await readFile(asar)), 'Archive contains the audited app');
   assert.equal(archive.asarHeader.algorithm, 'SHA256');
   assert.equal(archive.asarHeader.hash, hash(getRawHeader(asar).headerString));

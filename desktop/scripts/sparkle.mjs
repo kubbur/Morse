@@ -33,9 +33,12 @@ async function sdk() {
 
 export async function addSparkle(bundle, arch, {publicKey, feedURL} = {}) {
   const resources = join(bundle, 'Contents', 'Resources');
-  if (!publicKey && process.env.MORSE_UPDATE_PUBLIC_KEY_FILE)
-    publicKey = (await readFile(process.env.MORSE_UPDATE_PUBLIC_KEY_FILE,'utf8')).trim();
-  if (!publicKey) return; // An unconfigured build can still notify and open its GitHub download.
+  if (!publicKey) {
+    const pkg = JSON.parse(await readFile(join(root,'package.json'),'utf8'));
+    const keyFile = /^\d+\.\d+\.\d+$/.test(pkg.version) ? join(root,'assets/sparkle-public-key.txt') : process.env.MORSE_UPDATE_PUBLIC_KEY_FILE;
+    if (!keyFile) return;
+    publicKey = (await readFile(keyFile,'utf8')).trim();
+  }
   if (!/^[A-Za-z0-9+/]{43}=$/.test(publicKey) || Buffer.from(publicKey,'base64').length !== 32)
     throw new Error('Expected a base64-encoded 32-byte Sparkle public key.');
   const source = await sdk();

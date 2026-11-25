@@ -1,15 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createHash, generateKeyPairSync, verify } from 'node:crypto';
+import { basename, join } from 'node:path';
+import { createHash, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { availableUpdate, checkUpdate } from '../src/updates.mjs';
 import { UpdateManager, macInstaller } from '../src/update-manager.mjs';
 import { signedItem, sparklePublicKey } from '../scripts/appcast.mjs';
 import { bundleVersion } from '../scripts/sparkle.mjs';
 import { LearnerDB } from '../src/learner-db.mjs';
+import { root } from '../scripts/stage.mjs';
 
 const bytes = Buffer.from('disposable release fixture'), digest = createHash('sha256').update(bytes).digest('hex');
 const row = { tag_name:'morse-v2.0.0', body:'Local test <b>notes</b>', assets:[{name:'Morse-2.0.0-mac-arm64.zip',
@@ -86,4 +87,41 @@ test('an ad hoc update has different signed code and a verifiable archive signat
     data[0]^=1;assert.equal(verify(null,data,publicKey,signature),false);
   }
   assert.notEqual(hashes[0],hashes[1]);
+});
+
+test('the publisher verifies the signer and both final archives before writing the feeds',
+  {skip:process.platform!=='darwin'}, async t => {
+  const dir = await temporary(t);
+  const {privateKey, publicKey} = generateKeyPairSync('ed25519');
+  const pub = sparklePublicKey(publicKey), dist = join(dir,'dist');
+  for (const name of ['scripts','assets','dist','build','Morse.app/Contents']) await mkdir(join(dir,name),{recursive:true});
+  for (const name of ['appcast.mjs','stage.mjs']) await copyFile(join(root,'scripts',name),join(dir,'scripts',name));
+  await writeFile(join(dir,'assets/sparkle-public-key.txt'),pub);
+  await writeFile(join(dir,'package.json'),JSON.stringify({version:'2.0.0'}));
+  const responses = {'public-key':pub};
+  const archives = [];
+  for (const arch of ['arm64','x64']) {
+    const path = join(dist,`Morse-2.0.0-mac-${arch}.zip`);
+    const info = {CFBundleIdentifier:'digital.kubbur.morse',CFBundleVersion:'2.0.0',CFBundleShortVersionString:'2.0.0',
+      SUPublicEDKey:pub,SUFeedURL:`https://github.com/kubbur/Morse/releases/latest/download/appcast-mac-${arch}.xml`};
+    const plist = execFileSync('/usr/bin/plutil',['-convert','xml1','-o','-','-'],{input:JSON.stringify(info)});
+    await writeFile(join(dir,'Morse.app/Contents/Info.plist'),plist);
+    execFileSync('/usr/bin/ditto',['-c','-k','--keepParent',join(dir,'Morse.app'),path]);
+    responses[basename(path)] = sign(null, await readFile(path), privateKey).toString('base64');
+    archives.push({path,feed:join(dist,`appcast-mac-${arch}.xml`)});
+  }
+  // Return only precomputed public signatures. The fixture never touches the login Keychain.
+  const helper = join(dir,'build/MorseReleaseKey');
+  const setResponses = values => writeFile(helper,`#!${process.execPath}\nconsole.log(${JSON.stringify(values)}[process.argv.at(-1).split('/').pop()]);\n`,{mode:0o755});
+  const publish = () => execFileSync(process.execPath,[join(dir,'scripts/appcast.mjs'),'--keychain'],{stdio:'pipe'});
+  await setResponses({...responses, [basename(archives[1].path)]:responses[basename(archives[0].path)]});
+  assert.throws(publish,/Update signature failed verification/);
+  for (const {feed} of archives) await assert.rejects(readFile(feed),{code:'ENOENT'});
+  await setResponses(responses);
+  publish();
+  for (const {path,feed} of archives) {
+    const xml = await readFile(feed,'utf8');
+    const signature = Buffer.from(/sparkle:edSignature="([^"]+)"/.exec(xml)[1],'base64');
+    assert.ok(verify(null,await readFile(path),publicKey,signature));
+  }
 });

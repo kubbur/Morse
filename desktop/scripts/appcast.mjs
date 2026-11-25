@@ -1,7 +1,7 @@
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { readFile, realpath, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { root } from './stage.mjs';
 
@@ -12,9 +12,12 @@ export function sparklePublicKey(key) {
 }
 
 export function signedItem(archive, key, {version, build=version, url}) {
+  return verifiedItem(archive, createPublicKey(key), sign(null, archive, key), {version, build, url});
+}
+
+function verifiedItem(archive, publicKey, signature, {version, build, url}) {
   const escape = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]));
-  const signature = sign(null, archive, key);
-  if (!verify(null, archive, createPublicKey(key), signature)) throw Error('Update signature failed verification.');
+  if (!verify(null, archive, publicKey, signature)) throw Error('Update signature failed verification.');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>
 <title>Morse for Mac</title><item><title>Morse ${escape(version)}</title>
@@ -24,15 +27,27 @@ export function signedItem(archive, key, {version, build=version, url}) {
 </item></channel></rss>\n`;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && await realpath(process.argv[1]).catch(() => null) === fileURLToPath(import.meta.url)) {
   const {version} = JSON.parse(await readFile(join(root,'package.json')));
-  if (!/^\d+\.\d+\.\d+$/.test(version) || process.stdin.isTTY) throw Error('For a stable release, supply the Ed25519 PKCS#8 signing key on standard input.');
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const input = Buffer.concat(chunks);
-  let key;
-  try { key = createPrivateKey(input); } finally { input.fill(0); for (const c of chunks) c.fill(0); }
-  const pub = sparklePublicKey(key), output=[];
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw Error('Appcasts require a stable version.');
+  const pub = (await readFile(join(root,'assets/sparkle-public-key.txt'),'utf8')).trim();
+  const publicKey = createPublicKey({format:'jwk',key:{kty:'OKP',crv:'Ed25519',x:Buffer.from(pub,'base64').toString('base64url')}});
+  let signArchive;
+  if (process.argv[2] === '--keychain') {
+    const helper = join(root,'build/MorseReleaseKey');
+    if (execFileSync(helper,['public-key'],{encoding:'utf8'}).trim() !== pub) throw Error('The Morse keychain key differs from the release public key.');
+    signArchive = path => Buffer.from(execFileSync(helper,['sign',path],{encoding:'utf8'}).trim(),'base64');
+  } else {
+    if (process.argv.length !== 2 || process.stdin.isTTY) throw Error('Use --keychain or pipe the Ed25519 PKCS#8 signing key to standard input.');
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const input = Buffer.concat(chunks);
+    let key;
+    try { key = createPrivateKey(input); } finally { input.fill(0); for (const c of chunks) c.fill(0); }
+    if (sparklePublicKey(key) !== pub) throw Error('The signing key differs from the release public key.');
+    signArchive = (_path, bytes) => sign(null,bytes,key);
+  }
+  const output=[];
   for (const arch of ['arm64','x64']) {
     const name='Morse-'+version+'-mac-'+arch+'.zip';
     const url='https://github.com/kubbur/Morse/releases/download/morse-v'+version+'/'+name;
@@ -43,7 +58,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (get('SUPublicEDKey')!==pub || get('CFBundleIdentifier')!=='digital.kubbur.morse' || get('CFBundleShortVersionString')!==version ||
         get('SUFeedURL')!=='https://github.com/kubbur/Morse/releases/latest/download/appcast-mac-'+arch+'.xml')
       throw Error('The archived '+arch+' app has a different key, feed, identifier or version.');
-    output.push([join(root,'dist','appcast-mac-'+arch+'.xml'), signedItem(await readFile(zip),key,{version,build:get('CFBundleVersion'),url})]);
+    const bytes = await readFile(zip);
+    const item = verifiedItem(bytes,publicKey,signArchive(zip,bytes),{version,build:get('CFBundleVersion'),url});
+    output.push([join(root,'dist','appcast-mac-'+arch+'.xml'), item]);
   }
   for (const [path,xml] of output) await writeFile(path,xml);
 }

@@ -1,4 +1,5 @@
 """Check the delivered archives, including Mac executable modes and symlinks."""
+import base64
 import hashlib
 import json
 import plistlib
@@ -7,7 +8,7 @@ import stat
 import struct
 import sys
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 archive_path, architecture, version = sys.argv[1:]
 
@@ -123,5 +124,17 @@ with zipfile.ZipFile(archive_path) as archive:
         assert prefix + 'Resources/LICENSE.electron.txt' in names
         assert prefix + 'Resources/LICENSES.chromium.html' in names
         result = {'kind': 'app', 'architecture': architecture, 'minimumMacOS': info['LSMinimumSystemVersion'], 'files': len(names), 'frameworkSymlinks': len(symlinks), 'asarSha256': hashlib.sha256(archive.read(prefix + 'Resources/app.asar')).hexdigest(), 'asarHeader': info['ElectronAsarIntegrity']['Resources/app.asar']}
+        parts = version.split('.')
+        if len(parts) == 3 and all(p.isdecimal() for p in parts) and tuple(map(int, parts)) >= (1, 1, 1):
+            key_path = Path(__file__).resolve().parents[1] / 'assets/sparkle-public-key.txt'
+            public = key_path.read_text().strip()
+            assert info['SUPublicEDKey'] == public and len(base64.b64decode(public, validate=True)) == 32
+            feed = 'https://github.com/kubbur/Morse/releases/latest/download/appcast-mac-' + architecture + '.xml'
+            assert info['SUFeedURL'] == feed and info['SUVerifyUpdateBeforeExtraction'] is True
+            addon = archive.read(prefix + 'Resources/MorseUpdater.node')
+            assert struct.unpack_from('<II', addon) == (0xFEEDFACF, cpu), 'Wrong Sparkle module architecture'
+            assert prefix + 'Frameworks/Sparkle.framework/Sparkle' in names
+            assert prefix + 'Resources/LICENSE.sparkle.txt' in names
+            result['sparkleFeed'] = feed
     assert archive.testzip() is None, 'Damaged archive'
 print(json.dumps(result))
