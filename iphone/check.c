@@ -6,7 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int scenario(unsigned rate, unsigned side, bool withSpeaker, unsigned block, const int16_t *loop) {
+typedef enum { ContactsOnly, SpeakerClock, InputClock } ClockMode;
+static int scenario(unsigned rate, unsigned side, ClockMode clock, unsigned block, const int16_t *loop) {
     PhoneCore *core = phoneCreate(rate);
     if (!core) return 1;
     const unsigned channels = loop ? 2 : 1;
@@ -16,6 +17,11 @@ static int scenario(unsigned rate, unsigned side, bool withSpeaker, unsigned blo
     bool open = false;
     uint64_t start = 0;
     unsigned dot = (unsigned)lround(rate * .040);
+    if (clock == InputClock) {
+        phoneSound(core,PhoneProbeWPM,PhoneProbeWPM,PhoneProbePitch,100,5,5,0,false);
+        dot = (unsigned)lround(rate * 1.2 / PhoneProbeWPM);
+    }
+    PhoneMark sounding = PhoneNoMark;
     for (unsigned frame = 0; frame < 3*rate; frame += block) {
         unsigned held = frame >= 2*rate && frame < 2*rate + rate/4 ? side : 0;
         if (loop) {
@@ -32,7 +38,8 @@ static int scenario(unsigned rate, unsigned side, bool withSpeaker, unsigned blo
         }
         phoneInput(core, mic, block, channels);
         if (phoneReady(core)) contacts |= 1u << phoneMask(core);
-        if (withSpeaker) {
+        if (clock == InputClock) phoneClockKeyer(core,block);
+        if (clock == SpeakerClock) {
             unsigned returned = phoneSpeaker(core, speaker, block);
             unsigned measured = 0;
             for (unsigned i=0; i<block; ++i) if (fabsf(speaker[i]) > .0001f) ++measured;
@@ -41,14 +48,18 @@ static int scenario(unsigned rate, unsigned side, bool withSpeaker, unsigned blo
         ElementEvent event;
         bool marked[block];
         for (unsigned i = 0; i < block; ++i) marked[i] = open;
-        while (phoneEvent(core, &event)) {
+        PhoneMark mark;
+        while (phoneEvent(core, &event, &mark)) {
+            if (event.kind != 1 && mark != PhoneNoMark) failed = 1;
             if (!event.kind) continue;
             if (event.kind == 1) {
                 if (open) failed = 1;
+                sounding = mark;
                 ++starts; start = event.frame; open = true;
             } else {
                 unsigned length = (unsigned)(event.frame - start);
                 if (!open || (length != dot && length != 3*dot)) failed = 1;
+                if (sounding != (length == dot ? PhoneDit : PhoneDah)) failed = 1;
                 if ((side == 1 && length != dot) || (side == 2 && length != 3*dot)) failed = 1;
                 if (side == 3 && length != (stops % 2 ? 3*dot : dot)) failed = 1;
                 ++stops; open = false;
@@ -58,13 +69,13 @@ static int scenario(unsigned rate, unsigned side, bool withSpeaker, unsigned blo
         for (unsigned i = 0; i < block; ++i)
             if (!isfinite(speaker[i]) || (!marked[i] && fabsf(speaker[i]) > .00001f)) failed = 1;
     }
-    bool expectMarks = side && withSpeaker;
+    bool expectMarks = side && clock != ContactsOnly;
     if (!(contacts & (1u << side)) || phoneMask(core) || !phoneReady(core) || starts != stops ||
-        (expectMarks ? (!starts || !phoneAudibleFrames(core)) : (starts || phoneAudibleFrames(core))) ||
-        (withSpeaker && side == 3 && starts < 2)) failed = 1;
+        (!!starts != expectMarks) || (!!phoneAudibleFrames(core) != (side && clock == SpeakerClock)) ||
+        (clock != ContactsOnly && side == 3 && starts < 2)) failed = 1;
     phoneDestroy(core);
-    if (failed) fprintf(stderr, "Failed at %u Hz, contacts %u, speaker %d, starts %u, stops %u\n",
-                        rate, side, withSpeaker, starts, stops);
+    if (failed) fprintf(stderr, "Failed at %u Hz, contacts %u, clock %d, starts %u, stops %u\n",
+                        rate, side, clock, starts, stops);
     return failed;
 }
 static bool nearLevel(double actual, double expected) {
@@ -124,7 +135,8 @@ int main(void) {
         const unsigned blocks[] = {128, phoneQueueFrames(rates[i],.023)};
         for (unsigned b = 0; b < 2; ++b)
             for (unsigned side = 0; side < 4; ++side)
-                if (scenario(rates[i],side,true,blocks[b],NULL) || scenario(rates[i],side,false,blocks[b],NULL)) return EXIT_FAILURE;
+                for (ClockMode clock = ContactsOnly; clock <= InputClock; ++clock)
+                    if (scenario(rates[i],side,clock,blocks[b],NULL)) return EXIT_FAILURE;
     }
     static int16_t loop[2*PhonePilotLoopRate];
     phonePilotLoopPCM16(loop);
@@ -137,12 +149,13 @@ int main(void) {
         }
     }
     for (unsigned side = 0; side < 4; ++side)
-        if (scenario(PhonePilotLoopRate,side,false,1200,loop) ||
-            scenario(PhonePilotLoopRate,side,true,1200,loop)) return EXIT_FAILURE;
+        for (ClockMode clock = ContactsOnly; clock <= InputClock; ++clock)
+            if (scenario(PhonePilotLoopRate,side,clock,1200,loop)) return EXIT_FAILURE;
     puts("Jack meter passed silence, off-frequency audio and independent stereo returns at both sample rates.");
     puts("Simulated released, left, right and both passed at 44.1 and 48 kHz in both modes.");
     puts("The same contacts, speaker and scoring checks passed with 23 ms audio buffers.");
     puts("The native player's stereo loop passed sample checks and all four contacts on a dual-mono microphone return.");
     puts("Speaker PCM matched scoring edges. Contacts-only produced zero speaker frames and zero scoring marks.");
+    puts("The input-clock speaker probe selected dits and dahs at scoring key-down with matching sample durations.");
     return EXIT_SUCCESS;
 }

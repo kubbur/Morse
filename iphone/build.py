@@ -92,6 +92,11 @@ def stage(source, work):
         section(text, "typedef struct { double phase[2], gain;", "static OSStatus speakerRender("),
         section(text, "typedef void (*ContactCallback)", "typedef struct {\n    Detector detector;"),
     ]
+    # Expose the mark the release keyer already chose at its original key-down frame.
+    down = "emitElement(k->stream,k->epoch,1,frame,k->rate);"
+    if common[1].count(down) != 1:
+        raise ValueError("The release key-down event changed. Update the iPhone keyer integration.")
+    common[1] = common[1].replace(down, "emitElement(k->stream,k->epoch,k->last==1 ? DitStart : DahStart,frame,k->rate);")
     (core / "ReleaseDSP.inc").write_text("\n\n".join(common) + "\n")
     app = work / "Payload/Morse.app"
     web = app / "Trainer"

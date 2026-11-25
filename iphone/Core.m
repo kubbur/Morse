@@ -7,6 +7,7 @@
 #include <string.h>
 
 // Generated from the supplied release. The hardware adapter and UI live in this kit.
+enum { DitStart = 3, DahStart };
 #include "ReleaseDSP.inc"
 
 struct PhoneCore {
@@ -77,6 +78,7 @@ unsigned phoneSpeaker(PhoneCore *c, float *mono, unsigned frames) {
     if (audible) atomic_fetch_add(&c->audible, audible);
     return audible;
 }
+void phoneClockKeyer(PhoneCore *c, unsigned frames) { renderKeyer(&c->keyer, frames, NULL); }
 void phoneSound(PhoneCore *c, unsigned wpm, unsigned spacing, unsigned pitch,
                 unsigned volume, unsigned rise, unsigned fall, unsigned curve, bool modeB) {
     ToneSettings setting = {.wpm=MAX(5,MIN(80,wpm)), .pitchHz=MAX(200,MIN(2000,pitch)),
@@ -96,7 +98,15 @@ void phoneInvalidate(PhoneCore *c) { interruptElements(&c->stream); }
 bool phoneReady(PhoneCore *c) { return atomic_load(&c->ready); }
 unsigned phoneMask(PhoneCore *c) { return atomic_load(&c->physical); }
 unsigned phoneEpoch(PhoneCore *c) { return atomic_load(&c->stream.epoch); }
-bool phoneEvent(PhoneCore *c, ElementEvent *event) { return takeElement(&c->stream, event); }
+bool phoneEvent(PhoneCore *c, ElementEvent *event, PhoneMark *mark) {
+    if (!takeElement(&c->stream, event)) return false;
+    *mark = PhoneNoMark;
+    if (event->kind == DitStart || event->kind == DahStart) {
+        *mark = event->kind == DitStart ? PhoneDit : PhoneDah;
+        event->kind = 1; // Keep the original scoring protocol.
+    }
+    return true;
+}
 uint64_t phoneAudibleFrames(PhoneCore *c) { return atomic_load(&c->audible); }
 
 enum { SignalWindows = 25, SignalCapacity = 16 };

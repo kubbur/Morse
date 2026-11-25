@@ -12,6 +12,8 @@ enum { PhonePilotLoopRate = 48000 };
 void phonePilotLoopPCM16(int16_t *stereo);
 void phoneInput(PhoneCore *core, float *interleaved, unsigned frames, unsigned channels);
 unsigned phoneSpeaker(PhoneCore *core, float *mono, unsigned frames);
+// Use the input clock only when there is no speaker render queue.
+void phoneClockKeyer(PhoneCore *core, unsigned frames);
 void phoneSound(PhoneCore *core, unsigned wpm, unsigned spacing, unsigned pitch,
                 unsigned volume, unsigned rise, unsigned fall, unsigned curve, bool modeB);
 void phoneMute(PhoneCore *core, bool muted);
@@ -20,7 +22,9 @@ void phoneInvalidate(PhoneCore *core);
 bool phoneReady(PhoneCore *core);
 unsigned phoneMask(PhoneCore *core);
 unsigned phoneEpoch(PhoneCore *core);
-bool phoneEvent(PhoneCore *core, ElementEvent *event);
+typedef enum { PhoneNoMark, PhoneDit, PhoneDah } PhoneMark;
+enum { PhoneProbeWPM = 15, PhoneProbePitch = 600 };
+bool phoneEvent(PhoneCore *core, ElementEvent *event, PhoneMark *mark);
 uint64_t phoneAudibleFrames(PhoneCore *core);
 
 // A probe reads one or two interleaved input channels independently. A reading
