@@ -1,19 +1,20 @@
-## What’s new in Morse 1.1.1
+## What’s new in Morse 1.1.2
 
-- In **Settings → Input**, choose when the next sending signal plays. **Play after a pause** waits 0.5–15 seconds from your last mark, with a 2-second default. At slow spacing speeds, Morse gives you time to finish a word gap. **Wait for E to continue** keeps the result on screen until you press **E** or send one dit. A correct answer advances and a missed answer replays.
-- Under **Key input → Paddles · keyboard**, choose the dot and dash keys and show or hide the on-screen paddles. The defaults are **Z** for dot and **X** for dash.
-- The **Your sending** display keeps its height as letters and timing feedback appear. **Saved progress** brings the pairing and recovery controls together.
-- The Mac can display rankings from the website. Private pairing and score uploads require the site's version 2 service. Offline practice and local progress exports remain available.
-- **Settings → Updates** shows what’s new. After this manual upgrade from 1.1.0, Morse can install future updates signed with the Morse release key. Automatic updates are off by default.
+- **Your sending** highlights the next dit or dah and shows how many milliseconds a mark was short or long, or a gap was early or late. With a paddle, the timing feedback focuses on the gaps you control between letters and words.
+- A perfectly timed transmission earns a short burst of fireworks. With **Reduce Motion** enabled, the result appears without animation.
+- The **Listen first** prompt fits the letter, signal and replay button without an inner scrollbar. Longer prompts wrap inside the card.
+- **Saved progress** shows **Progress synced** once your changes reach the website. It distinguishes work waiting to upload from incoming website progress. Your Mac keeps its playback pause and continue settings when the website omits them.
 
 ## Install or upgrade
 
-Choose **arm64** for Apple Silicon or **x64** for Intel. Both require macOS 13 or later. In your current app, use **Saved progress → Export progress**, then quit Morse. Unzip the download and move **Morse.app** to Applications. Install 1.1.1 manually when upgrading from 1.1.0. These downloads use ad hoc signatures. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
+From **Morse 1.1.1**, open **Settings → Updates → Check for updates**, then choose **Install update**. From 1.1.0 or for a new install, download the ZIP for your Mac, quit Morse and move the unzipped **Morse.app** to Applications. Both builds require macOS 13 or later.
 
-The release opens your existing Morse profile. Preview builds use a separate profile. To move preview progress, export it there and review the replacement shown under **Saved progress → Import progress**.
+[Apple Silicon download](https://github.com/kubbur/Morse/releases/download/morse-v1.1.2/Morse-1.1.2-mac-arm64.zip) · [Intel download](https://github.com/kubbur/Morse/releases/download/morse-v1.1.2/Morse-1.1.2-mac-x64.zip)
 
-## Website package and rollback
+Both downloads use ad hoc signing. If macOS asks for approval when opening a manual download, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
 
-The web ZIP contains the browser trainer, server and Docker build files. The live service needs its own deployment. Only progress that reached the server can be recovered from it.
+## Progress and rollback
 
-To return to 1.1.0, first export any new progress, then quit Morse and reinstall your previous Mac build. Keep the pre-upgrade export in case you need to restore it. [Morse 1.1.0 downloads](https://github.com/kubbur/Morse/releases/tag/morse-v1.1.0)
+Use **Saved progress → Export progress** to keep a copy before upgrading. To return to 1.1.1, export any newer progress, quit Morse and reinstall the previous build for your Mac. [Morse 1.1.1 downloads](https://github.com/kubbur/Morse/releases/tag/morse-v1.1.1)
+
+The website ZIP contains the browser trainer, server and Docker build files for a separate deployment. [Website update ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.2/Morse-1.1.2-web.zip)
