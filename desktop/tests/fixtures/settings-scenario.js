@@ -147,6 +147,29 @@
   MorseAudio.prototype.play=async text=>{heard.push(text);return {completed:true};};
   KeyTone.prototype.set=async()=>{};
   change('send-source','straight'); tab('send');
+  const prompt=get('send-exercise');
+  function promptFits(state) {
+    const box=prompt.getBoundingClientRect(), css=getComputedStyle(prompt);
+    expect(prompt.scrollHeight===prompt.clientHeight && prompt.scrollWidth===prompt.clientWidth, 'Inner prompt scrollbar '+state);
+    for (const id of ['send-target-label','send-target','send-pattern','send-context','send-listen','send-help']) {
+      const el=get(id); if (el.hidden) continue;
+      const rect=el.getBoundingClientRect();
+      expect(rect.top>=box.top+prompt.clientTop+parseFloat(css.paddingTop)-1 && rect.bottom<=box.top+prompt.clientTop+prompt.clientHeight-parseFloat(css.paddingBottom)+1
+        && rect.left>=box.left+prompt.clientLeft+parseFloat(css.paddingLeft)-1 && rect.right<=box.left+prompt.clientLeft+prompt.clientWidth-parseFloat(css.paddingRight)+1,
+        id+' extends outside the padded prompt '+state);
+    }
+  }
+  change('send-level',29);
+  await document.fonts?.ready;
+  expect(get('send-target').textContent==='R' && !get('send-pattern').hidden && get('send-listen').textContent.includes('Hear signal'),'Guided R prompt');
+  promptFits('for R');
+  change('send-level',208);
+  prompt.style.maxWidth='240px';
+  promptFits('with both reply controls');
+  get('send-help').click();
+  expect(get('send-target').textContent==='NAME ANNA' && !get('send-context').hidden && !get('send-pattern').hidden,'Revealed reply with context');
+  promptFits('with a wrapped reply and its pattern');
+  prompt.style.removeProperty('max-width');
   change('send-pause',1);
   change('send-level',4); change('send-wpm',30);change('send-farnsworth',30);
   if (document.hidden || document.querySelector('dialog[open]') || get('send-listen').disabled) {
@@ -155,7 +178,6 @@
   }
   // Let the view change and any native dialog focus restoration finish before
   // measuring practice. Start where the player has scrolled to see their sending.
-  await document.fonts?.ready;
   await tick(); await tick();
   window.scrollTo(0,Math.max(0,get('send-capture').getBoundingClientRect().top+scrollY-160));
   await tick();

@@ -497,7 +497,7 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 .send-heading .signal-level{margin:0;font-size:14px}
 .send-level-select{width:min(290px,40%);font-size:14px}
 #send-instruction{min-block-size:2lh;font-size:15px;line-height:1.5;margin:20px 0}
-.send-exercise{position:relative;text-align:center;padding:24px 16px;background:var(--bg);border:1px solid var(--border);border-radius:18px;block-size:clamp(230px,25vh,280px);overflow:auto;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:12px}
+.send-exercise{position:relative;text-align:center;padding:16px;background:var(--bg);border:1px solid var(--border);border-radius:18px;min-block-size:clamp(230px,25vh,280px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
 .send-exercise>*{flex-shrink:0}
 .send-target-label{font-size:11px;font-weight:700;letter-spacing:.15em;color:var(--muted)}
 .send-target{font-family:var(--mono);font-size:clamp(44px,8vw,76px);font-weight:700;line-height:1.15;color:var(--accent);overflow-wrap:anywhere;max-width:100%}
@@ -506,7 +506,7 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 .send-pattern-character{display:inline-flex;align-items:center;gap:6px}
 .send-pattern i{height:10px;min-width:10px;border-radius:8px;background:var(--text)}
 .send-pattern i.dash{min-width:30px}
-.send-example-actions{display:flex;gap:20px;align-items:center;justify-content:center;margin-top:5px}
+.send-example-actions{display:flex;flex-wrap:wrap;max-inline-size:100%;gap:8px 20px;align-items:center;justify-content:center;margin-top:5px}
 .send-example-actions .button{padding:10px 17px;min-height:42px;font-size:14px}
 #send-context{margin:0;max-width:600px}
 .send-input-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;color:var(--muted);font-size:12px;line-height:1.5;margin:20px 0 10px}
@@ -648,7 +648,7 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
  .send-heading .signal-level{font-size:12px}
  .send-level-select{width:42%;padding:10px;font-size:12px}
  #send-instruction{font-size:13px;margin:15px 0}
- .send-exercise{padding:20px 10px;block-size:clamp(224px,30vh,270px);gap:10px}
+ .send-exercise{padding:20px 10px;min-block-size:clamp(224px,30vh,270px)}
  .send-pattern{gap:10px}
  .send-pattern i{height:8px;min-width:8px}.send-pattern i.dash{min-width:24px}
  .send-input-bar{align-items:flex-start;gap:10px;flex-wrap:wrap;margin-top:14px;font-size:11px}
