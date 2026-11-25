@@ -1569,8 +1569,8 @@ function changeSettings(updates) {
   const audioAlphabet = isGrowingCourse(p.settings) && courseStage(p.settings.courseLevel).audioAlphabet;
   p.settings = sanitizeSettings({ ...p.settings, ...updates, ...(courseChanged ? { courseLevel: audioAlphabet ? earCourseLevelFor(Number(updates.courseCount)) : courseLevelFor(Number(updates.courseCount), 1) } : {}) });
   mirrorSendingSpeed(p);
-  if (soundFields.some(key => p.settings[key] !== previousSettings[key]) && (sender?.busy || sender?.heard && !sender.result)) {
-    sender.pause('Sound settings changed. Hear the signal again.');
+  if (sender?.busy && !sender.playing && soundFields.some(key => p.settings[key] !== previousSettings[key])) {
+    sender.pauseInput('Sound settings changed. Send the answer again.');
   }
   const hadFocus = !!p.focus?.active;
   p.focus = sanitizeFocus(p.focus, p.settings);

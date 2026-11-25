@@ -8,7 +8,7 @@ window.cancelAnimationFrame=clearTimeout;
 // This private, single-view WebKit host does not provide a cross-tab lock manager.
 if (!navigator.locks) Object.defineProperty(navigator,'locks',{value:{request:async(_name,fn)=>fn()}});
 localStorage.setItem('morse.progress.v1',JSON.stringify(config.state));
-let raw = null, revision = 0, serverProfile, lastSound;
+let raw = null, revision = 0, serverProfile, lastSound, paddleMuted;
 const callbacks = [], commands = [], requests = [];
 const hardware = { type:'status', source:'off', phase:'waiting', output:'auto', outputs:[], outputReady:false, session:1, epoch:1,
   wpm:33, spacing:20, pitch:725, volume:38, rise:3, fall:9, curve:2, hasTone:true, hasVolume:true, sharedSound:false };
@@ -45,13 +45,20 @@ if (config.mode.startsWith('mac')) {
     async exchange(action,{body}={}){ return exchange(action,body); },
     async paddle(op,value){
       commands.push(op);
+      if(op==='mute') paddleMuted=value;
       if(op==='input') hardware.source=value;
       if(op==='arm' || op==='disarm') hardware.typing=op==='arm';
       if(op==='sound') {
+        const clockChanged=hardware.outputReady && lastSound && ['wpm','farnsworth','keyer'].some(key=>lastSound[key]!==value[key]);
         lastSound=value; Object.assign(hardware,{wpm:value.wpm,spacing:value.farnsworth,pitch:value.pitch,
           volume:value.volume,rise:value.rise,fall:value.fall,curve:value.curve,sharedSound:true});
+        if(clockChanged) {
+          const reset={type:'reset',epoch:++hardware.epoch,session:hardware.session};
+          queueMicrotask(()=>callbacks.forEach(fn=>fn(reset)));
+        }
       }
       if(['input','status','sound','arm','disarm'].includes(op)) queueMicrotask(()=>callbacks.forEach(fn=>fn({...hardware})));
+      if(op==='capture-position' || op==='sound') return {sequence:fixtureSequence};
       return {};
     }
   };
@@ -66,11 +73,19 @@ if (config.mode.startsWith('mac')) {
 window.testState=()=>JSON.parse(config.mode.startsWith('mac') ? raw : localStorage.getItem('morse.progress.v1'));
 window.testRequests=requests;
 window.testSound=()=>lastSound;
+window.testPaddleMuted=()=>paddleMuted;
 
 window.testPaddleReady=()=>{ Object.assign(hardware,{phase:'ready',outputReady:true,canArm:true}); callbacks.forEach(fn=>fn({...hardware})); };
+window.testPaddleReconnect=()=>{
+  Object.assign(hardware,{epoch:hardware.epoch+1,phase:'waiting',outputReady:false});
+  callbacks.forEach(fn=>fn({type:'reset',epoch:hardware.epoch,session:hardware.session}));
+  callbacks.forEach(fn=>fn({...hardware}));
+};
 
 let fixtureSequence = 0;
-window.testPaddleElement = (kind, milliseconds) => {
+window.testPaddleElement = (kind, milliseconds, defer = false) => {
   const row={type:'element',kind,seq:++fixtureSequence,epoch:hardware.epoch,session:hardware.session,rate:48000,frame:milliseconds*48};
-  callbacks.forEach(fn=>fn(row));
+  const deliver=()=>callbacks.forEach(fn=>fn(row));
+  if (defer) return deliver;
+  deliver();
 };

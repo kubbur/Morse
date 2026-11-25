@@ -86,9 +86,7 @@ export class SendingUI {
       else this.keyboardContact(contact, down);
     }, () => {
       if (this.native) void this.native.paddle('vband-release');
-      this.heard = false;
-      this.abort('VBand input was interrupted. Release both paddles and hear the signal again.');
-      this.updateMute();
+      this.pauseInput('VBand input was interrupted. Release both paddles and try again.');
     });
     const muteState = state => { if (this.native && state==='sending') this.connection?.resetStream(); this.muteState = state; this.renderInput(); this.renderExercise(); };
     this.sidetone = this.native ? new NativeSidetone(this.native, muteState) : new PaddleSidetone({ onState: muteState });
@@ -107,7 +105,7 @@ export class SendingUI {
         $('send-connect').textContent = this.connection?.wanted ? 'Disconnect Morse Paddle' : 'Connect Morse Paddle';
         this.renderInput();
       },
-      onReset: () => { if (this.source !== 'paddle') return; this.sidetone.release(); this.neutral = false; this.contacts = { dit: false, dah: false }; this.heard = false; this.abort('Paddle connection paused. Your unfinished answer was cleared.'); },
+      onReset: () => { if (this.source !== 'paddle') return; this.sidetone.release(); this.neutral = false; this.contacts = { dit: false, dah: false }; this.abort('Paddle connection paused. Your unfinished answer was cleared.', { keepGraded: true }); },
     });
     const select = $('send-level');
     for (const chapter of SENDING_CHAPTERS) {
@@ -189,15 +187,19 @@ export class SendingUI {
     });
     document.addEventListener('keydown', e => this.key(e, true), true);
     document.addEventListener('keyup', e => this.key(e, false), true);
-    window.addEventListener('blur', () => { this.suspended = true; this.pause('Input paused. Try the answer again.'); });
-    window.addEventListener('focus', () => { this.suspended = false; this.heard = false; this.updateMute(); this.renderExercise(); this.updateActivity(); this.wake.refresh(); });
+    window.addEventListener('blur', () => {
+      this.suspended = true;
+      this.updateActivity();
+      this.pauseInput();
+    });
+    window.addEventListener('focus', () => { this.suspended = false; this.updateActivity(); this.updateMute(); this.renderExercise(); this.wake.refresh(); });
     document.addEventListener('visibilitychange', () => {
       this.updateActivity();
-      if (document.hidden) this.pause();
-      else this.wake.refresh();
+      if (document.hidden) this.pauseInput();
+      else { this.updateMute(); this.wake.refresh(); }
     });
-    window.addEventListener('pagehide', () => { this.pageHidden = true; this.updateActivity(); this.pause(); });
-    window.addEventListener('pageshow', () => { this.pageHidden = false; this.updateActivity(); this.wake.refresh(); });
+    window.addEventListener('pagehide', () => { this.pageHidden = true; this.updateActivity(); this.pauseInput(); });
+    window.addEventListener('pageshow', () => { this.pageHidden = false; this.updateActivity(); this.updateMute(); this.wake.refresh(); });
   }
 
   bindHold(button, callback) {
@@ -216,7 +218,7 @@ export class SendingUI {
   get settings() { return { ...DEFAULT_SENDING_SETTINGS, ...this.getProfile().sending.settings, ...this.getProfile().settings }; }
   get usesPaddleSidetone() { return this.source === 'paddle' || (this.source === 'vband' && !!this.native); }
   get busy() { return this.down || this.playing || this.edges.length > 0 && !this.result; }
-  usable() { return this.active() && !this.suspended && !document.hidden && !document.querySelector('dialog[open]') && !this.playing; }
+  usable() { return this.active() && !this.suspended && !document.hidden && !this.pageHidden && !document.querySelector('dialog[open]') && !this.playing; }
   inputHeld() { if (this.source === 'vband') return !!this.vband.mask; return this.source === 'paddle' ? this.contacts.dit || this.contacts.dah : this.source === 'keyboard' ? this.contactHolds.dit.size > 0 || this.contactHolds.dah.size > 0 : this.straightHeld; }
 
   render() {
@@ -342,12 +344,12 @@ export class SendingUI {
   }
   updateActivity() {
     const active = this.active() || (!this.native && this.inputSettingsOpen());
-    this.connection.setActive(active && !document.hidden && !this.pageHidden && this.usesPaddleSidetone);
+    this.connection.setActive(active && !this.suspended && !document.hidden && !this.pageHidden && this.usesPaddleSidetone);
     this.updateWake();
   }
 
   updateMute() {
-    const mute = this.usesPaddleSidetone && this.active() && !this.suspended && (!this.heard || this.playing && !this.audioFinished || this.listenHeld || !!this.result?.valid || this.getProfile().sending.pendingLevel != null || !!document.querySelector('dialog[open]'));
+    const mute = this.usesPaddleSidetone && this.active() && !this.suspended && !document.hidden && !this.pageHidden && (!this.heard || this.playing && !this.audioFinished || this.listenHeld || !!this.result?.valid || this.getProfile().sending.pendingLevel != null || !!document.querySelector('dialog[open]'));
     return this.sidetone.setMuted(!!mute);
   }
 
@@ -416,10 +418,16 @@ export class SendingUI {
     this.renderExercise();
   }
 
-  pause(message = '') {
+  pause() {
     this.heard = false;
+    this.pauseInput('');
+  }
+  pauseInput(message = 'Input paused. Send the answer again.') {
+    let feedback = '';
+    if (this.playing && !this.audioFinished) feedback = 'Playback paused. Hear the signal again.';
+    else if (this.busy && !this.playing) feedback = message;
     if (this.native) this.connection.resetStream();
-    this.abort(message, { keepGraded: true });
+    this.abort(feedback, { keepGraded: true });
     this.updateMute(); this.audio.release(); this.tone.release();
     this.neutral = !this.contacts.dit && !this.contacts.dah;
   }
@@ -436,6 +444,7 @@ export class SendingUI {
     this.listenHeld ||= !!this.inputHeld();
     this.abort('', { preservePaddles: true, keepComparison });
     const item = this.item, stage = this.stage;
+    this.heard = false;
     this.playing = true; const generation = ++this.playGeneration;
     $('send-feedback').textContent = feedback || 'Listening…';
     this.renderExercise();
@@ -609,10 +618,11 @@ export class SendingUI {
   }
 
   key(event, down) {
+    const soundSlider = event.target?.type === 'range' && event.target.closest?.('#send-setup');
+    const editing = !soundSlider && event.target?.closest?.('input, textarea, select, summary, [contenteditable]:not([contenteditable="false"])');
     if (this.source === 'vband') {
-      const editable = event.target?.closest?.('input, textarea, select, summary, [contenteditable]:not([contenteditable="false"])');
       const enabled = this.active() && !this.suspended && !document.hidden && !document.querySelector('dialog[open]') &&
-        !editable && (!this.native || this.connection.acceptsVBand);
+        !editing && (!this.native || this.connection.acceptsVBand);
       if (this.vband.handle(event, down, enabled)) return;
     } else if (!down) {
       this.vband.handle(event, false, false);
@@ -630,7 +640,7 @@ export class SendingUI {
     }
     if (!this.active() || this.suspended || document.hidden || document.querySelector('dialog[open]') ||
         event.ctrlKey || event.altKey || event.metaKey || event.isComposing ||
-        ['INPUT', 'TEXTAREA', 'SELECT', 'SUMMARY'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
+        editing || event.target?.isContentEditable) return;
     let action;
     if (char === 'e' && !this.playing && (this.result?.valid || this.getProfile().sending.pendingLevel)) action = 'continue';
     else if (this.source === 'straight' && (event.code === 'Space' || char === ' ')) action = 'straight';
@@ -643,7 +653,7 @@ export class SendingUI {
       if (action === 'continue') { if (!this.inputHeld()) this.playPrompt(); }
       else if (action === 'straight') this.straight(true, event.timeStamp);
       else this.keyboardContact(action, true, code);
-    } else if (event.key === 'Escape') { event.preventDefault(); this.clearAnswer(); }
+    } else if (event.key === 'Escape' && !soundSlider) { event.preventDefault(); this.clearAnswer(); }
   }
 
   finish() {

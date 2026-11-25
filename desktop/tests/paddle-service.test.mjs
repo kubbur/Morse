@@ -23,6 +23,7 @@ test('isolated native helper persists volume and never arms typing, including af
       service.start();
       assert.match((await service.command('arm')).error,/starting/);
       assert.deepEqual(await service.command('status'),{});
+      assert.deepEqual(await service.command('capture-position'),{sequence:0});
       assert.equal(service.status.source,'off');
       assert.deepEqual(await service.command('input','vband'),{});
       const usbEpoch=service.status.epoch;
@@ -43,7 +44,7 @@ test('isolated native helper persists volume and never arms typing, including af
       if (fresh) {
         assert.equal(service.status.volume,62);
         assert.deepEqual(await service.command('word-spaces',true),{});
-        assert.deepEqual(await service.command('sound',{wpm:80,farnsworth:1,keyer:'b',pitch:1250,rise:3,fall:9,curve:2,volume:37}),{});
+        assert.deepEqual(await service.command('sound',{wpm:80,farnsworth:1,keyer:'b',pitch:1250,rise:3,fall:9,curve:2,volume:37}),{sequence:0});
       }
       assert.deepEqual(await service.command('status'),{});
       assert.deepEqual([service.status.wpm,service.status.spacing,service.status.pitch,service.status.rise,service.status.fall,

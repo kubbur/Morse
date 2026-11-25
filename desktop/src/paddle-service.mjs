@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline';
 const integer = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
 export function validCommand(op, v) {
   switch (op) {
-    case 'status': case 'arm': case 'disarm': case 'interrupt':
+    case 'status': case 'capture-position': case 'arm': case 'disarm': case 'interrupt':
     case 'vband-release': case 'calibrate': case 'cancelCalibration': case 'automatic': return v == null;
     case 'input': return ['off','paddle','vband'].includes(v);
     case 'vband': return !!v && integer(v.mask,0,3) && integer(v.epoch,0,0xffffffff) && Number.isSafeInteger(v.session) && v.session > 0;

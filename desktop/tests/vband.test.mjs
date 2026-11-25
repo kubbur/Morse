@@ -124,7 +124,7 @@ test('browser VBand runs the local keyer and swaps once, without opening the aud
 
 test('Mac VBand forwards raw physical masks to the selected native session, switches to the converter, and fences old events',async t=>{
   const calls=[];let deliver;
-  const api={onPaddle:fn=>{deliver=fn;},paddle:async(op,value)=>{ calls.push([op,value]);return {}; }};
+  const api={onPaddle:fn=>{deliver=fn;},paddle:async(op,value)=>{ calls.push([op,value]);return {sequence:0}; }};
   const {ui,doc,node}=trainer(t,api);
   ui.renderInput=()=>{}; ui.render=()=>{}; ui.abort=()=>{ui.vband.cancel();};
   ui.updateMute=()=>{}; ui.renderExercise=()=>{};
@@ -135,7 +135,8 @@ test('Mac VBand forwards raw physical masks to the selected native session, swit
   deliver(status); await Promise.resolve();
   assert.equal(ui.connection.acceptsVBand,true);
   ui.getProfile().sending.settings.reverse=true;
-  for (const [code,down] of [[L,true],[R,true],[L,false],[R,false]]) doc.listeners[down?'keydown':'keyup'](event(code));
+  const slider={tagName:'INPUT',type:'range',closest:()=>({})};
+  for (const [code,down] of [[L,true],[R,true],[L,false],[R,false]]) doc.listeners[down?'keydown':'keyup'](event(code,{target:slider}));
   assert.deepEqual(calls.filter(([op])=>op==='vband').map(([,v])=>v),[1,3,2,0].map(mask=>({mask,epoch:42,session:5})));
   assert.equal(ui.keyer,undefined);
   const edges=[]; ui.edge=e=>edges.push(e);

@@ -15,7 +15,8 @@ static void emit(NSDictionary *message) {
 @property DevicePreferences *prefs;
 @property NSString *phase, *detail, *outputLabel;
 @property NSArray *outputs;
-@property unsigned epoch, sequence, calibration;
+@property unsigned epoch, calibration;
+@property uint64_t sequence;
 @property BOOL sampling, active, isolated, typingEnabled, awaitRelease;
 @property NSUInteger focusGeneration;
 @property (copy) NSString *typingIssue;
@@ -158,6 +159,11 @@ static void emit(NSDictionary *message) {
     if ((left && app.processIdentifier==_target) || (!left && app.processIdentifier!=_target))
         [self clearTypingTarget];
 }
+- (NSDictionary *)capturePosition {
+    // Flush pre-existing audio events before reporting where a new answer may start.
+    [self tick];
+    return @{@"sequence":@(_sequence)};
+}
 - (NSDictionary *)command:(NSDictionary *)m {
     NSString *op=m[@"op"]; id value=m[@"value"];
     if ([op isEqual:@"input"]) {
@@ -175,6 +181,7 @@ static void emit(NSDictionary *message) {
     } else if ([op isEqual:@"vband-release"]) {
         if ([_source isEqual:@"vband"] && !_typingEnabled) { [self usbContacts:0]; [_engine interruptInput]; }
     } else if ([op isEqual:@"status"]) [self status];
+    else if ([op isEqual:@"capture-position"]) return [self capturePosition];
     else if ([op isEqual:@"disarm"]) { [self disarm]; [self status]; }
     else if ([op isEqual:@"arm"]) {
         if (value || ![self canArm]) return @{@"error":@"Connect a ready paddle and finish calibration before enabling typing."};
@@ -232,6 +239,7 @@ static void emit(NSDictionary *message) {
         _engine.toneSettings=t;
     } else return @{@"error":@"Unknown paddle command."};
     if (![@[@"mute",@"status",@"keyer",@"vband",@"vband-release"] containsObject:op]) [self status];
+    if ([op isEqual:@"sound"]) return [self capturePosition];
     return @{};
 }
 @end

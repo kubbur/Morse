@@ -71,7 +71,7 @@ export class BuiltInPaddle {
           this.configured = false;
         }
         ui.sidetone.setAvailable(this.input !== 'off' && !!row.output);
-        if (!ready && this.connected) { this.resetStream(); this.interrupt(); }
+        if (!ready && this.connected) { this.resetStream(); this.interrupt(true); }
         this.status = row; this.connected = ready;
         if (row.output) this.resolveMigration(row);
         ui.connectionStatus = ready ? 'ready' : 'waiting';
@@ -83,9 +83,14 @@ export class BuiltInPaddle {
           this.configured = false;
           this.key = null; this.configGeneration++;
           ui.sidetone.setAvailable(false);
+          this.resetStream(); this.interrupt(true);
+          return;
         }
         if (row.type === 'reset') this.stream.receive(row);
-        else if (this.active && this.connected && row.session === this.status?.session && row.epoch === this.status?.epoch) this.stream.receive(row);
+        else if (this.active && this.connected && this.configured && row.session === this.status?.session && row.epoch === this.status?.epoch) {
+          if (Number.isSafeInteger(row.seq) && row.seq <= this.captureAfter) return;
+          this.stream.receive(row);
+        }
       }
     });
     this.selectInput(ui.source);
@@ -121,11 +126,12 @@ export class BuiltInPaddle {
     this.command = null;
     this.stream.reset();
   }
-  interrupt() {
+  interrupt(outputLost = false) {
     this.command = null;
-    if (!this.active) return;
-    this.ui.heard = false;
-    this.ui.abort('Paddle timing was interrupted. Hear the signal again.'); this.ui.updateMute();
+    // A new keyer clock invalidates input. A prompt already playing in Web Audio
+    // can finish normally when only the keyer settings changed.
+    if (!this.active || (this.ui.playing && !outputLost)) return;
+    this.ui.pauseInput('Paddle input was interrupted. Send the answer again.');
   }
   resolveMigration(row) {
     const ui = this.ui, settings = ui.getProfile().sending.settings;
@@ -139,24 +145,29 @@ export class BuiltInPaddle {
     ui.migrationPending = ui.soundChoice(row);
     if (!ui.migrationPending) this.configure(ui.settings);
   }
-  configure(settings) {
+  configure(settings, resume = false) {
     if (this.ui.migrationPending || !this.status) return;
     const value = nativeSound(settings);
     const key = JSON.stringify(value);
-    if (this.key === key) return;
+    if (this.key === key && !resume) return;
+    const applied = this.key === key && this.configured;
     this.key = key; this.configured = false; this.resetStream();
     const generation = ++this.configGeneration;
-    this.api.paddle('sound', value).then(reply => {
+    // Both replies include the last event flushed by the helper. A delayed
+    // background mark or an old-speed mark cannot start the next answer.
+    const request = applied ? this.api.paddle('capture-position') : this.api.paddle('sound', value);
+    request.then(reply => {
       if (this.configGeneration !== generation) return;
-      this.configured = !reply?.error;
-      if (!this.configured) this.key = null;
+      this.configured = !reply?.error && Number.isSafeInteger(reply?.sequence) && reply.sequence >= 0;
+      if (this.configured) this.captureAfter = reply.sequence;
+      else this.key = null;
     });
   }
   setActive(active) {
     if (this.active === active) return;
     this.active = active; this.resetStream();
     if (!active && this.input === 'vband') void this.api.paddle('vband-release');
-    if (active && this.connected) this.configure(this.ui.settings);
+    if (active && this.connected) this.configure(this.ui.settings, true);
     else this.ui.sidetone.release();
   }
   disconnect() { this.setActive(false); }

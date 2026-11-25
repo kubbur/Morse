@@ -58,7 +58,11 @@
     check(!key('keydown', char, code, modifiers), 'Unbound character or shortcut was consumed'); key('keyup', char, code, modifiers);
   }
   // The literal E is a dash during an answer, and a command after grading.
-  tap('e','KeyL');
+  const volume = el('send-volume');
+  volume.focus();
+  check(!key('keydown','ArrowRight','ArrowRight',{},volume), 'Sending stole a slider adjustment');
+  check(key('keydown','e','KeyL',{},volume), 'Focused Send slider blocked the assigned paddle');
+  key('keyup','e','KeyL',{},volume);
   await wait(() => el('send-capture').dataset.result === 'retry', 'Remapped dash was graded');
   check(heard.length === 1 && current().sending.attempts === attempts + 1, 'Retry ran early');
   check(!key('keydown','e','KeyL',{},el('send-level')), 'Continue stole keyboard input from a control');
