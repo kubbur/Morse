@@ -110,7 +110,7 @@ test('old R mixed practice resumes as single-character review once without losin
   assert.equal(s.pendingLevel, null); assert.equal(imported.stats.xp, 4321);
   for (const key of ['attempts', 'clean', 'characters', 'earned', 'sounds']) assert.deepEqual(s[key], old[key]);
   assert.deepEqual(imported.previousTiming, {wpm:30,farnsworth:25});
-  assert.deepEqual(s.settings, {...old.settings, farnsworth: imported.settings.farnsworth});
+  assert.deepEqual(s.settings, {...old.settings, farnsworth: imported.settings.farnsworth, continueMode: 'timed', pauseSeconds: 2});
   assert.deepEqual(sanitizeSending(s), s);
   assert.deepEqual(syncProfile(imported).sending, { ...s, settings: { ...s.settings, reverse: false } });
 });
@@ -166,7 +166,7 @@ test('fresh listening and sending share their timing while saved iambic and reve
   assert.equal(p.sending.settings.wpm, p.settings.wpm); assert.equal(p.settings.wpm, 30);
   assert.equal(p.sending.settings.farnsworth, p.settings.farnsworth); assert.equal(p.settings.farnsworth, 15);
   assert.equal(p.sending.settings.keyer, 'a');
-  assert.deepEqual(sanitizeSendingSettings({ wpm: 5, farnsworth: 60, keyer: 'unsafe' }), { wpm: 5, farnsworth: 5, keyer: 'a', reverse: false });
+  assert.deepEqual(sanitizeSendingSettings({ wpm: 5, farnsworth: 60, keyer: 'unsafe' }), { wpm: 5, farnsworth: 5, keyer: 'a', reverse: false, continueMode: 'timed', pauseSeconds: 2 });
   assert.equal(sanitizeSendingSettings({ wpm: 25 }).farnsworth, 25);
   p.sending.settings.keyer = 'b';
   assert.equal(sanitizeSending(p.sending).settings.keyer, 'b');

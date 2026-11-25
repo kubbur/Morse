@@ -147,6 +147,7 @@
   MorseAudio.prototype.play=async text=>{heard.push(text);return {completed:true};};
   KeyTone.prototype.set=async()=>{};
   change('send-source','straight'); tab('send');
+  change('send-pause',1);
   change('send-level',4); change('send-wpm',30);change('send-farnsworth',30);
   if (document.hidden || document.querySelector('dialog[open]') || get('send-listen').disabled) {
     throw Error('Send fixture state: '+JSON.stringify({visibility:document.visibilityState,hidden:document.hidden,
@@ -189,7 +190,7 @@
   await wait(()=>heard.length===2 && get('send-trace').textContent.includes('Last attempt'),'Automatic next and retained comparison');
   stable('on automatic advance');
   key(true,6000);key(false,6120);
-  await wait(()=>get('send-feedback').textContent.includes('Replaying'),'Missed exercise retry');
+  await wait(()=>get('send-feedback').textContent.includes('Try again.'),'Missed exercise retry');
   await wait(()=>heard.length===3 && heard[2]===heard[1],'Automatic replay');
   stable('after a retry');
   if (fixture.mode==='browser') {
@@ -197,11 +198,8 @@
     sendEE(8000);
     await wait(()=>heard.length===4,'Replay recovered to the next exercise');
     sendEE(10000);
-    await wait(()=>get('send-listen').textContent.includes('Next level'),'Level completion');
-    expect(!get('send-next') && current().sending.pendingLevel===5,'Completed level boundary');
-    key(true,12000);key(false,12040);
-    await wait(()=>current().sending.level===5 && heard.length===5,'Start next level with the key');
-    expect(!get('send-decoded').textContent,'Level-start tap entered the answer');
+    await wait(()=>current().sending.level===5 && heard.length===5,'Timed mode starts the next level');
+    expect(!get('send-next') && !current().sending.pendingLevel && !get('send-decoded').textContent,'Completed level boundary');
   }
   change('send-level',8); await tick();
   expect(get('send-trace').hidden && !get('send-decoded').textContent,'Blind exercise revealed its target or showed an empty dash');

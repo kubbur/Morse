@@ -7,11 +7,13 @@ const count = v => Math.floor(number(v, 0, 1e9));
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const plus = (b = 0, l = 0, r = 0) => Math.min(1e9, r + Math.max(0, l - b));
 
-export const DEFAULT_SENDING_SETTINGS = Object.freeze({ wpm: 30, farnsworth: 30, keyer: 'a', reverse: false });
+export const DEFAULT_SENDING_SETTINGS = Object.freeze({ wpm: 30, farnsworth: 30, keyer: 'a', reverse: false, continueMode: 'timed', pauseSeconds: 2 });
 export function sanitizeSendingSettings(input) {
   const s = object(input);
   const wpm = Math.round(number(s.wpm, 5, 80, 30));
-  return { wpm, farnsworth: Math.round(number(s.farnsworth, 1, wpm, wpm)), keyer: s.keyer === 'b' ? 'b' : 'a', reverse: s.reverse === true };
+  return { wpm, farnsworth: Math.round(number(s.farnsworth, 1, wpm, wpm)), keyer: s.keyer === 'b' ? 'b' : 'a', reverse: s.reverse === true,
+    continueMode: s.continueMode === 'manual' ? 'manual' : 'timed',
+    pauseSeconds: Math.round(number(s.pauseSeconds, 0.5, 15, DEFAULT_SENDING_SETTINGS.pauseSeconds) * 10) / 10 };
 }
 
 export function emptySending() {

@@ -606,6 +606,11 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 .input-settings .field{margin:12px 0;min-width:0}
 .input-settings .field select{width:100%}
 .input-settings .field button,.input-settings .field input[type=checkbox]{width:auto}
+#paddle-bindings{display:flex;flex-wrap:wrap;align-items:end;gap:10px}
+#paddle-bindings label{display:grid;gap:4px}
+#paddle-bindings input{width:5em;min-height:44px;text-align:center;font-family:var(--mono);color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px}
+#keyboard-paddle-options .morse-toggle{margin-left:0;font-size:13px}
+#paddle-key-message:empty{display:none}
 #sound-choices,#earlier-exports{display:grid;gap:7px}
 #sound-choices button,#earlier-exports button{text-align:left;white-space:normal}
 .recovery-settings{margin:16px 0}

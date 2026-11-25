@@ -39,18 +39,26 @@ export class BuiltInPaddle {
       interrupt: () => this.interrupt(),
       edge: edge => {
         if (!this.active || !this.connected || !this.configured || this.status?.typing || this.ui.migrationPending) return;
-        if (edge.down) this.started = edge.at;
-        if (!ui.heard || ui.playing || ui.listenHeld || ui.getProfile().sending.pendingLevel) {
-          if (!edge.down && !ui.playing && this.started != null && edge.at - this.started < 2 * 1200 / ui.settings.wpm) {
-            ui.listenContact(true, false, true);
-            ui.listenContact(false, false, false);
-          }
+        const eligible = ui.usable() && document.hasFocus() && !ui.listenHeld;
+        if (this.command || !eligible || !ui.heard || ui.result?.valid || ui.getProfile().sending.pendingLevel) {
+          // A held paddle can generate many dits. Only a single complete dit
+          // followed by a neutral watermark is a playback command.
+          if (!this.command) this.command = { start: edge.at, single: eligible && edge.down, dit: false };
+          else if (edge.down || !eligible) this.command.single = false;
+          else this.command.dit = edge.at - this.command.start < 2 * 1200 / ui.settings.wpm;
           return;
         }
-        if (!ui.suspended && !document.hidden && document.hasFocus()) ui.edge(edge);
+        ui.edge(edge);
       },
       idle: at => {
-        if (!this.active || !this.connected || !this.configured || ui.down || !ui.edges.length || ui.result) return;
+        const command = this.command;
+        this.command = null;
+        if (!this.active || !this.connected || !this.configured || ui.migrationPending || this.status?.typing || !ui.usable() || !document.hasFocus()) return;
+        if (command) {
+          if (command.single && command.dit && (!ui.heard || ui.result?.valid || ui.getProfile().sending.pendingLevel)) ui.playPrompt();
+          return;
+        }
+        if (ui.down || !ui.edges.length || ui.result) return;
         if (at - ui.originAt - ui.edges.at(-1).at >= ui.idleDelay()) ui.finish();
       },
     });
@@ -63,7 +71,7 @@ export class BuiltInPaddle {
           this.configured = false;
         }
         ui.sidetone.setAvailable(this.input !== 'off' && !!row.output);
-        if (!ready && this.connected) { this.stream.reset(); this.interrupt(); }
+        if (!ready && this.connected) { this.resetStream(); this.interrupt(); }
         this.status = row; this.connected = ready;
         if (row.output) this.resolveMigration(row);
         ui.connectionStatus = ready ? 'ready' : 'waiting';
@@ -92,7 +100,7 @@ export class BuiltInPaddle {
     this.key = null;
     this.configGeneration++;
     this.status = null;
-    this.stream.reset();
+    this.resetStream();
     this.ui.sidetone.setAvailable(false);
     void this.api.paddle('input', input);
   }
@@ -105,12 +113,16 @@ export class BuiltInPaddle {
     this.api.paddle('vband', { mask, epoch, session }).then(reply => {
       if (reply?.error && this.acceptsVBand && this.status.epoch === epoch && this.status.session === session) {
         void this.api.paddle('vband-release');
-        this.stream.reset(); this.interrupt();
+        this.resetStream(); this.interrupt();
       }
     });
   }
+  resetStream() {
+    this.command = null;
+    this.stream.reset();
+  }
   interrupt() {
-    this.started = null;
+    this.command = null;
     if (!this.active) return;
     this.ui.heard = false;
     this.ui.abort('Paddle timing was interrupted. Hear the signal again.'); this.ui.updateMute();
@@ -132,7 +144,7 @@ export class BuiltInPaddle {
     const value = nativeSound(settings);
     const key = JSON.stringify(value);
     if (this.key === key) return;
-    this.key = key; this.configured = false; this.stream.reset();
+    this.key = key; this.configured = false; this.resetStream();
     const generation = ++this.configGeneration;
     this.api.paddle('sound', value).then(reply => {
       if (this.configGeneration !== generation) return;
@@ -142,7 +154,7 @@ export class BuiltInPaddle {
   }
   setActive(active) {
     if (this.active === active) return;
-    this.active = active; this.stream.reset();
+    this.active = active; this.resetStream();
     if (!active && this.input === 'vband') void this.api.paddle('vband-release');
     if (active && this.connected) this.configure(this.ui.settings);
     else this.ui.sidetone.release();

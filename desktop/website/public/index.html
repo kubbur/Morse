@@ -173,8 +173,21 @@
       <div class="lab-grid">
         <section class="card lab-card input-settings" id="input-settings" aria-labelledby="input-title">
           <div class="section-heading"><h2 id="input-title">Input</h2></div>
-          <div class="field"><label for="send-source">Key input</label><select id="send-source"><option value="paddle">Audio converter (3.5 mm)</option><option value="vband">VBand USB adapter</option><option value="straight">Straight key · Space or screen</option><option value="keyboard">Paddles · Z / X or screen</option></select><p id="send-connection" class="muted small-copy" role="status">Choose the paddle adapter connected to this device.</p><button type="button" class="button secondary" id="send-connect">Connect Morse Paddle</button></div>
+          <div class="field"><label for="send-source">Key input</label><select id="send-source"><option value="paddle">Audio converter (3.5 mm)</option><option value="vband">VBand USB adapter</option><option value="straight">Straight key · Space or screen</option><option value="keyboard">Paddles · keyboard</option></select><p id="send-connection" class="muted small-copy" role="status">Choose the paddle adapter connected to this device.</p><button type="button" class="button secondary" id="send-connect">Connect Morse Paddle</button></div>
+          <div class="field" id="keyboard-paddle-options" hidden>
+            <form id="paddle-bindings" autocomplete="off">
+              <label for="paddle-dot-key">Dot key<input id="paddle-dot-key" type="text" autocapitalize="off" spellcheck="false" aria-describedby="paddle-key-message"></label>
+              <label for="paddle-dash-key">Dash key<input id="paddle-dash-key" type="text" autocapitalize="off" spellcheck="false" aria-describedby="paddle-key-message"></label>
+              <button type="submit" class="button secondary">Save keys</button>
+            </form>
+            <small id="paddle-key-message" role="status"></small>
+            <label class="morse-toggle"><input id="show-paddle-buttons" type="checkbox" checked>Show on-screen paddle buttons</label>
+          </div>
           <div class="field"><label for="send-keyer">Paddle keyer</label><select id="send-keyer"><option value="a">Iambic A</option><option value="b">Iambic B</option></select><label class="morse-toggle"><input id="send-reverse" type="checkbox">Swap dot and dash contacts</label><small id="send-keyer-help">Sending speed and iambic mode control the paddle elements.</small></div>
+          <div class="field"><label for="send-continue-mode">After a sending attempt</label><select id="send-continue-mode"><option value="timed">Play after a pause</option><option value="manual">Wait for E to continue</option></select>
+            <small id="send-manual-hint" hidden>After your answer is checked, press E or send one dit to hear the next signal or retry.</small></div>
+          <div class="lab-control" id="send-pause-control"><div><label for="send-pause">Pause after your last mark</label><output id="send-pause-value" for="send-pause">2.0 s</output></div>
+            <input type="range" id="send-pause" min="0.5" max="15" step="0.1" value="2" aria-describedby="send-pause-hint"><small id="send-pause-hint"></small></div>
           <div id="paddle-settings"></div>
           <section id="sound-choice" class="help-panel" hidden aria-labelledby="sound-choice-title"><h3 id="sound-choice-title">Choose your shared sound settings</h3><p>Your previous settings differ. Choose the sound and timing to use for listening, sending and paddle sidetone.</p><div id="sound-choices"></div></section>
         </section>
