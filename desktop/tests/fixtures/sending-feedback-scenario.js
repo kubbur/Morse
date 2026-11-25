@@ -17,6 +17,7 @@
   }
   function expect(condition, message) { if (!condition) throw Error(message); }
   const call = () => get('.trace-call').textContent;
+  const fireworks = () => get('.send-fireworks');
   paint('R', []);
   paint('R', [0,40]);
   const burst = get('.trace-burst[data-kind="perfect"]');
@@ -43,17 +44,47 @@
   expect(Math.abs(gateEnd - nextPress) < 0.1 && gateEnd < get('.trace-plot').clientWidth, 'After a late release the next press guide must follow the measured gap and stay on the scale');
   paint('S', []);
   paint('S', [0,40,80,120,160,200]);
-  expect(capture.querySelectorAll('.trace-sent.trace-perfect').length === 3 && capture.querySelectorAll('.trace-burst').length === 1, 'Batched releases lost hits or replayed all their effects');
+  expect(capture.querySelectorAll('.trace-sent.trace-perfect').length === 3 && capture.querySelectorAll('.trace-burst').length === 1 && !fireworks(), 'Batched releases must wait for the grade to celebrate the whole send');
+  paint('S', [0,40,80,120,160,200], false, true, true);
+  const first = fireworks(), panelHeight = capture.offsetHeight;
+  expect(first?.dataset.kind === 'perfect' && first.children.length === 3 && call() === 'Perfect send', 'Graded guided phrase missed its fireworks');
+  expect(first.parentElement === capture && getComputedStyle(first).pointerEvents === 'none' && first.getAttribute('aria-hidden') === 'true', 'Fireworks must stay on the visible panel and allow input');
+  paint('S', [0,40,80,120,160,200], false, true, true);
+  capture.style.width = '400px';
+  view.draw();
+  first.firstElementChild.dispatchEvent(new Event('animationend', {bubbles:true}));
+  expect(fireworks() === first && capture.querySelectorAll('.send-fireworks').length === 1 && capture.offsetHeight === panelHeight, 'Redisplay, resize or one finished bloom cut off or duplicated the celebration');
+  first.dispatchEvent(new Event('animationend'));
+  view.draw();
+  expect(!fireworks() && get('.trace-verdict').dataset.finish === 'perfect', 'A completed grade replayed its fireworks or lost the verdict');
+  paint('EE', []);
+  paint('EE', [0,40,160,200], false, true, true);
+  expect(call() === 'Perfect send' && !fireworks(), 'Opening a previously graded comparison replayed its celebration');
+
+  // A perfect final mark can follow a merely acceptable mark, a wrong pattern,
+  // or an extra press. It cannot promote those attempts to a perfect send.
+  for (const [target, times, passed] of [
+    ['EE',[0,48,168,208],true], ['EE',[0,40],false], ['E',[0,40,80,120],false], ['E',[0,40,80],true], ['EE',[0,40,160,200],false],
+  ]) {
+    paint(target, []); paint(target, times); paint(target, times, false, true, passed);
+    expect(!fireworks() && !get('.trace-verdict').dataset.finish, 'Awarded a whole-send celebration for ' + times);
+  }
 
   paint('A', [], true);
   paint('A', [0,40,80,200], true);
   expect(call() === 'Dah matched' && !get('.trace-perfect,.trace-spark'), 'Keyer-generated length earned a timing star');
   paint('A', [0,40,80,200], true, true, true);
-  expect(call() === 'Clean send' && get('.trace-clean') && get('.trace-burst[data-kind="clean"]'), 'Correct paddle pattern missed its completion cue');
+  expect(call() === 'Clean send' && get('.trace-clean') && fireworks()?.dataset.kind === 'clean', 'Correct paddle pattern missed its mint completion cue');
   paint('A', [], true);
+  expect(!fireworks(), 'Starting again left the previous fireworks running');
   paint('', [0,40,80,200]);
+  expect(!fireworks() && get('.trace-verdict').hidden, 'Blind exercise celebrated before grading');
   paint('A', [0,40,80,200], false, true, true);
-  expect(call() === 'Perfect send' && get('.trace-burst[data-kind="perfect"]'), 'Perfect blind attempt missed its graded cue');
+  expect(call() === 'Perfect send' && fireworks()?.dataset.kind === 'perfect', 'Perfect blind attempt missed its graded celebration');
+  paint('E E', [], true);
+  paint('E E', [0,40,320,360], true);
+  paint('E E', [0,40,320,360], true, true, true);
+  expect(call() === 'Perfect spacing' && fireworks()?.dataset.kind === 'perfect', 'Precisely hand-spaced paddle phrase missed its gold fireworks');
 
   view.reducedMotion = { matches:true };
   paint('E E', [], true);
@@ -62,8 +93,9 @@
   paint('E E', [0,40,320,360], true);
   expect(call() === 'Perfect gap' && get('.trace-at-press') && get('.trace-gap-hit') && !get('.trace-burst'), 'Reduced motion lost the static gap bracket and star or emitted particles');
   paint('E E', [0,40,320,360], true, true, true);
-  expect(call() === 'Perfect spacing' && !get('.trace-burst'), 'Whole-attempt paddle spacing');
+  expect(call() === 'Perfect spacing' && get('.trace-verdict').dataset.finish === 'perfect' && !get('.trace-burst,.send-fireworks'), 'Reduced motion must retain the whole-attempt badge without animated particles');
+  expect(getComputedStyle(get('.trace-call'),'::after').content !== 'none', 'Missing static finishing star');
   paint('E E', [], true);
-  expect(get('.trace-verdict').hidden && !get('.trace-clean,.trace-perfect,.trace-burst'), 'Clear retained a previous reward');
+  expect(get('.trace-verdict').hidden && !get('.trace-clean,.trace-perfect,.trace-burst,.send-fireworks'), 'Clear retained a previous reward');
   window.testComplete = true;
 })().catch(error => { window.testFailure = error.message; });

@@ -66,6 +66,13 @@ export function markFeedback({ expected, actual, dit, time, keyerTimed, toleranc
   return hits;
 }
 
+function wholeSend(data, hits) {
+  if (!hits.length || hits.length !== data.expected.length || hits.length !== data.actual.length) return null;
+  if (!hits.every(hit => hit.matched && (!hit.timed || hit.perfect))) return null;
+  if (!hits.some(hit => hit.timed)) return { kind:'clean', label:'Clean send' };
+  return { kind:'perfect', label:data.keyerTimed ? 'Perfect spacing' : 'Perfect send' };
+}
+
 export function timingFeedback({ expected, actual, time, keyerTimed }, complete) {
   const sent = actual.filter(mark => mark.end !== null);
   if (!sent.length || !expected.length) return '';
@@ -141,8 +148,12 @@ export class SendingTraceView {
       this.effects.replaceChildren();
     }
     if (last && (previous?.start !== last.start || previous?.end !== last.end)) this.edgeSince = performance.now();
-    if (!complete) this.gradeArrival = false;
-    else if (!this.complete && previous) this.gradeArrival = this.data.expected.length ? 'guided' : 'blind';
+    if (!complete) {
+      this.gradeArrival = false;
+      delete this.verdict.dataset.finish;
+      this.fireworks?.remove();
+      this.fireworks = null;
+    } else if (!this.complete && previous) this.gradeArrival = this.data.expected.length ? 'guided' : 'blind';
     this.data = data; this.caption = caption; this.complete = complete; this.passed = passed;
     this.root.hidden = !data || !data.expected.length && !data.actual.length;
     if (this.root.hidden || !data.expected.length || !data.actual.length) this.verdict.hidden = true;
@@ -173,6 +184,32 @@ export class SendingTraceView {
     burst.addEventListener('animationcancel', remove);
   }
 
+  celebrate(kind) {
+    if (this.reducedMotion.matches) return;
+    const layer = node('div', 'send-fireworks');
+    layer.dataset.kind = kind;
+    layer.setAttribute('aria-hidden', 'true');
+    for (let shell = 0; shell < 3; shell++) {
+      const bloom = node('span', 'send-firework');
+      for (let angle = 0; angle < 360; angle += 40) {
+        const ray = node('i', 'firework-ray');
+        ray.style.setProperty('--angle', angle + 'deg');
+        bloom.append(ray);
+      }
+      layer.append(bloom);
+    }
+    // Anchor to the visible panel even when the timing plot is many screens wide.
+    this.root.closest('.send-capture').append(layer);
+    this.fireworks = layer;
+    const remove = event => {
+      if (event.target !== layer || event.pseudoElement) return;
+      layer.remove();
+      if (this.fireworks === layer) this.fireworks = null;
+    };
+    layer.addEventListener('animationend', remove);
+    layer.addEventListener('animationcancel', remove);
+  }
+
   draw() {
     const data = this.data, visible = this.scroll.clientWidth;
     if (!data || this.root.hidden || !visible) return;
@@ -189,15 +226,12 @@ export class SendingTraceView {
     const hits = markFeedback(data);
     const missing = this.complete ? expected.length - hits.length : 0;
     const latest = missing > 0 ? { matched: false, label: missing === 1 ? '1 mark missing' : missing + ' marks missing', streak: 0 } : hits.at(-1);
-    let finishLabel = '';
-    if (this.complete && this.passed && hits.length && hits.length === expected.length && hits.every(hit => hit.matched)) {
-      const timed = hits.filter(hit => hit.timed);
-      if (!timed.length) finishLabel = 'Clean send';
-      else if (timed.every(hit => hit.perfect)) finishLabel = data.keyerTimed ? 'Perfect spacing' : 'Perfect send';
-    }
+    const finish = this.complete && this.passed ? wholeSend(data, hits) : null;
+    if (finish) this.verdict.dataset.finish = finish.kind;
+    else delete this.verdict.dataset.finish;
     if (latest) {
-      this.verdict.dataset.hit = latest.perfect || finishLabel.startsWith('Perfect') ? 'perfect' : latest.matched ? 'match' : 'miss';
-      this.verdict.querySelector('.trace-call').textContent = finishLabel || latest.label;
+      this.verdict.dataset.hit = latest.perfect || finish?.kind === 'perfect' ? 'perfect' : latest.matched ? 'match' : 'miss';
+      this.verdict.querySelector('.trace-call').textContent = finish?.label ?? latest.label;
       this.verdict.querySelector('.trace-streak').textContent = latest.streak >= 2 ? latest.streak + ' in a row' : '';
     }
     this.verdict.hidden = !latest;
@@ -236,7 +270,7 @@ export class SendingTraceView {
             gap.style.width = (mark.start - previousEnd) * scale + 'px';
             layers.append(gap);
           }
-          if (kind === 'sent' && finishLabel === 'Clean send' && index === actual.length - 1) bar.classList.add('trace-clean');
+          if (kind === 'sent' && finish?.kind === 'clean' && index === actual.length - 1) bar.classList.add('trace-clean');
         } else if (kind === 'target' && missing > 0) {
           bar.dataset.hit = 'missing';
         } else if (actual[index]?.end === null) {
@@ -261,9 +295,10 @@ export class SendingTraceView {
     const lastHit = hits.at(-1);
     const landed = actual[hits.length - 1];
     const newHit = hits.length > this.paintedReleases;
-    if (this.gradeArrival && finishLabel === 'Clean send') {
+    if (this.gradeArrival && finish) this.celebrate(finish.kind);
+    if (this.gradeArrival && finish?.kind === 'clean') {
       this.strike(landed.end, 'clean');
-    } else if (this.gradeArrival === 'blind' && finishLabel.startsWith('Perfect')) {
+    } else if (this.gradeArrival === 'blind' && finish?.kind === 'perfect') {
       const mark = actual[hits.findLastIndex(hit => hit.perfect)];
       this.strike(data.keyerTimed ? mark.start : mark.end, 'perfect');
     } else if (lastHit?.matched && newHit && (!this.complete || this.gradeArrival)) {

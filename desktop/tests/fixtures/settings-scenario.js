@@ -205,7 +205,11 @@
     function sendEE(start) { key(true,start); key(false,start+40); key(true,start+160); key(false,start+200); }
     sendEE(8000);
     await wait(()=>heard.length===4,'Replay recovered to the next exercise');
+    await wait(()=>get('send-hit').dataset.finish==='perfect' && get('send-trace').textContent.includes('Last attempt'),'Automatic playback lost the perfect grade');
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) expect(get('send-capture').querySelector('.send-fireworks'),'Automatic advance swallowed the completion fireworks');
+    stable('during the completion fireworks');
     sendEE(10000);
+    expect(!get('send-capture').querySelector('.send-fireworks'),'New sending input retained the previous fireworks');
     await wait(()=>current().sending.level===5 && heard.length===5,'Timed mode starts the next level');
     expect(!get('send-next') && !current().sending.pendingLevel && !get('send-decoded').textContent,'Completed level boundary');
   }

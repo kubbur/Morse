@@ -511,15 +511,16 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 #send-context{margin:0;max-width:600px}
 .send-input-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;color:var(--muted);font-size:12px;line-height:1.5;margin:20px 0 10px}
 .send-input-bar #send-speed-label{white-space:nowrap;font-family:var(--mono)}
-.send-capture{--gold:#ffda83;--star:polygon(50% 0,63% 36%,100% 50%,63% 64%,50% 100%,37% 64%,0 50%,37% 36%);box-sizing:border-box;display:grid;grid-template-rows:16px 38px minmax(0,1fr);height:194px;min-width:0;padding:12px 18px;border:2px solid var(--border);border-radius:16px;background:var(--bg);transition:border-color .12s}
+.send-capture{--gold:#ffda83;--star:polygon(50% 0,63% 36%,100% 50%,63% 64%,50% 100%,37% 64%,0 50%,37% 36%);position:relative;box-sizing:border-box;display:grid;grid-template-rows:16px 38px minmax(0,1fr);height:194px;min-width:0;padding:12px 18px;border:2px solid var(--border);border-radius:16px;background:var(--bg);transition:border-color .12s}
 [data-theme=light] .send-capture{--gold:#895300}
 .send-capture>.eyebrow{font-size:10px}
 .send-readout{display:grid;grid-template-columns:minmax(0,1fr) min(48%,20rem);align-items:center;gap:8px;min-width:0}
 .trace-verdict{justify-self:end;display:flex;align-items:center;gap:8px;font-size:clamp(11px,1.6vw,14px);font-variant-numeric:tabular-nums;color:var(--accent-text);white-space:nowrap}
 .trace-verdict[data-hit="miss"]{color:var(--orange)}
 .trace-verdict[data-hit="perfect"]{color:var(--gold)}
-.trace-verdict[data-hit="perfect"] .trace-call{display:inline-flex;align-items:center;padding:2px 7px;border:1px solid color-mix(in srgb,var(--gold) 45%,transparent);border-radius:6px;background:color-mix(in srgb,var(--gold) 9%,transparent);line-height:1.15}
-.trace-verdict[data-hit="perfect"] .trace-call:before{content:'';width:1em;height:1em;margin-right:.35em;background:currentColor;clip-path:var(--star)}
+.trace-verdict:is([data-hit="perfect"],[data-finish]) .trace-call{display:inline-flex;align-items:center;gap:.35em;padding:2px 7px;border:1px solid color-mix(in srgb,currentColor 45%,transparent);border-radius:6px;background:color-mix(in srgb,currentColor 9%,transparent);line-height:1.15}
+.trace-verdict:is([data-hit="perfect"],[data-finish]) .trace-call:before,.trace-verdict[data-finish] .trace-call:after{content:'';width:1em;height:1em;background:currentColor;clip-path:var(--star)}
+.send-capture:has(.trace-verdict[data-finish="perfect"]:not([hidden])){border-color:color-mix(in srgb,var(--gold) 72%,var(--border))}
 .trace-streak:not(:empty){font-size:.85em;font-weight:550;color:var(--text);padding-left:8px;border-left:1px solid var(--border)}
 @media(max-width:500px){.trace-verdict{flex-direction:column;align-items:flex-end;gap:0;line-height:1.25}.trace-streak:not(:empty){border:0;padding:0}}
 .send-capture output{display:block;align-self:stretch;font:600 25px/1.5 var(--mono);min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:thin}
@@ -559,6 +560,8 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 .trace-target[data-hit="miss"]{border-color:var(--orange);background:repeating-linear-gradient(120deg,transparent 0 5px,color-mix(in srgb,var(--orange) 18%,transparent) 5px 7px)}
 .trace-target[data-hit="missing"]{border-color:var(--orange);background:transparent}
 .trace-sent[data-hit="miss"]{background:var(--orange)}
+.send-fireworks{position:absolute;inset:0;z-index:2;overflow:hidden;border-radius:inherit;pointer-events:none}
+@media(prefers-reduced-motion:reduce){.send-fireworks{display:none}}
 @media(prefers-reduced-motion:no-preference){
  .trace-held{animation:trace-hold var(--held-time) linear both}
  .trace-gap:before{animation:trace-gap-fill var(--gap-time) linear var(--gap-delay) both}
@@ -574,7 +577,23 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
  .trace-spark:nth-child(3){--dx:17px;--dy:-10px}
  .trace-spark:nth-child(4){--dx:12px;--dy:13px}
  .trace-spark:nth-child(5){--dx:-11px;--dy:10px}
+ .send-fireworks{--flare:var(--gold);--ember:var(--accent-text);color:var(--flare);box-shadow:inset 0 0 24px color-mix(in srgb,var(--flare) 13%,transparent);animation:trace-glint 1.25s linear both}
+ .send-fireworks[data-kind="clean"]{--flare:var(--accent-text);--ember:var(--text)}
+ .send-firework{position:absolute;left:21%;top:47%;--launch:0s;--delay:calc(var(--launch) + .18s);--lift:25px;--radius:clamp(34px,5vw,48px);transform:rotate(-12deg)}
+ .send-firework:nth-child(2){left:50%;top:38%;--launch:.12s;--lift:42px;--radius:clamp(41px,6.5vw,60px);transform:rotate(6deg)}
+ .send-firework:nth-child(3){left:79%;top:50%;--launch:.24s;transform:rotate(17deg)}
+ .send-firework:before,.send-firework:after{content:'';position:absolute}
+ .send-firework:before{top:0;left:-2px;width:4px;height:17px;border-radius:50%;background:linear-gradient(var(--text),currentColor 28%,transparent);animation:send-firework-rise .18s ease-out var(--launch) both}
+ .send-firework:after{inset:-12px;clip-path:var(--star);background:radial-gradient(circle,var(--text) 10%,currentColor 65%);opacity:0;animation:trace-flare .42s ease-out var(--delay)}
+ .firework-ray{position:absolute;top:0;left:0;--reach:var(--radius);animation:send-firework-ray .72s cubic-bezier(.13,.62,.27,1) var(--delay) both}
+ .firework-ray:nth-child(2n){--reach:calc(var(--radius) - 10px);color:var(--ember)}
+ .firework-ray:nth-child(3n){color:var(--text)}
+ .firework-ray:before,.firework-ray:after{content:'';position:absolute}
+ .firework-ray:before{top:0;left:-1.25px;width:2.5px;height:16px;border-radius:2px;background:linear-gradient(currentColor,transparent)}
+ .firework-ray:after{top:-4px;left:-4px;width:8px;height:8px;clip-path:var(--star);background:currentColor}
 }
+@keyframes send-firework-rise{0%{opacity:0;transform:translateY(var(--lift)) scaleY(.55)}25%,80%{opacity:1}100%{opacity:0;transform:translateY(0) scaleY(.4)}}
+@keyframes send-firework-ray{0%{opacity:0;transform:rotate(var(--angle)) translateY(-3px) scale(.65)}15%,65%{opacity:1}100%{opacity:0;transform:rotate(var(--angle)) translateY(calc(0px - var(--reach))) scale(.85)}}
 @keyframes trace-hold{from{width:2px}to{width:var(--held-width)}}
 @keyframes trace-gap-fill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 @keyframes trace-glint{0%,65%{opacity:1}100%{opacity:0}}
