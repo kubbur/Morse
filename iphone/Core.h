@@ -1,0 +1,21 @@
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+#include "ElementStream.h"
+
+typedef struct PhoneCore PhoneCore;
+PhoneCore *phoneCreate(double rate);
+void phoneDestroy(PhoneCore *core);
+void phonePilots(PhoneCore *core, float *stereo, unsigned frames);
+void phoneInput(PhoneCore *core, const float *mono, unsigned frames);
+void phoneSpeaker(PhoneCore *core, float *mono, unsigned frames);
+void phoneSound(PhoneCore *core, unsigned wpm, unsigned spacing, unsigned pitch,
+                unsigned volume, unsigned rise, unsigned fall, unsigned curve, bool modeB);
+void phoneMute(PhoneCore *core, bool muted);
+void phoneReverse(PhoneCore *core, bool reverse);
+void phoneInvalidate(PhoneCore *core);
+bool phoneReady(PhoneCore *core);
+unsigned phoneMask(PhoneCore *core);
+unsigned phoneEpoch(PhoneCore *core);
+bool phoneEvent(PhoneCore *core, ElementEvent *event);
+uint64_t phoneAudibleFrames(PhoneCore *core);

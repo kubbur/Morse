@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark"><title>Paddle test</title>
+<style>
+:root{font:17px/1.45 -apple-system,BlinkMacSystemFont,sans-serif;color-scheme:light dark}
+body{max-width:35rem;margin:auto;padding:20px}h1{font-size:1.8rem;margin:0 0 .4rem}h2{font-size:1.05rem;margin:1.25rem 0 .25rem}
+p{margin:.5rem 0}button{font:inherit;border:1px solid currentColor;border-radius:.65rem;padding:.52rem .8rem;background:transparent;color:inherit}
+button:disabled{opacity:.38}.primary{background:#146f60;color:white;border-color:#146f60}
+.contacts{display:flex;gap:.45rem;margin:1rem 0}.contacts span{flex:1;text-align:center;border:1px solid #818985;border-radius:.6rem;padding:.72rem .2rem}
+.contacts .down{background:#126b56;border-color:#126b56;color:white}.routes{font-size:.88rem;white-space:pre-line;color:inherit;opacity:.83}
+#step{font-weight:650}label{display:block;margin:1rem 0}input{width:1.15rem;height:1.15rem;vertical-align:middle}
+</style></head><body>
+<h1>Paddle test</h1><p>Connect the paddle and converter to the USB‑C adapter. Leave both paddles up to start.</p>
+<button class="primary" type="button" id="start">Start adapter test</button>
+<div class="contacts" aria-label="Live electrical contacts"><span id="left">Left · dit</span><span id="right">Right · dah</span></div>
+<p id="state" aria-live="polite">Ready to start.</p><p id="step" aria-live="polite"></p>
+<label><input type="checkbox" disabled id="heard"> I heard the keyed sidetone from the iPhone speaker.</label>
+<p id="result" role="status"></p><h2>Audio route</h2><div id="routes" class="routes">Waiting for iOS.</div>
+<p><button id="copy" type="button">Copy test report</button></p><script type="module" src="/probe.js"></script>
+</body></html>

@@ -1,0 +1,56 @@
+name: Build iPhone app
+on:
+  push:
+    branches: [main]
+    paths: ['iphone/**', '.github/workflows/build-iphone.yml']
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Morse source tag or commit
+        required: true
+        default: morse-v1.1.3
+        type: string
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[build-iphone]')
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: builder
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || 'morse-v1.1.3' }}
+          path: source
+          persist-credentials: false
+      - name: Select a compatible iPhone SDK
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess
+          candidates = []
+          for developer in pathlib.Path("/Applications").glob("Xcode*.app/Contents/Developer"):
+              env = dict(os.environ, DEVELOPER_DIR=str(developer))
+              stamp = subprocess.run(["xcrun", "--sdk", "iphoneos", "--show-sdk-version"], env=env, capture_output=True, text=True)
+              if stamp.returncode == 0:
+                  version = tuple(map(int, stamp.stdout.strip().split(".")))
+                  if version >= (26, 2):
+                      candidates.append((version, str(developer)))
+          if not candidates:
+              raise SystemExit("This runner has no iPhoneOS 26.2+ SDK")
+          version, path = max(candidates)
+          with open(os.environ["GITHUB_ENV"], "a") as file:
+              print("DEVELOPER_DIR=" + path, file=file)
+          print(path)
+          PY
+      - name: Build the selected release
+        run: python3 builder/iphone/build.py source --output artifacts/Morse-iPhone.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Morse-iPhone
+          path: artifacts/Morse-iPhone.ipa
+          if-no-files-found: error
