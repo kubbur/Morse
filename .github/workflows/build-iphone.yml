@@ -47,6 +47,8 @@ jobs:
               print("DEVELOPER_DIR=" + path, file=file)
           print(path)
           PY
+      - name: Check the wired-first test and hearing verdict
+        run: node builder/iphone/tests/route-probe.mjs
       - name: Build the selected release
         run: python3 builder/iphone/build.py source --output artifacts/Morse-iPhone.ipa
       - uses: actions/upload-artifact@v4

@@ -13,9 +13,9 @@ button:disabled{opacity:.38}.primary{background:#146f60;color:white;border-color
 .volts{font:inherit;width:5rem;padding:.2rem .4rem}
 </style></head><body>
 <h1>Paddle test</h1><p>Connect the paddle and converter to the USB‑C adapter. Leave both paddles up to start.</p>
-<button class="primary" type="button" id="system-start">Test system speaker</button>
-<button type="button" id="start">Test multiroute speaker</button>
+<button class="primary" type="button" id="start">Test iPhone speaker</button>
 <button type="button" id="airpods">Test AirPods</button>
+<button type="button" id="system-start">Test system sounds</button>
 <button type="button" id="contacts">Test paddle contacts only</button>
 <button type="button" id="reference">Compare jack output</button>
 <button type="button" id="signal">Measure jack audio</button>
@@ -30,6 +30,7 @@ button:disabled{opacity:.38}.primary{background:#146f60;color:white;border-color
 <div id="contact-test">
 <div class="contacts" aria-label="Live electrical contacts"><span id="left">Left · dit</span><span id="right">Right · dah</span></div>
 <p id="step" aria-live="polite"></p>
+<button type="button" id="next-route" hidden>Try next route</button>
 <div id="contact-signal" class="routes" hidden></div>
 <label><input type="checkbox" disabled id="heard"> <span id="heard-label">I heard the keyed sidetone from the iPhone speaker.</span></label>
 </div>

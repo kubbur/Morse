@@ -6,6 +6,7 @@ const steps = [
 ];
 let index = 0, since = null, session = null, last = null, started = false, pending = false, generation = 0;
 let switching = false, marking = false;
+let advancing = false, advancedBaseline = null;
 let audibleAtStart = 0, ditAtStart = 0, dahAtStart = 0, missedAtStart = 0, observations = [], probeEpoch = null;
 const positions = ['released','left','right','both'];
 const holds = ['Release both paddles','Hold only the left paddle','Hold only the right paddle','Hold both paddles'];
@@ -26,7 +27,9 @@ function canConfirmSound() {
   }
   if (!listeningTest(last) || !last.active || last.status.phase !== 'ready' || !last.contactPlayerRunning ||
       !last.capturedFrames || !last.sidetoneOutput || !last.status.outputReady) return false;
-  return last.sidetoneDestination === last.testMode && index === steps.length && last.returnedSidetoneFrames > audibleAtStart;
+  const attempt = last.outputAttempt;
+  return attempt?.startStatus === 0 && last.capturedFrames > attempt.inputFramesBefore &&
+    last.sidetoneDestination === last.testMode && index === steps.length && last.returnedSidetoneFrames > audibleAtStart;
 }
 function verdict() {
   if (last?.testMode === 'system-speaker') {
@@ -53,6 +56,7 @@ function showTest(mode) {
   $('signal-test').hidden = mode !== 'signal';
   $('reference-test').hidden = mode !== 'reference';
   $('contact-test').hidden = mode === 'signal' || mode === 'reference';
+  $('next-route').hidden = true;
 }
 function drawComparison(test) {
   const a = test.phases['reference-playback'], b = test.phases['reference-mic'];
@@ -112,7 +116,7 @@ function draw(row) {
   $('left').classList.toggle('down',!!(ready && (row.mask & 1)));
   $('right').classList.toggle('down',!!(ready && (row.mask & 2)));
   if (!started) return;
-  if (session !== status.session || (row.testMode === 'system-speaker' && probeEpoch !== status.epoch)) {
+  if (session !== status.session || ((listeningTest(row) || row.testMode === 'system-speaker') && probeEpoch !== status.epoch)) {
     reset(); session=status.session; probeEpoch=status.epoch;
     $('heard-reference').checked=false; $('system-note').textContent='';
   }
@@ -134,13 +138,25 @@ function draw(row) {
   if (listeningTest(row)) {
     $('routes').textContent+='\nRouting mode  '+row.routeStrategy;
     if (row.sidetoneOutput) $('routes').textContent+='\nSidetone  '+row.sidetoneOutput.name;
+    if (row.outputAttempt) {
+      const a=row.outputAttempt;
+      $('routes').textContent+='\nOutput address  '+a.target.name+(a.listedWhenAddressed ? ' (active route)' : ' (observed earlier)')+
+        '\nWired input frames before request  '+a.inputFramesBefore.toLocaleString()+
+        '\nWired input frames since request  '+Math.max(0,row.capturedFrames-a.inputFramesBefore).toLocaleString()+
+        '\nSidetone buffers returned  '+row.returnedSidetoneBuffers.toLocaleString();
+    }
+    const next=$('next-route');
+    next.hidden=!row.canAdvanceRoute;
+    next.disabled=switching || advancing;
+    next.textContent=row.sidetoneOutput ? 'No sidetone here · try next route' : 'Try next route';
   }
-  $('contact-signal').hidden = row.testMode !== 'contacts';
-  if (row.testMode === 'contacts') {
+  const showSignals = row.testMode === 'contacts' || listeningTest(row);
+  $('contact-signal').hidden = !showSignals;
+  if (showSignals) {
     const levels = row.contactSignal?.channels;
     const db = n => n === null ? '−∞' : n.toFixed(1);
     $('contact-signal').textContent = [
-      row.contactPlayerRunning ? 'Sending 1 kHz left and 1.6 kHz right through the wired output.' : '',
+      row.contactPlayerRunning ? 'Wired sensing player on · 1 kHz left and 1.6 kHz right.' : '',
       ...(levels || []).map(ch=>'Mic '+ch.channel+' · 1 kHz '+db(ch.hz1000DBFS)+' dBFS · 1.6 kHz '+db(ch.hz1600DBFS)+' dBFS')
     ].filter(Boolean).join('\n');
   }
@@ -170,6 +186,22 @@ function draw(row) {
   $('step').textContent = steps[index]?.[1] || 'All four electrical states observed.';
   $('heard').disabled=!canConfirmSound();
   $('result').textContent=index===steps.length ? verdict() : '';
+  if (index === steps.length && row.wiredBaseline && advancedBaseline !== session) {
+    advancedBaseline=session;
+    void nextRoute(true);
+  }
+}
+async function nextRoute(baseline) {
+  if (advancing || switching || !last?.canAdvanceRoute) return;
+  const run=generation, row=last;
+  advancing=true; $('next-route').disabled=true;
+  try {
+    const reply=await post({op:'paddle',name:'next-route',value:{session:row.status.session,
+      strategy:row.routeStrategy,baseline,unheard:!baseline && !!row.sidetoneOutput}});
+    if (reply?.error && run===generation) $('result').textContent=reply.error;
+  } catch { if (run===generation) $('result').textContent='Could not advance. Try the next route again.'; }
+  finally { advancing=false; }
+  await poll();
 }
 async function poll() {
   if (pending || switching || document.hidden) return;
@@ -181,7 +213,7 @@ async function poll() {
 }
 async function start(mode) {
   if (switching) return;
-  ++generation; reset(); session=null; last=null; started=false; switching=true;
+  ++generation; reset(); session=null; last=null; started=false; switching=true; advancedBaseline=null;
   $('system-start').disabled=true; $('speaker-reference').disabled=true; $('heard-reference').checked=false;
   $('heard-reference').disabled=true; $('system-cues').textContent=''; $('system-note').textContent='';
   $('state').textContent='Opening the wired audio route…'; $('step').textContent='';
@@ -216,6 +248,7 @@ $('speaker-reference').onclick=async () => {
   await poll();
 };
 $('start').onclick=()=>start('speaker');
+$('next-route').onclick=()=>nextRoute(false);
 $('airpods').onclick=()=>start('airpods');
 $('contacts').onclick=()=>start('contacts');
 $('signal').onclick=()=>start('signal');
@@ -239,7 +272,8 @@ $('heard').onchange=async () => {
   if (listeningTest(last) && $('heard').checked && canConfirmSound()) {
     const currentSession=session;
     try {
-      const reply=await post({op:'paddle',name:'confirm-output',value:last.testMode});
+      const reply=await post({op:'paddle',name:'confirm-output',value:{destination:last.testMode,
+        session:currentSession,epoch:last.status.epoch}});
       if (session!==currentSession || !canConfirmSound()) return;
       if (reply?.error) throw new Error(reply.error);
       localStorage.setItem('morse.send-input.v1','paddle');
