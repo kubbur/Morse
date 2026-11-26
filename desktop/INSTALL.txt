@@ -1,4 +1,4 @@
-Morse for Mac 1.1.4
+Morse for Mac 1.1.5
 
 Requires macOS 13 or later. Use the arm64 ZIP for Apple Silicon or the x64 ZIP
 for Intel. Unzip the download and move Morse.app to Applications.
@@ -27,7 +27,9 @@ Paddles · keyboard, set the dot and dash keys and show or hide the screen butto
 
 Progress is saved on this Mac. Use Saved progress → Export progress to keep a
 copy elsewhere. The Mac can read the website leaderboard. Score uploads and
-private linking require the website’s version 2 service. Settings → Updates
+private linking require the website’s version 2 service. Hiding a callsign or
+showing total XP requires the matching 1.1.5 website update and takes effect
+when the website confirms it. Settings → Updates
 shows release notes. On 1.1.1 or later, choose Check for updates, then Install update.
 From 1.1.0, install the ZIP manually. Automatic updates are off by default.
 
