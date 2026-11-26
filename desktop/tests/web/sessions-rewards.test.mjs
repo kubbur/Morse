@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { newState, newProfile, startRound, finishRound, sanitizeState, importState, resetLearnerProgress, collectBadges, collectedBadges, BADGES, localDay } from '../../website/public/js/progress.mjs';
-import { SESSION_GAP_MS, SESSION_HISTORY_LIMIT, listeningSessions, sanitizeSessions, sessionsFromRounds, recordSessionAnswer, sessionDuration } from '../../website/public/js/sessions.mjs';
+import { SESSION_GAP_MS, SESSION_HISTORY_LIMIT, listeningSessions, practiceSessions, sanitizeSessions, sessionsFromRounds, recordSessionAnswer, sessionDuration } from '../../website/public/js/sessions.mjs';
 import { syncProfile, mergeProgress } from '../../website/public/js/sync-data.mjs';
+import { recordSending } from '../../website/public/js/sending.mjs';
 
 const start = new Date(2026, 10, 22, 12).getTime();
 function answer(p, at, { correct = true, clean = true } = {}) {
@@ -36,6 +37,48 @@ test('wrong submissions bridge sessions, duplicate handling and skipping cannot 
   startRound(p, 'E'); finishRound(p, { now: new Date(start + 180001) });
   const [session] = listeningSessions(p.stats.sessions);
   assert.equal(session.answers, 2); assert.equal(session.correct, 1); assert.equal(session.clean, 0); assert.equal(session.duration, 60000);
+});
+
+test('Practice sessions includes older Send results and Listen fragments in order without double counting retries or XP', () => {
+  const state = newState(), p = state.profiles[0];
+  const results = [0, SESSION_GAP_MS, SESSION_GAP_MS * 2 + 1].map((delta, i) => ({
+    id: crypto.randomUUID(), at: start + delta, xp: i === 1 ? 0 : 10,
+  }));
+  p.sending.results = [results[2], ...results]; p.sending.attempts = 500;
+  answer(p, start + SESSION_GAP_MS + 1);
+  const xp = p.stats.xp;
+  for (const saved of [p, importState(JSON.stringify(state)).profiles[0], syncProfile(p)]) {
+    const recent = practiceSessions(saved);
+    assert.deepEqual(recent.map(s => [s.activity, s.answers, s.correct, s.duration]), [
+      ['Send', 1, 1, 0], ['Listen', 1, 1, 0], ['Send', 2, 1, SESSION_GAP_MS],
+    ]);
+    assert.equal(recent[2].partial, true);
+    assert.equal(saved.stats.xp, xp);
+    assert.equal(listeningSessions(saved.stats.sessions).length, 1);
+  }
+});
+
+test('long Send sessions survive eviction, overlapping paired practice, repeated import and level resets', t => {
+  const base = newProfile(), mac = structuredClone(base), web = structuredClone(base);
+  let at = start;
+  t.mock.method(Date, 'now', () => at);
+  const grade = { valid:true, complete:true, passed:true, quality:100 };
+  let sessionId;
+  for (let i = 0; i < 350; i++) {
+    at = start + 1000 * i;
+    sessionId = recordSending(mac.sending, 'E', grade, { sessionId }).sessionId;
+  }
+  at = start + 20000;
+  recordSending(web.sending, 'E', { ...grade, passed:false });
+  assert.equal(mac.sending.results.length, 300);
+  const merged = mergeProgress(base, mac, web);
+  const saved = JSON.stringify({ version:1, activeId:merged.id, profiles:[merged] });
+  for (const p of [merged, mergeProgress(mac, mac, merged), resetLearnerProgress(importState(saved).profiles[0])]) {
+    const rows = practiceSessions(p);
+    assert.equal(rows.length, 1);
+    assert.deepEqual([rows[0].start, rows[0].duration, rows[0].answers, rows[0].correct, !!rows[0].partial], [start, 349000, 351, 350, false]);
+    assert.ok(Object.keys(p.sending.sessionHistory.recorded).length <= 300);
+  }
 });
 
 test('a long session retains its original start after round history is trimmed and recent fragments stay bounded', () => {

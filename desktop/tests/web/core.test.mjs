@@ -45,7 +45,8 @@ test('Farnsworth stretches only character/word gaps, preserving dit and dah leng
 
 test('extreme speed settings are bounded and effective speed never exceeds character speed', () => {
   const settings = sanitizeSettings({ wpm: 5, farnsworth: 80, tone: NaN, rise: -1, fall: 500, volume: 500 });
-  assert.equal(settings.farnsworth, 5);
+  assert.equal(settings.farnsworth, 80);
+  assert.deepEqual(timing(5, 80), timing(5, 5));
   assert.equal(settings.tone, 600);
   assert.equal(settings.rise, 1);
   assert.equal(settings.fall, 30);

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { timeline, timing, MORSE } from '../../website/public/js/morse.mjs';
 import { SENDING_LEVELS, SENDING_CHAPTERS, SENDING_LETTERS, SENDING_DIGITS, sendingStage, sendingTokens, sendingExercise, legacySendingLevel } from '../../website/public/js/sending-course.mjs';
-import { emptySending, sanitizeSending, sanitizeSendingSettings, gradeSending, decodeSending, recordSending, sendingMastery, advanceSending, mergeSending } from '../../website/public/js/sending.mjs';
+import { emptySending, sanitizeSending, sanitizeSendingSettings, gradeSending, decodeSending, recordSending, sendingMastery, advanceSending, mergeSending, SEND_BADGES, earnedSendBadges } from '../../website/public/js/sending.mjs';
 import { PaddleKeyer, PaddleConnection, paddleSnapshot, PADDLE_URL } from '../../website/public/js/paddle.mjs';
 import { newProfile, sanitizeState, resetLearnerProgress, resetSendingProgress, importState, startRound, finishRound } from '../../website/public/js/progress.mjs';
 import { syncProfile, mergeProgress } from '../../website/public/js/sync-data.mjs';
@@ -15,6 +15,27 @@ function pass(s, target = sendingExercise(s, '', () => 0).target) {
   const grade = gradeSending(edgesFor(target, s.settings), target, s.settings, sendingStage(s.level));
   return recordSending(s, target, grade);
 }
+
+test('sending badges credit saved practice, announce each new milestone once and award no extra XP', () => {
+  const p = newProfile(), s = p.sending;
+  const grade = gradeSending(edgesFor('E'), 'E', settings);
+  assert.deepEqual(recordSending(s, 'E', grade, { assisted: true }).badges, []);
+  const first = pass(s, 'E');
+  assert.deepEqual(first.badges.map(b => b.id), ['send-first']); assert.equal(first.xp, 10);
+  assert.deepEqual(pass(s, 'E').badges, []);
+  s.level = 4;
+  assert.deepEqual(pass(s, 'EE').badges.map(b => b.id), ['send-group']);
+  Object.assign(s, { clean: 9, attempts: 10, characters: 11 });
+  assert.deepEqual(pass(s, 'EE').badges.map(b => b.id), ['send-ten']);
+  Object.assign(s, { clean: 99, attempts: 110, characters: 998 });
+  s.sounds = Object.fromEntries([...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].map(c => [c, {seen:1,good:1,recent:[true]}]));
+  assert.deepEqual(pass(s, 'EE').badges.map(b => b.id), ['send-hundred','send-thousand']);
+  const expected = SEND_BADGES.map(b => b.id);
+  for (const reloaded of [resetSendingProgress(p), syncProfile(p), importState(JSON.stringify({version:1,profiles:[p],activeId:p.id})).profiles[0]]) {
+    assert.deepEqual(earnedSendBadges(reloaded.sending).map(b => b.id), expected);
+  }
+  assert.deepEqual(earnedSendBadges(emptySending()), []);
+});
 
 test('sending has 218 contiguous levels, a full alphabet and all ten digits before symbols and replies', () => {
   assert.equal(SENDING_LEVELS, 218);
@@ -166,7 +187,7 @@ test('fresh listening and sending share their timing while saved iambic and reve
   assert.equal(p.sending.settings.wpm, p.settings.wpm); assert.equal(p.settings.wpm, 30);
   assert.equal(p.sending.settings.farnsworth, p.settings.farnsworth); assert.equal(p.settings.farnsworth, 15);
   assert.equal(p.sending.settings.keyer, 'a');
-  assert.deepEqual(sanitizeSendingSettings({ wpm: 5, farnsworth: 60, keyer: 'unsafe' }), { wpm: 5, farnsworth: 5, keyer: 'a', reverse: false, continueMode: 'timed', pauseSeconds: 2 });
+  assert.deepEqual(sanitizeSendingSettings({ wpm: 5, farnsworth: 60, keyer: 'unsafe' }), { wpm: 5, farnsworth: 60, keyer: 'a', reverse: false, continueMode: 'timed', pauseSeconds: 2 });
   assert.equal(sanitizeSendingSettings({ wpm: 25 }).farnsworth, 25);
   p.sending.settings.keyer = 'b';
   assert.equal(sanitizeSending(p.sending).settings.keyer, 'b');

@@ -53,10 +53,13 @@
   expect([...quick.querySelectorAll('input,select,button')].map(n=>n.id).join(',')==='send-wpm,send-farnsworth,send-pitch,send-volume','Unexpected quick control');
   expect(get('send-pitch').step==='50' && get('send-pitch').type==='range','Pitch control');
   change('send-wpm',52);change('send-farnsworth',42);change('send-pitch',1150);change('send-volume',64);
-  expect(get('spacing-max').textContent==='52' && get('send-farnsworth').max==='52','Spacing limit');
+  expect(get('send-farnsworth').max==='80','Fixed spacing range');
   expect(quick.querySelector('[data-value="volume"]').textContent==='64','Volume readout');
   change('send-wpm',32);
-  expect(current().settings.farnsworth===32 && get('send-farnsworth').value==='32','Shared spacing clamp');
+  expect(current().settings.farnsworth===42 && get('send-farnsworth').value==='42' && get('send-speed-hint').textContent.includes('42'),'Spacing moved with sending speed');
+  change('send-wpm',52);
+  expect(get('send-farnsworth').value==='42' && current().sending.settings.farnsworth===42,'Restored spacing preference');
+  change('send-wpm',32);
   tab('practice');
   expect(get('view-send').contains(quick) && get('summary-tone').textContent==='1150 Hz','Listening did not use the sending controls');
   tab('lab'); change('lab-curve','exponential'); change('lab-rise',8); change('lab-fall',11);
@@ -217,21 +220,24 @@
   await wait(()=>get('send-feedback').textContent.includes('Correct'),'Grade actual edges');
   stable('when graded');
   expect(!get('send-next'),'Next exercise appeared after grading');
-  await wait(()=>heard.length===2 && get('send-trace').textContent.includes('Last attempt'),'Automatic next and retained comparison');
+  const captureCleared=()=>!get('send-decoded').textContent && get('send-hit').hidden && !get('send-capture').querySelector('.trace-sent,.trace-burst,.send-fireworks');
+  await wait(()=>heard.length===2 && captureCleared(),'Automatic next must clear the previous answer');
   stable('on automatic advance');
   key(true,6000);key(false,6120);
   await wait(()=>get('send-feedback').textContent.includes('Try again.'),'Missed exercise retry');
   await wait(()=>heard.length===3 && heard[2]===heard[1],'Automatic replay');
+  expect(captureCleared(),'Retry retained the missed answer');
   stable('after a retry');
   if (fixture.mode==='browser') {
     function sendEE(start) { key(true,start); key(false,start+40); key(true,start+160); key(false,start+200); }
+    const beforeXP=current().stats.xp;
     sendEE(8000);
-    await wait(()=>heard.length===4,'Replay recovered to the next exercise');
-    await wait(()=>get('send-hit').dataset.finish==='perfect' && get('send-trace').textContent.includes('Last attempt'),'Automatic playback lost the perfect grade');
-    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) expect(get('send-capture').querySelector('.send-fireworks'),'Automatic advance swallowed the completion fireworks');
+    await wait(()=>get('send-hit').dataset.finish==='perfect','Perfect match should appear after last release');
+    expect(heard.length===3 && current().stats.xp===beforeXP,'A live match advanced playback or awarded XP early');
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) expect(get('send-capture').querySelector('.send-fireworks'),'Final release missed the fireworks');
     stable('during the completion fireworks');
+    await wait(()=>heard.length===4 && captureCleared(),'Replay recovered and cleared the last answer');
     sendEE(10000);
-    expect(!get('send-capture').querySelector('.send-fireworks'),'New sending input retained the previous fireworks');
     await wait(()=>current().sending.level===5 && heard.length===5,'Timed mode starts the next level');
     expect(!get('send-next') && !current().sending.pendingLevel && !get('send-decoded').textContent,'Completed level boundary');
   }
@@ -267,5 +273,37 @@
   }
   get('send-help').click();
   await wait(()=>!get('send-trace').hidden && get('send-trace').querySelector('.trace-target'),'Revealed pattern timing guide');
+  if (mac) {
+    change('send-level',29); change('send-wpm',25); change('send-farnsworth',5); change('send-pause',0.8);
+    await tick(); get('send-listen').click();
+    await wait(()=>get('send-feedback').textContent.includes('then pause'),'Hear the guided R at 25/5');
+    const priorXP = current().stats.xp, plays = heard.length;
+    testPaddleElement(0,3000);
+    for (const [down,up] of [[3100,3148],[3196,3340],[3388,3436]]) { testPaddleElement(1,down);testPaddleElement(2,up); }
+    expect(!get('send-hit').dataset.finish,'Buffered native stream celebrated before its neutral watermark');
+    testPaddleElement(0,3490);
+    await wait(()=>get('send-hit').dataset.finish==='clean','Neutral native release missed the complete R');
+    expect(current().stats.xp===priorXP && heard.length===plays,'Paddle match graded or played the next prompt early');
+    testPaddleElement(0,4235);
+    expect(current().stats.xp===priorXP,'Ignored the selected 800 ms pause');
+    testPaddleElement(0,4236);
+    await wait(()=>heard.length===plays+1 && captureCleared() && current().stats.xp===priorXP+10,'Full R should advance once at the selected pause, even with 5 WPM spacing');
+  }
+  tab('journey');
+  expect(get('recent-sessions').textContent.includes('Send') && get('send-badge-grid').querySelector('[data-badge="send-first"].earned'),'Sending session or badge missing from Progress');
+  get('open-progress').click();
+  change('learner-callsign','TEST1');
+  const sharing = get('list-on-leaderboard');
+  if (sharing.checked) sharing.click();
+  get('save-callsign').click();
+  await wait(()=>current().callsign==='TEST1' && !current().leaderboard,'Saved callsign');
+  const xpBeforeSharing = current().stats.xp;
+  sharing.click();
+  expect(current().leaderboard && testState().delivery.learners[current().id].scores.length===0,'Checkbox must enable future results immediately without queuing old XP');
+  get('progress-dialog').querySelector('[data-close]').click();
+  if (fixture.mode !== 'mac-local') {
+    get('refresh-leaderboard').click();
+    await wait(()=>get('leaderboard-me').textContent.includes('30 leaderboard XP') && get('leaderboard-me').textContent.includes(xpBeforeSharing.toLocaleString()+' total XP'),'Could not compare public and total XP');
+  }
   window.testComplete=true;
 })().catch(error=>{window.testFailure=error.message;});

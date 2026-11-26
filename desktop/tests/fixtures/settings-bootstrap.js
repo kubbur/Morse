@@ -16,7 +16,7 @@ function snapshot() { return { connected:true, profile:serverProfile, seq:0, rev
 function exchange(action,body) {
   requests.push(action);
   if (action==='capabilities') return {status:200, privateSync:config.mode==='mac-staging', scores:config.mode==='mac-staging', leaderboard:config.mode!=='mac-local'};
-  if (action==='scores/leaderboard') return {entries:[]};
+  if (action==='scores/leaderboard') return {entries:[{rank:1,callsign:'TEST1',xp:30,streak:1}],me:null};
   if (action==='private/adopt') return {status:403,error:'No earlier browser credential.'};
   if (action==='private/start') {
     serverProfile=body.profile;

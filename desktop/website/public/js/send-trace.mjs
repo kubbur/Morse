@@ -129,10 +129,12 @@ export class SendingTraceView {
     this.observer.observe(this.scroll);
   }
 
-  set(data, caption, complete, passed = false) {
+  set(data, complete, passed = false) {
     // Removing a guided target is synchronous. A rapid first blind press can
     // make the plot visible again before its next animation frame.
-    if (!data?.expected.length && this.data?.expected.length) {
+    const last = data?.actual.at(-1);
+    const previous = this.data?.actual.at(-1);
+    if ((!data?.expected.length && this.data?.expected.length) || (!last && previous)) {
       this.marks.replaceChildren();
       this.effects.replaceChildren();
       this.plot.removeAttribute('aria-label');
@@ -140,24 +142,39 @@ export class SendingTraceView {
       this.root.querySelector('.trace-caption').textContent = '';
       this.root.querySelector('.trace-feedback').textContent = '';
     }
-    const last = data?.actual.at(-1);
-    const previous = this.data?.actual.at(-1);
     if (!last || (data.actual.length === 1 && last.end === null && (previous?.end !== null || this.complete))) {
       this.paintedReleases = 0;
       this.lastSparkAt = -Infinity;
       this.effects.replaceChildren();
     }
-    if (last && (previous?.start !== last.start || previous?.end !== last.end)) this.edgeSince = performance.now();
-    if (!complete) {
-      this.gradeArrival = false;
+    const changed = previous?.start !== last?.start || previous?.end !== last?.end || this.data?.actual.length !== data?.actual.length;
+    if (changed && last) this.edgeSince = performance.now();
+    if (changed || !last || (complete && !passed)) {
+      this.liveFinish = null;
       delete this.verdict.dataset.finish;
       this.fireworks?.remove();
       this.fireworks = null;
-    } else if (!this.complete && previous) this.gradeArrival = this.data.expected.length ? 'guided' : 'blind';
-    this.data = data; this.caption = caption; this.complete = complete; this.passed = passed;
+    }
+    if (!last) {
+      this.verdict.querySelector('.trace-call').textContent = '';
+      this.verdict.querySelector('.trace-streak').textContent = '';
+      this.scroll.scrollLeft = 0;
+    }
+    this.data = data; this.complete = complete; this.passed = passed;
     this.root.hidden = !data || !data.expected.length && !data.actual.length;
-    if (this.root.hidden || !data.expected.length || !data.actual.length) this.verdict.hidden = true;
+    if (!last || (!data.expected.length && !this.liveFinish)) this.verdict.hidden = true;
     if (!this.root.hidden) this.schedule();
+  }
+
+  // Show the match while the player can still see this answer. Later marks
+  // can invalidate it. Only the normal end-of-answer check awards XP.
+  showMatchedSend(reference) {
+    if (this.complete || this.liveFinish) return;
+    const finish = wholeSend(reference, markFeedback(reference));
+    if (!finish) return;
+    this.liveFinish = finish;
+    this.celebrate(finish.kind);
+    this.schedule();
   }
 
   schedule() {
@@ -226,15 +243,15 @@ export class SendingTraceView {
     const hits = markFeedback(data);
     const missing = this.complete ? expected.length - hits.length : 0;
     const latest = missing > 0 ? { matched: false, label: missing === 1 ? '1 mark missing' : missing + ' marks missing', streak: 0 } : hits.at(-1);
-    const finish = this.complete && this.passed ? wholeSend(data, hits) : null;
+    const finish = this.complete ? (this.passed && wholeSend(data, hits)) : this.liveFinish;
     if (finish) this.verdict.dataset.finish = finish.kind;
     else delete this.verdict.dataset.finish;
-    if (latest) {
-      this.verdict.dataset.hit = latest.perfect || finish?.kind === 'perfect' ? 'perfect' : latest.matched ? 'match' : 'miss';
+    if (finish || latest) {
+      this.verdict.dataset.hit = latest?.perfect || finish?.kind === 'perfect' ? 'perfect' : (finish || latest?.matched) ? 'match' : 'miss';
       this.verdict.querySelector('.trace-call').textContent = finish?.label ?? latest.label;
-      this.verdict.querySelector('.trace-streak').textContent = latest.streak >= 2 ? latest.streak + ' in a row' : '';
+      this.verdict.querySelector('.trace-streak').textContent = latest?.streak >= 2 ? latest.streak + ' in a row' : '';
     }
-    this.verdict.hidden = !latest;
+    this.verdict.hidden = !latest && !finish;
     const layers = document.createDocumentFragment();
     const rough = 80 / scale, base = 10 ** Math.floor(Math.log10(rough));
     const step = ([1,2,5,10].find(n => n * base >= rough) || 10) * base;
@@ -295,18 +312,11 @@ export class SendingTraceView {
     const lastHit = hits.at(-1);
     const landed = actual[hits.length - 1];
     const newHit = hits.length > this.paintedReleases;
-    if (this.gradeArrival && finish) this.celebrate(finish.kind);
-    if (this.gradeArrival && finish?.kind === 'clean') {
-      this.strike(landed.end, 'clean');
-    } else if (this.gradeArrival === 'blind' && finish?.kind === 'perfect') {
-      const mark = actual[hits.findLastIndex(hit => hit.perfect)];
-      this.strike(data.keyerTimed ? mark.start : mark.end, 'perfect');
-    } else if (lastHit?.matched && newHit && (!this.complete || this.gradeArrival)) {
+    if (lastHit?.matched && newHit && !this.complete) {
       const at = lastHit.perfect && data.keyerTimed ? landed.start : landed.end;
       this.strike(at, lastHit.perfect ? 'perfect' : 'match');
     }
     for (const burst of this.effects.children) burst.style.left = x(Number(burst.dataset.at)) + 'px';
-    this.gradeArrival = false;
     this.paintedReleases = actual.length - (held ? 1 : 0);
     const end = cursor ? x(cursor.end ?? cursor.start) : 0;
     const stamp = cursor?.end ?? cursor?.start;
@@ -315,7 +325,7 @@ export class SendingTraceView {
       this.scroll.scrollLeft = Math.max(0, end - visible + 2 * padding);
     this.stamp = stamp;
     this.root.querySelector('.trace-target-key').hidden = !expected.length;
-    this.root.querySelector('.trace-caption').textContent = this.caption || (expected.length && !data.keyerTimed && !this.complete ? 'Release at the line' : '');
+    this.root.querySelector('.trace-caption').textContent = expected.length && !data.keyerTimed && !this.complete ? 'Release at the line' : '';
     const feedback = timingFeedback(data, this.complete);
     this.root.querySelector('.trace-feedback').textContent = feedback;
     this.plot.setAttribute('aria-label', [

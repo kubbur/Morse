@@ -1,5 +1,6 @@
 import { MORSE, PROSIGNS, timing, timeline } from './morse.mjs';
 import { SENDING_LEVELS, legacySendingLevel, sendingStage, sendingTokens } from './sending-course.mjs';
+import { mergeSendingSessions, recordSendingSession } from './sessions.mjs';
 
 const object = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 const number = (v, min, max, fallback = 0) => typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
@@ -8,10 +9,23 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const plus = (b = 0, l = 0, r = 0) => Math.min(1e9, r + Math.max(0, l - b));
 
 export const DEFAULT_SENDING_SETTINGS = Object.freeze({ wpm: 30, farnsworth: 30, keyer: 'a', reverse: false, continueMode: 'timed', pauseSeconds: 2 });
+export const SEND_BADGES = [
+  { id: 'send-first', icon: 'check', title: 'First clean send', description: 'Send one answer cleanly without help.', earned: s => s.clean >= 1 },
+  { id: 'send-group', icon: 'layers', title: 'First clean group', description: 'Send two or more characters in one clean answer.', earned: s => s.characters > s.clean },
+  { id: 'send-ten', icon: 'spark', title: '10 clean sends', description: 'Send 10 answers cleanly.', earned: s => s.clean >= 10 },
+  { id: 'send-hundred', icon: 'flame', title: '100 clean sends', description: 'Send 100 answers cleanly.', earned: s => s.clean >= 100 },
+  { id: 'send-alphabet', icon: 'book', title: 'Alphabet sent', description: 'Match the Morse pattern for each of the 26 letters.', earned: s => [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].every(c => s.sounds[c]?.good > 0) },
+  { id: 'send-thousand', icon: 'flag', title: '1,000 characters sent', description: 'Send 1,000 characters in clean answers.', earned: s => s.characters >= 1000 },
+];
+
+export function earnedSendBadges(sending) {
+  return SEND_BADGES.filter(badge => badge.earned(sending));
+}
+
 export function sanitizeSendingSettings(input) {
   const s = object(input);
   const wpm = Math.round(number(s.wpm, 5, 80, 30));
-  return { wpm, farnsworth: Math.round(number(s.farnsworth, 1, wpm, wpm)), keyer: s.keyer === 'b' ? 'b' : 'a', reverse: s.reverse === true,
+  return { wpm, farnsworth: Math.round(number(s.farnsworth, 1, 80, wpm)), keyer: s.keyer === 'b' ? 'b' : 'a', reverse: s.reverse === true,
     continueMode: s.continueMode === 'manual' ? 'manual' : 'timed',
     pauseSeconds: Math.round(number(s.pauseSeconds, 0.5, 15, DEFAULT_SENDING_SETTINGS.pauseSeconds) * 10) / 10 };
 }
@@ -38,6 +52,8 @@ export function sanitizeSending(input) {
   // Upgrade the original sending default once; later manual choices survive.
   if (version < 2 && result.settings.wpm === 30 && result.settings.farnsworth === 15) result.settings.farnsworth = 30;
   result.results=Array.isArray(s.results) ? s.results.slice(-300).filter(r=>r && typeof r.id==='string' && /^[0-9a-f-]{36}$/i.test(r.id) && Number.isSafeInteger(r.at)).map(r=>({id:r.id,at:r.at,xp:count(r.xp)})) : [];
+  const history = mergeSendingSessions(s.sessionHistory, null, result.results);
+  if (history) result.sessionHistory = history;
   for (const key of ['attempts', 'clean', 'characters', 'earned']) result[key] = count(s[key]);
   result.clean = Math.min(result.clean, result.attempts);
   for (let level = 1; level <= SENDING_LEVELS; level++) {
@@ -120,11 +136,20 @@ function expectedGroups(target) {
   return target.split(' ').flatMap(part => { const w = word++; return sendingTokens(part).map(t => ({ ...t, word: w })); });
 }
 
+function matchesGroups(groups, expected) {
+  return expected.length > 0 && groups.length === expected.length &&
+    groups.every((g, i) => g.pattern === expected[i].pattern && g.word === expected[i].word);
+}
+
+export function matchesSendingTarget(capture, target) {
+  return capture.valid && capture.complete && matchesGroups(capture.groups, expectedGroups(target));
+}
+
 export function gradeSending(edges, target, settings = DEFAULT_SENDING_SETTINGS, stage = sendingStage(1), { keyerTimed = false } = {}) {
   const result = decodeSending(edges, settings);
   const expected = expectedGroups(target);
   if (!result.valid || !result.complete || !expected.length || expected.some(t => !t.pattern)) return { ...result, correct: false, passed: false, quality: 0, issue: result.message || 'Release the key to finish.' };
-  const correct = result.groups.length === expected.length && result.groups.every((g, i) => g.pattern === expected[i].pattern && g.word === expected[i].word);
+  const correct = matchesGroups(result.groups, expected);
   const plan = timeline(target, settings);
   const parts = [];
   result.marks.forEach((mark, i) => {
@@ -164,9 +189,10 @@ export function advanceSending(sending) {
   return true;
 }
 
-export function recordSending(sending, target, grade, { assisted = false } = {}) {
+export function recordSending(sending, target, grade, { assisted = false, sessionId } = {}) {
   const stage = sendingStage(sending.level);
-  if (!stage.items.some(item => item.target === target) || !grade.valid || !grade.complete) return { xp: 0, levelUp: false };
+  if (!stage.items.some(item => item.target === target) || !grade.valid || !grade.complete) return { xp: 0, levelUp: false, badges: [] };
+  const previousBadges = new Set(earnedSendBadges(sending));
   const record = sending.records[stage.level] ||= { attempts: 0, good: 0, best: 0, mastered: false, turn: 0, focusHistory: [], history: [], covered: [] };
   const passed = grade.passed && !assisted;
   sending.attempts++; record.attempts++;
@@ -192,15 +218,19 @@ export function recordSending(sending, target, grade, { assisted = false } = {})
   }
   const xp = (passed ? 10 : 0) + (levelUp ? 30 : 0);
   sending.earned = Math.min(1e9, sending.earned + xp);
-  const id=crypto.randomUUID();
-  sending.results=[...(sending.results||[]),{id,at:Date.now(),xp}].slice(-300);
-  return { id, xp, levelUp, passed, nextLevel: levelUp && stage.level < SENDING_LEVELS ? stage.level + 1 : null };
+  const result = { id: crypto.randomUUID(), at: Date.now(), xp };
+  sending.results = [...sending.results, result].slice(-300);
+  sessionId = recordSendingSession(sending, result, sessionId);
+  const badges = earnedSendBadges(sending).filter(badge => !previousBadges.has(badge));
+  return { id: result.id, xp, levelUp, passed, badges, sessionId, nextLevel: levelUp && stage.level < SENDING_LEVELS ? stage.level + 1 : null };
 }
 
 export function mergeSending(baseInput, localInput, remoteInput) {
   const b = sanitizeSending(baseInput), l = sanitizeSending(localInput), r = sanitizeSending(remoteInput), result = structuredClone(r);
   const results=new Map([...r.results,...l.results].map(row=>[row.id,row]));
   result.results=[...results.values()].sort((a,b)=>a.at-b.at).slice(-300);
+  const history = mergeSendingSessions(l.sessionHistory, r.sessionHistory, result.results);
+  if (history) result.sessionHistory = history;
   if (l.level !== b.level) { result.level = l.level; result.pendingLevel = l.pendingLevel; }
   else if (l.pendingLevel !== b.pendingLevel) result.pendingLevel = l.pendingLevel;
   for (const key of Object.keys(l.settings)) if (!same(b.settings[key], l.settings[key])) result.settings[key] = l.settings[key];

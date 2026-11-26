@@ -45,7 +45,7 @@ export function sanitizeSettings(input = {}) {
   settings.kochCount = integer(source.kochCount, 2, 41, 2);
   settings.custom = supportedCharacters(typeof source.custom === 'string' ? source.custom : 'ETAN').slice(0, 50) || 'ETAN';
   settings.wpm = integer(source.wpm, 5, 80, 30);
-  settings.farnsworth = integer(source.farnsworth, 1, settings.wpm, 15);
+  settings.farnsworth = integer(source.farnsworth, 1, 80, 15);
   settings.tone = 50 * Math.round(integer(source.tone, 200, 2000, 600) / 50);
   settings.volume = integer(source.volume, 0, 100, 55);
   settings.rise = integer(source.rise, 1, 30, 5);
@@ -273,7 +273,7 @@ export function sanitizeState(input) {
       source.sending?.settings && profile.sending.settings;
     if (oldSpeed && Number.isFinite(oldSpeed.wpm) && Number.isFinite(oldSpeed.farnsworth)) {
       const wpm = integer(oldSpeed.wpm, 5, 80, 30);
-      const farnsworth = integer(oldSpeed.farnsworth, 1, wpm, wpm);
+      const farnsworth = integer(oldSpeed.farnsworth, 1, 80, wpm);
       if (wpm !== settings.wpm || farnsworth !== settings.farnsworth) profile.previousTiming = { wpm, farnsworth };
     }
     mirrorSendingSpeed(profile);

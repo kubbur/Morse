@@ -1,8 +1,17 @@
-import { syncProfile, mergeProgress, syncChanged, playbackOnDevice, hasLocalChanges } from './sync-data.mjs';
+import { syncProfile, mergeProgress, syncChanged, playbackOnDevice, spacingOnDevice, hasLocalChanges } from './sync-data.mjs';
 import { parseProgressJson } from './import-validation.mjs';
+import { mergeSendingSessions } from './sessions.mjs';
 
 export const SYNC_KEY = 'morse.devices.v1';
 const uuid = () => crypto.randomUUID();
+
+function rememberReceipt(meta, submitted, received) {
+  const { wpm, farnsworth } = submitted.settings;
+  const preference = { wpm, farnsworth };
+  if (spacingOnDevice(received, preference) !== received) meta.spacingPreference = preference;
+  else delete meta.spacingPreference;
+  meta.legacySendingSessions = !!submitted.sending.sessionHistory && !received.sending?.sessionHistory;
+}
 export class DeviceSync {
   constructor({ storage, getProfile, applyProfile, ready, backup, onStatus, onErased = () => {}, fetcher = globalThis.fetch.bind(globalThis), locks = navigator.locks }) {
     Object.assign(this, { storage, getProfile, applyProfile, ready, backup, onStatus, onErased, fetcher, locks });
@@ -99,7 +108,16 @@ export class DeviceSync {
     const replace = meta.force;
     const local = syncProfile(this.getProfile());
     const remote = playbackOnDevice(meta.remote, local.sending.settings);
-    const merged = replace ? remote : mergeProgress(meta.base, local, remote);
+    const preferred = spacingOnDevice(remote, meta.spacingPreference);
+    const base = spacingOnDevice(meta.base, meta.spacingPreference);
+    let merged = replace ? preferred : mergeProgress(base, local, preferred);
+    if (replace && !preferred.sending.sessionHistory && local.sending.sessionHistory &&
+        preferred.sending.results?.some(r => local.sending.sessionHistory.recorded[r.id])) {
+      const history = mergeSendingSessions(local.sending.sessionHistory, null, preferred.sending.results);
+      merged = { ...preferred, sending: { ...preferred.sending, sessionHistory: history } };
+      meta.legacySendingSessions = true;
+    }
+    if (preferred === remote) delete meta.spacingPreference;
     if (remote !== meta.remote) {
       // A push may have been followed by another edit while in flight. Remember
       // the attempted values, so the newer edit still gets its own request.
@@ -142,6 +160,7 @@ export class DeviceSync {
         meta.revision = result.revision;
         meta.base = pending.profile;
         meta.remote = result.profile;
+        rememberReceipt(meta, pending.profile, result.profile);
         meta.pending = null;
         if (pending.replacement === meta.replacement) meta.replacement = null;
         this.save(meta);
@@ -179,7 +198,11 @@ export class DeviceSync {
       this.backup();
       const before=syncProfile(this.getProfile());
       const result = await this.request('start', { profile: before, label, invite });
-      const meta = this.meta() || { version: 1, base: before, epoch: result.epoch, seq: result.seq, revision: result.revision };
+      let meta = this.meta();
+      if (!meta) {
+        meta = { version: 1, base: before, epoch: result.epoch, seq: result.seq, revision: result.revision };
+        rememberReceipt(meta, before, result.profile);
+      }
       this.receive(result, meta);
       this.schedule(500);
       return result;

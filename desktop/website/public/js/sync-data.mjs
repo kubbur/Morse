@@ -67,8 +67,25 @@ export function playbackOnDevice(profile, fallback = DEFAULT_SENDING_SETTINGS) {
   return { ...profile, sending: { ...profile.sending, settings: { ...rest, continueMode, pauseSeconds } } };
 }
 
+// Older sites acknowledge a spacing speed above the sending speed as equal
+// to it. Remember the selected value only for that exact acknowledged pair.
+export function spacingOnDevice(profile, preference) {
+  if (!preference || preference.farnsworth <= preference.wpm) return profile;
+  const clamped = settings => settings?.wpm === preference.wpm && settings.farnsworth === preference.wpm;
+  if (!clamped(profile.settings) || !clamped(profile.sending?.settings)) return profile;
+  const farnsworth = preference.farnsworth;
+  return { ...profile, settings: { ...profile.settings, farnsworth },
+    sending: { ...profile.sending, settings: { ...profile.sending.settings, farnsworth } } };
+}
+
 export function hasLocalChanges(meta, local) {
-  return syncChanged(playbackOnDevice(meta.base, meta.localPlayback), local);
+  let base = spacingOnDevice(playbackOnDevice(meta.base, meta.localPlayback), meta.spacingPreference);
+  // Older sites retain the timestamped results but omit the session summaries.
+  // The same result is sent once. Keep the full sessions on this installation.
+  if (!base.sending.sessionHistory && local.sending.sessionHistory && meta.legacySendingSessions) {
+    base = { ...base, sending: { ...base.sending, sessionHistory: local.sending.sessionHistory } };
+  }
+  return syncChanged(base, local);
 }
 
 // A three-way merge applies only work performed since this device's acknowledged

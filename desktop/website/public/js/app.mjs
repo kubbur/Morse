@@ -17,7 +17,8 @@ import { JOURNAL_KEY, recoverJournal } from './origin-move.mjs';
 import qrcode from './vendor/qrcode.mjs';
 import { sanitizeFocus, beginFocus, endFocus, focusPhase, focusPrompt, focusProgress } from './focus-level.mjs';
 import { LISTENING_GOAL, sanitizeListening, activeListening, queueListening, beginListening, leaveListening, listeningPrompt, checkpointSettings, listeningCheckpoint, guidedListeningPractice } from './by-ear.mjs';
-import { listeningSessions, sessionDuration, recordSessionAnswer } from './sessions.mjs';
+import { practiceSessions, sessionDuration, recordSessionAnswer } from './sessions.mjs';
+import { SEND_BADGES, earnedSendBadges } from './sending.mjs';
 import { RewardEffects } from './rewards.mjs';
 import { SendingUI } from './send-ui.mjs';
 import { SENDING_LEVELS } from './sending-course.mjs';
@@ -97,6 +98,7 @@ let pairingDevicesKey = '';
 let recoveryBusy = false, recoveryGeneration = 0;
 let identityDirty = false;
 let leaderboardLoading = false;
+let leaderboardRefreshDue = false;
 let leaderboardUpdated = 0;
 const mac = window.morseMac;
 const pairingOrigin = mac ? (mac.syncMode === 'staging' ? 'http://127.0.0.1:38764' : 'https://morse.kubbur.digital') : location.origin;
@@ -713,7 +715,6 @@ function renderControls() {
   $('lab-course').min = stage?.audioAlphabet ? '2' : '4';
   $$('[data-setting]').forEach(control => {
     const key = control.dataset.setting;
-    if (key === 'farnsworth') control.max = settings.wpm;
     if (key === 'kochCount') control.max = KOCH.length;
     if (control.type === 'checkbox') control.checked = settings[key];
     else if (document.activeElement !== control || control.type === 'range') control.value = settings[key];
@@ -722,9 +723,11 @@ function renderControls() {
     }
   });
   $$('[data-value]').forEach(output => { output.textContent = settings[output.dataset.value]; });
-  $('spacing-max').textContent = settings.wpm;
+  $('send-speed-hint').textContent = settings.farnsworth > settings.wpm
+    ? `Standard spacing at ${settings.wpm} WPM is in use. Your spacing setting is ${settings.farnsworth} WPM.`
+    : 'Lower the spacing speed for longer gaps between letters and words.';
   $('summary-wpm').textContent = `${settings.wpm} WPM`;
-  $('summary-farnsworth').textContent = settings.farnsworth === settings.wpm ? 'Standard spacing' : `${settings.farnsworth} Farnsworth`;
+  $('summary-farnsworth').textContent = settings.farnsworth >= settings.wpm ? 'Standard spacing' : `${settings.farnsworth} Farnsworth`;
   $('summary-tone').textContent = `${settings.tone} Hz`;
   $('lesson-name').textContent = isEndless(settings) ? 'Endless radio' : LESSONS.find(lesson => lesson.id === settings.lesson).name;
   $('course-control').hidden = settings.lesson !== 'starter' || isEndless(settings) || stage?.audioCourse && !stage.audioAlphabet;
@@ -1079,7 +1082,7 @@ function renderJourney() {
   $('listening-summary').textContent = `${completed} checkpoint${completed === 1 ? '' : 's'} complete · ${phases.filter(entry => entry.phase === 'request').length}/${sounds.length} sounds ready without the pattern`;
   $('listening-confidence').innerHTML = phases.map(({ sound, phase }) => `<span class="confidence-sound" data-phase="${phase}" title="${escape(sound)}: ${phase === 'live' ? 'Learn with the pattern' : phase === 'review' ? 'Pattern after your answer' : 'Pattern only when requested'}"><strong>${escape(sound.length > 1 ? `<${sound}>` : sound)}</strong><small>${phase === 'live' ? 'Learn' : phase === 'review' ? 'Review' : 'By ear'}</small></span>`).join('');
   const stats = p.stats;
-  const badges = new Set(collectedBadges(p).map(b => b.id));
+  const badges = new Set([...collectedBadges(p), ...earnedSendBadges(p.sending)].map(b => b.id));
   const letters = alphabetFor(p.settings);
   $('course-journey').hidden = !isGrowingCourse(p.settings);
   $('course-title').textContent = p.settings.courseLevel >= 101 ? 'Learned characters' : 'Learned characters';
@@ -1100,7 +1103,7 @@ function renderJourney() {
     ['SIGNALS COPIED', stats.solved.toLocaleString(), `${stats.total.toLocaleString()} rounds of listening`],
     ['FIRST-LISTEN ACCURACY', stats.total ? `${Math.round(stats.clean / stats.total * 100)}%` : '—', 'Correct, first try, without help'],
     ['YOUR LISTENING STREAK', `${dayStreak(stats)} ${dayStreak(stats) === 1 ? 'day' : 'days'}`, `${stats.bestStreak} clean copies in your best run`],
-    ['TOTAL XP', `${stats.xp.toLocaleString()} XP`, `${badges.size} of ${BADGES.length} badges earned`],
+    ['TOTAL XP', `${stats.xp.toLocaleString()} XP`, `${badges.size} of ${BADGES.length + SEND_BADGES.length} badges earned`],
   ];
   $('stats-grid').innerHTML = cards.map(([label, value, caption]) => `<article class="card stat-card"><span class="eyebrow">${label}</span><strong>${value}</strong><p>${caption}</p></article>`).join('');
   const days = Array.from({ length: 7 }, (_, index) => { const date = new Date(); date.setDate(date.getDate() - 6 + index); return { date, count: stats.days[localDay(date)] || 0 }; });
@@ -1111,13 +1114,25 @@ function renderJourney() {
   const weak = weakCharacters();
   $('weak-characters').innerHTML = weak.length ? `<div class="weak-chips">${weak.map(([c, s]) => `<button type="button" class="weak-item" data-character="${escape(c)}" aria-label="Listen to ${escape(c)}, ${s.correct} of ${s.seen} recent first attempts correct"><strong>${escape(c.length > 1 ? `<${c}>` : c)}</strong><small>${Math.round(s.correct / s.seen * 100)}%</small><small>${s.correct}/${s.seen} correct</small></button>`).join('')}</div>` : '<p class="empty-note">No recent mistakes recorded.</p>';
   $('practice-weak').disabled = !weak.length;
-  $('badge-grid').innerHTML = BADGES.map(badge => `<article class="card badge-card${badges.has(badge.id) ? ' earned' : ''}" data-badge="${badge.id}"><span class="badge-symbol">${icon(badge.icon)}</span><div><strong>${badge.title}</strong><p>${badge.description}</p><span class="badge-status">${badges.has(badge.id) ? 'EARNED' : 'NOT EARNED'}</span></div></article>`).join('');
-  const recent = listeningSessions(stats.sessions).slice(-10).reverse();
-  $('recent-sessions').innerHTML = recent.length ? `<table class="round-table session-table"><thead><tr><th scope="col">Started</th><th scope="col">Duration</th><th scope="col">Answers</th><th scope="col">Copied</th></tr></thead><tbody>${recent.map(s => `<tr><td>${escape(new Date(s.start).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</td><td>${sessionDuration(s.duration)}</td><td>${s.answers.toLocaleString()}</td><td class="clean-label">${s.correct.toLocaleString()}</td></tr>`).join('')}</tbody></table>` : '<p class="empty-note">No practice sessions recorded.</p>';
+  const badgeCard = badge => `<article class="card badge-card${badges.has(badge.id) ? ' earned' : ''}" data-badge="${badge.id}"><span class="badge-symbol">${icon(badge.icon)}</span><div><strong>${badge.title}</strong><p>${badge.description}</p><span class="badge-status">${badges.has(badge.id) ? 'EARNED' : 'NOT EARNED'}</span></div></article>`;
+  $('badge-grid').innerHTML = BADGES.map(badgeCard).join('');
+  $('send-badge-grid').innerHTML = SEND_BADGES.map(badgeCard).join('');
+  const recent = practiceSessions(p).slice(0, 10);
+  $('recent-sessions').innerHTML = recent.length ? `<table class="round-table session-table"><thead><tr><th scope="col">Started</th><th scope="col">Activity</th><th scope="col">Duration</th><th scope="col">Answers</th><th scope="col">Copied / clean sends</th></tr></thead><tbody>${recent.map(s => {
+    const started = new Date(s.start).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return `<tr><td>${escape(started)}</td><td>${s.activity}${s.partial ? ' (partial)' : ''}</td><td>${sessionDuration(s.duration)}</td><td>${s.answers.toLocaleString()}</td><td class="clean-label">${s.correct.toLocaleString()}</td></tr>`;
+  }).join('')}</tbody></table>` : '<p class="empty-note">No practice sessions recorded.</p>';
 }
 
 function saveSharing(callsign, enabled) {
-  storage.atomic(()=>{storage.consent(profile(),callsign,enabled); storage.setItem(STORAGE_KEY,JSON.stringify(state));});
+  const p = profile(), previous = { callsign: p.callsign, leaderboard: p.leaderboard };
+  try {
+    storage.atomic(() => { storage.consent(p, callsign, enabled); storage.setItem(STORAGE_KEY, JSON.stringify(state)); });
+  } catch (error) {
+    Object.assign(p, previous);
+    throw error;
+  }
+  leaderboardUpdated = 0;
   deviceSync.consentChanged();
 }
 function renderSavedProgress() {
@@ -1156,18 +1171,31 @@ async function refreshLeaderboard(force = false) {
     $('leaderboard-message').textContent = 'Offline practice';
     return;
   }
-  if (!deviceSync || leaderboardLoading || !force && Date.now() - leaderboardUpdated < 10000) return;
+  if (!deviceSync || !force && Date.now() - leaderboardUpdated < 10000) return;
+  if (leaderboardLoading) { leaderboardRefreshDue ||= force; return; }
+  const owner = profile().id;
   leaderboardLoading = true;
   $('leaderboard-message').textContent = 'Loading…';
   try {
     const result = await deviceSync.request('leaderboard');
+    if (profile().id !== owner) { leaderboardRefreshDue = true; return; }
     if (result.erased) { deviceSync.receive(result, deviceSync.meta()); return; }
-    $('leaderboard-rows').innerHTML = result.entries.map(entry => `<tr${entry.callsign === result.me?.callsign ? ' class="leaderboard-self"' : ''}><td>${entry.rank}</td><th scope="row">${escape(entry.callsign)}</th><td>${entry.xp.toLocaleString()}</td><td><span class="leaderboard-streak" aria-label="${entry.streak}-day listening streak">${entry.streak}<span aria-hidden="true">d</span></span></td></tr>`).join('');
-    $('leaderboard-me').textContent = result.me ? `Your position: #${result.me.rank} · ${result.me.callsign} · ${result.me.xp.toLocaleString()} XP · ${result.me.streak}-day streak` : '';
-    $('leaderboard-message').textContent = result.entries.length ? 'Top 50 stations · XP stays with you when you repeat the course.' : 'No leaderboard entries yet.';
+    const p = profile(), callsign = p.callsign;
+    const station = result.me?.callsign === callsign ? result.me : result.entries.find(entry => entry.callsign === callsign);
+    $('leaderboard-rows').innerHTML = result.entries.map(entry => `<tr${entry.callsign === callsign ? ' class="leaderboard-self"' : ''}><td>${entry.rank}</td><th scope="row">${escape(entry.callsign)}</th><td>${entry.xp.toLocaleString()}</td><td><span class="leaderboard-streak" aria-label="${entry.streak}-day listening streak">${entry.streak}${entry.streak}<span aria-hidden="true">d</span></span></td></tr>`).join('');
+    const pendingXP = storage.row(p.id).scores.reduce((sum, score) => sum + score.xp, 0);
+    const comparison = station ? `${callsign} · #${station.rank} · ${station.xp.toLocaleString()} leaderboard XP` : `${callsign} · outside the displayed rankings`;
+    const status = !p.leaderboard ? ' · Sharing off' : pendingXP ? ` · ${pendingXP.toLocaleString()} XP waiting to upload` : '';
+    $('leaderboard-me').textContent = callsign ? `${comparison} · ${p.stats.xp.toLocaleString()} total XP${status}` : '';
+    $('leaderboard-message').textContent = result.entries.length ? 'Top 50 stations' : 'No leaderboard entries yet.';
     leaderboardUpdated = Date.now();
   } catch { $('leaderboard-message').textContent = 'The leaderboard is offline. Your progress stays saved here.'; }
-  finally { leaderboardLoading = false; }
+  finally {
+    leaderboardLoading = false;
+    const again = leaderboardRefreshDue;
+    leaderboardRefreshDue = false;
+    if (again && view === 'journey') void refreshLeaderboard(true);
+  }
 }
 
 function clearMorseData() {
@@ -1720,12 +1748,6 @@ document.addEventListener('input', event => {
       control.setAttribute('aria-valuetext', `${value} ${unit}`);
     };
     preview(key,control.value,({wpm:'words per minute',farnsworth:'words per minute',tone:'hertz',volume:'percent'})[key] || 'milliseconds');
-    if (key === 'wpm') {
-      const spacing = $('send-farnsworth');
-      spacing.max = control.value; spacing.value = Math.min(profile().settings.farnsworth,Number(control.value));
-      document.querySelector('[data-value="farnsworth"]').textContent = spacing.value;
-      $('spacing-max').textContent = control.value;
-    }
     return;
   }
   if (key === 'custom') return; // Apply a custom alphabet on change, after typing.
@@ -2186,6 +2208,11 @@ function stationFor(id) {
     },
     backup: () => storage.setItem(STORAGE_KEY+'.pairing-backup.'+id, JSON.stringify(state)),
     onStatus: status => { if (state.activeId === id) renderDeviceSync(status); },
+    onScoresPublished: () => {
+      if (state.activeId !== id) return;
+      leaderboardUpdated = 0;
+      if (view === 'journey') void refreshLeaderboard(true);
+    },
     onErased: () => { if (state.activeId === id) clearMorseData(); },
   });
   learnerStations.set(id,station);
@@ -2230,10 +2257,19 @@ $('callsign-intro-form').addEventListener('submit', async event => {
 });
 $('learner-callsign').addEventListener('input', () => { identityDirty = true; });
 $('list-on-leaderboard').addEventListener('change', () => {
-  identityDirty=true;
-  if (!$('list-on-leaderboard').checked && profile().leaderboard) {
-    try { saveSharing(profile().callsign,false); $('callsign-message').textContent='Sharing off. Pending scores cleared.'; }
-    catch { $('callsign-message').textContent='Sharing paused. The choice could not be saved to disk.'; }
+  const p = profile(), enabled = $('list-on-leaderboard').checked;
+  const sameCallsign = !!p.callsign && sanitizeCallsign($('learner-callsign').value) === p.callsign;
+  identityDirty = !sameCallsign;
+  if (enabled && !sameCallsign) {
+    $('callsign-message').textContent = 'Save your callsign to start sharing new scores.';
+    return;
+  }
+  try {
+    saveSharing(p.callsign, enabled);
+    $('callsign-message').textContent = enabled ? 'Sharing on for new scores.' : 'Sharing off. Pending scores cleared.';
+  } catch {
+    $('list-on-leaderboard').checked = p.leaderboard;
+    $('callsign-message').textContent = 'Could not save the sharing change. Try again.';
   }
 });
 $('save-callsign').addEventListener('click', event => pairingAction(event.currentTarget, async () => {

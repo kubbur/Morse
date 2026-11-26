@@ -15,6 +15,8 @@ import { syncProfile } from '../website/public/js/sync-data.mjs';
 import { Exchange } from '../website/lib/exchange.mjs';
 import { snapshot,restore } from '../scripts/backup.mjs';
 import { LearnerDB } from '../src/learner-db.mjs';
+import { recordSending } from '../website/public/js/sending.mjs';
+import { practiceSessions } from '../website/public/js/sessions.mjs';
 
 const memory = (rows = {}) => ({
   getItem:k=>rows[k] ?? null,setItem:(k,v)=>{rows[k]=v},removeItem:k=>{delete rows[k]},
@@ -172,6 +174,85 @@ test('recovery from the earlier v2 website settles, preserves playback choices a
   assert.equal(browser.p.sending.settings.pauseSeconds, 8);
   assert.equal(browser.p.stats.xp, 50);
   assert.equal(mac.station.status.message, 'Progress synced');
+});
+
+test('legacy speed clamping preserves the chosen spacing across polls and restart, then accepts an explicit remote change', async t => {
+  const server = new Exchange(':memory:');
+  t.after(() => server.close());
+  let pushes = 0;
+  const mac = fixture(server, (action, payload, send) => {
+    if (action === 'private/push') {
+      pushes++;
+      const body = structuredClone(payload);
+      for (const settings of [body.body.profile.settings, body.body.profile.sending.settings]) {
+        settings.farnsworth = Math.min(settings.farnsworth, settings.wpm);
+      }
+      return send(action, body);
+    }
+    return send(action, payload);
+  });
+  await mac.station.start('Mac');
+  Object.assign(mac.p.settings, {wpm:20, farnsworth:42});
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(mac.station.meta().base.settings.farnsworth, 20);
+  assert.equal(mac.p.settings.farnsworth, 42);
+  assert.equal(mac.station.status.message, 'Progress synced');
+  const restart = new PracticeStorage(memory({[STORAGE_KEY]: mac.storage.committed}));
+  mac.station.storage = restart.forLearner(mac.p.id);
+  await mac.station.flush();
+  assert.equal(pushes, 1);
+  const browser = fixture(server);
+  const { code } = await mac.station.request('recovery-code');
+  await browser.station.recover(code);
+  browser.p.settings.farnsworth = 15;
+  await browser.station.flush();
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(pushes, 1); assert.equal(mac.p.settings.farnsworth, 15);
+  assert.equal(mac.station.meta().spacingPreference, undefined);
+});
+
+test('old websites can acknowledge Send results without erasing the fuller session history or triggering repeated uploads', async t => {
+  const server = new Exchange(':memory:'); t.after(() => server.close());
+  let pushes = 0;
+  const mac = fixture(server, (action, payload, send) => {
+    if (action === 'private/push') pushes++;
+    const copy = structuredClone(payload);
+    for (const p of [copy.body.profile, copy.body.base, copy.body.foundation]) if (p?.sending) delete p.sending.sessionHistory;
+    return send(action, copy);
+  });
+  const grade = { valid:true, complete:true, passed:true, quality:100 };
+  const first = recordSending(mac.p.sending, 'E', grade);
+  await mac.station.start('Mac'); await mac.station.flush();
+  recordSending(mac.p.sending, 'E', grade, { sessionId:first.sessionId });
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(pushes, 1);
+  assert.equal(mac.station.meta().base.sending.sessionHistory, undefined);
+  assert.equal(mac.p.sending.sessionHistory.fragments[0].answers, 2);
+  assert.deepEqual(practiceSessions(mac.p).map(r => r.answers), [2]);
+  assert.equal(mac.station.status.message, 'Progress synced');
+});
+
+test('enabling sharing publishes the next clean Send once and leaves earlier private XP out of the leaderboard', async t => {
+  const server = new Exchange(':memory:'); t.after(() => server.close());
+  const mac = fixture(server);
+  let published = 0;
+  mac.station.onScoresPublished = () => { published++; };
+  const sendResult = () => {
+    const award = recordSending(mac.p.sending, 'E', {valid:true, complete:true, passed:true, quality:100});
+    mac.p.stats.xp += award.xp;
+    mac.storage.result(mac.p, 'send', award.xp, award.id);
+    mac.storage.setItem(STORAGE_KEY, JSON.stringify(mac.state));
+  };
+  await mac.station.start('Mac');
+  mac.share(false); sendResult(); await mac.station.flush();
+  mac.share(true); await mac.station.flushScores();
+  const board = () => server.scores.request('leaderboard',null,null,{}).entries;
+  assert.equal(board()[0]?.xp || 0, 0);
+  sendResult(); await mac.station.flushScores(); await mac.station.flushScores(); await mac.station.flush();
+  assert.equal(board()[0].xp, 10);
+  assert.equal(published, 1, 'Refresh the leaderboard once for the acknowledged score');
+  assert.equal(mac.p.stats.xp, 20);
+  assert.equal(mac.station.meta().base.stats.xp, 20);
 });
 
 test('an existing 1.1.1 journal with missing playback defaults polls without a new upload', async t => {

@@ -2,7 +2,7 @@ const curves = ['smooth', 'linear', 'exponential'];
 const fields = ['wpm', 'farnsworth', 'tone', 'volume', 'rise', 'fall', 'curve'];
 
 export function nativeSound(settings) {
-  return { wpm: settings.wpm, farnsworth: settings.farnsworth, keyer: settings.keyer,
+  return { wpm: settings.wpm, farnsworth: Math.min(settings.wpm, settings.farnsworth), keyer: settings.keyer,
     pitch: settings.tone, volume: settings.volume, rise: settings.rise, fall: settings.fall, curve: curves.indexOf(settings.curve) };
 }
 

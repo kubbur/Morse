@@ -9,10 +9,14 @@
   capture.style.width = '520px';
   const view = new SendingTraceView(get('.send-trace'), get('.trace-verdict'));
   view.reducedMotion = { matches:false };
-  function paint(target, times, paddle = false, complete = false, passed = false) {
+  function paint(target, times, paddle = false, complete = false, passed = false, privateTarget = target) {
     const edges = times.map((at,i) => ({at,down:i % 2 === 0}));
     const data = sendingTrace(target, {wpm:30,farnsworth:30}, edges, {keyerTimed:paddle});
-    view.set(data, '', complete, passed);
+    view.set(data, complete, passed);
+    if (!complete && times.length && times.length % 2 === 0) {
+      const reference = privateTarget === target ? data : sendingTrace(privateTarget, {wpm:30,farnsworth:30}, edges, {keyerTimed:paddle});
+      view.showMatchedSend(reference);
+    }
     view.draw();
   }
   function expect(condition, message) { if (!condition) throw Error(message); }
@@ -44,10 +48,11 @@
   expect(Math.abs(gateEnd - nextPress) < 0.1 && gateEnd < get('.trace-plot').clientWidth, 'After a late release the next press guide must follow the measured gap and stay on the scale');
   paint('S', []);
   paint('S', [0,40,80,120,160,200]);
-  expect(capture.querySelectorAll('.trace-sent.trace-perfect').length === 3 && capture.querySelectorAll('.trace-burst').length === 1 && !fireworks(), 'Batched releases must wait for the grade to celebrate the whole send');
+  expect(capture.querySelectorAll('.trace-sent.trace-perfect').length === 3 && capture.querySelectorAll('.trace-burst').length === 1 && fireworks(), 'Batched final release missed its whole-answer celebration');
+  const releaseFireworks = fireworks();
   paint('S', [0,40,80,120,160,200], false, true, true);
   const first = fireworks(), panelHeight = capture.offsetHeight;
-  expect(first?.dataset.kind === 'perfect' && first.children.length === 3 && call() === 'Perfect send', 'Graded guided phrase missed its fireworks');
+  expect(first === releaseFireworks && first.dataset.kind === 'perfect' && first.children.length === 3 && call() === 'Perfect send', 'Grading replayed or lost the release fireworks');
   expect(first.parentElement === capture && getComputedStyle(first).pointerEvents === 'none' && first.getAttribute('aria-hidden') === 'true', 'Fireworks must stay on the visible panel and allow input');
   paint('S', [0,40,80,120,160,200], false, true, true);
   capture.style.width = '400px';
@@ -72,13 +77,15 @@
 
   paint('A', [], true);
   paint('A', [0,40,80,200], true);
-  expect(call() === 'Dah matched' && !get('.trace-perfect,.trace-spark'), 'Keyer-generated length earned a timing star');
+  expect(call() === 'Clean send' && !get('.trace-perfect,.trace-spark') && fireworks()?.dataset.kind === 'clean', 'Keyer-generated length should only earn a clean-send cue');
   paint('A', [0,40,80,200], true, true, true);
   expect(call() === 'Clean send' && get('.trace-clean') && fireworks()?.dataset.kind === 'clean', 'Correct paddle pattern missed its mint completion cue');
   paint('A', [], true);
   expect(!fireworks(), 'Starting again left the previous fireworks running');
-  paint('', [0,40,80,200]);
-  expect(!fireworks() && get('.trace-verdict').hidden, 'Blind exercise celebrated before grading');
+  paint('', [0,40], false, false, false, 'A');
+  expect(!fireworks() && get('.trace-verdict').hidden && !get('.trace-target'), 'Blind exercise revealed a partial match');
+  paint('', [0,40,80,200], false, false, false, 'A');
+  expect(fireworks() && !get('.trace-target'), 'Blind full answer missed its release cue or revealed the target');
   paint('A', [0,40,80,200], false, true, true);
   expect(call() === 'Perfect send' && fireworks()?.dataset.kind === 'perfect', 'Perfect blind attempt missed its graded celebration');
   paint('E E', [], true);
@@ -91,7 +98,7 @@
   paint('E E', [0,40], true);
   expect(get('.trace-gap') && !get('.trace-burst'), 'Reduced-motion paddle gap cue');
   paint('E E', [0,40,320,360], true);
-  expect(call() === 'Perfect gap' && get('.trace-at-press') && get('.trace-gap-hit') && !get('.trace-burst'), 'Reduced motion lost the static gap bracket and star or emitted particles');
+  expect(call() === 'Perfect spacing' && get('.trace-at-press') && get('.trace-gap-hit') && !get('.trace-burst'), 'Reduced motion lost the static gap bracket and star or emitted particles');
   paint('E E', [0,40,320,360], true, true, true);
   expect(call() === 'Perfect spacing' && get('.trace-verdict').dataset.finish === 'perfect' && !get('.trace-burst,.send-fireworks'), 'Reduced motion must retain the whole-attempt badge without animated particles');
   expect(getComputedStyle(get('.trace-call'),'::after').content !== 'none', 'Missing static finishing star');

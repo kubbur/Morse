@@ -9,6 +9,7 @@ export class Station extends DeviceSync {
     this.canPublish=options.canPublish || (() => true);
     this.canSync=options.canSync || (() => true);
     this.requestImpl=options.transport;
+    this.onScoresPublished = options.onScoresPublished;
     this.privateEnabled=false;
   }
   async exchange(action, body={}) {
@@ -74,11 +75,15 @@ export class Station extends DeviceSync {
         if (!current()) return;
         const accepted=new Set(receipt.acknowledged);
         this.storage.atomic(()=>{ const now=this.storage.row(owner); now.scores=now.scores.filter(r=>!accepted.has(r.id)); });
+        if (pending.some(r => accepted.has(r.id))) this.onScoresPublished?.();
       }
       const history=this.storage.row(owner).history;
       if (current() && history?.decision==='queued') {
         await this.exchange('scores/history',{generation,id:history.id,xp:history.xp});
-        if (current()) this.storage.atomic(()=>{ this.storage.row(owner).history.decision='published'; });
+        if (current()) {
+          this.storage.atomic(()=>{ this.storage.row(owner).history.decision='published'; });
+          this.onScoresPublished?.();
+        }
       }
       this.scoreError=null;
     } catch(error) { this.scoreError=error.message; }
@@ -131,7 +136,7 @@ export class Station extends DeviceSync {
       if (hasLocalChanges(meta,syncProfile(this.getProfile()))) {
         this.schedule(0); return meta;
       }
-      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback};
+      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,legacySendingSessions:meta.legacySendingSessions};
       const received=super.receive(result,meta);
       if (received?.force) {received.previous=previous;this.save(received);}
       return received;

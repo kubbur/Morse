@@ -56,7 +56,7 @@ test('timed playback measures from the last key-up and never cuts through a Farn
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { getElementById: () => document } });
   t.after(() => previous ? Object.defineProperty(globalThis, 'document', previous) : delete globalThis.document);
   const ui = Object.assign(Object.create(SendingUI.prototype), { getProfile: () => profile, source: 'straight',
-    edges: [], down: false, ready: () => true, paintTrace() {}, paintCapture() {} });
+    item: { target: 'E E' }, edges: [], down: false, ready: () => true, paintTrace() {}, paintCapture() {}, showReleasedMatch() {} });
   let completions = 0;
   ui.finish = () => { completions++; };
   ui.edge({ down: true, at: 0 }); ui.edge({ down: false, at: 40 });
@@ -68,5 +68,12 @@ test('timed playback measures from the last key-up and never cuts through a Farn
   profile.sending.settings.pauseSeconds = 0.5; profile.settings.farnsworth = 3;
   assert.ok(ui.idleDelay() > 3000);
   profile.sending.settings.continueMode = 'manual'; profile.sending.settings.pauseSeconds = 15;
-  assert.equal(ui.idleDelay(), ui.wordPause());
+  assert.equal(ui.idleDelay(), ui.inputPause());
+  profile.settings.wpm = 25; profile.settings.farnsworth = 5;
+  profile.sending.settings.continueMode = 'timed'; profile.sending.settings.pauseSeconds = 0.8;
+  assert.ok(ui.idleDelay() > 3000, 'Allow the full gap while a spaced word is outstanding');
+  ui.item.target = 'P';
+  assert.equal(ui.idleDelay(), 800, 'A single letter never needs a Farnsworth word gap');
+  ui.item.target = 'E E'; ui.patternComplete = true;
+  assert.equal(ui.idleDelay(), 800, 'The selected pause applies after the complete answer');
 });

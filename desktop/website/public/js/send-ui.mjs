@@ -1,7 +1,7 @@
 import { MorseAudio } from './audio.mjs';
 import { timing, timeline, rampGain } from './morse.mjs';
 import { SENDING_LEVELS, SENDING_CHAPTERS, sendingStage, sendingExercise, sendingTokens } from './sending-course.mjs';
-import { DEFAULT_SENDING_SETTINGS, decodeSending, gradeSending, sendingMastery, recordSending, advanceSending, sanitizeSendingSettings } from './sending.mjs';
+import { DEFAULT_SENDING_SETTINGS, decodeSending, gradeSending, matchesSendingTarget, sendingMastery, recordSending, advanceSending, sanitizeSendingSettings } from './sending.mjs';
 import { BuiltInPaddle, NativeSidetone } from './native-paddle.mjs';
 import { VBandKeys, loadInput, saveInput } from './vband.mjs';
 import { keyLabel, loadKeyboardPaddles, paddleCharacter, saveKeyboardPaddles } from './keyboard-paddles.mjs';
@@ -247,7 +247,7 @@ export class SendingUI {
     this.showPause(pauseSeconds);
     if (this.native && !this.migrationPending) this.connection.configure(this.settings);
     const { wpm, farnsworth } = this.settings;
-    $('send-speed-label').textContent = `${wpm} WPM · ${farnsworth === wpm ? 'standard spacing' : farnsworth + ' WPM spacing'}`;
+    $('send-speed-label').textContent = `${wpm} WPM · ${farnsworth >= wpm ? 'standard spacing' : farnsworth + ' WPM spacing'}`;
     const mastery = sendingMastery(s);
     $('send-progress-copy').textContent = s.pendingLevel ? 'Level complete · ready for the next level' : mastery.mastered ? 'Level complete · continue practising or choose another level' : `${mastery.good}/${mastery.required} clean transmissions${stage.focusCopies ? ` · ${stage.focus}: ${mastery.focusGood}/${stage.focusCopies}` : ''}`;
     $('send-completed-count').textContent = `${completed(s)}/${SENDING_LEVELS} completed`;
@@ -363,7 +363,7 @@ export class SendingUI {
   playPrompt(feedback = '') {
     if (!this.usable()) return;
     if (this.getProfile().sending.pendingLevel || this.result?.passed) this.next({ autoListen: true, feedback });
-    else void this.listen({ keepComparison: !!this.result?.valid, feedback });
+    else void this.listen({ feedback });
   }
 
   clearAnswer() {
@@ -378,10 +378,10 @@ export class SendingUI {
       this.level = this.getProfile().sending.level;
       this.persist();
     }
-    this.abort('', { preservePaddles, keepComparison: autoListen });
+    this.abort('', { preservePaddles });
     this.item = sendingExercise(this.getProfile().sending, previous);
     this.assisted = false; this.revealed = false; this.heard = false;
-    if (autoListen && this.usable()) void this.listen({ keepComparison: true, feedback });
+    if (autoListen && this.usable()) void this.listen({ feedback });
     else {
       $('send-feedback').textContent = this.source === 'straight' ? 'Tap the key to listen, then send the answer. Checking is automatic.' : 'Tap dit (E) to listen, then send the answer. Checking is automatic.';
       this.renderExercise();
@@ -389,7 +389,7 @@ export class SendingUI {
     if (!reset) this.render();
   }
 
-  abort(message = '', { preservePaddles = false, keepComparison = false, keepGraded = false } = {}) {
+  abort(message = '', { preservePaddles = false, keepGraded = false } = {}) {
     clearTimeout(this.checkTimer); clearTimeout(this.holdTimer);
     this.checkTimer = this.holdTimer = null;
     cancelAnimationFrame(this.keyerFrame); this.keyerFrame = null;
@@ -408,11 +408,10 @@ export class SendingUI {
     if (!(keepGraded && this.result?.valid)) {
       this.originAt = null; this.edges = []; this.result = null;
       $('send-decoded').textContent = '';
-      if (!keepComparison) {
-        this.lastTrace = null;
-        $('send-metrics').hidden = true;
-        $('send-capture').removeAttribute('data-result');
-      }
+      this.feedbackRelease = null;
+      this.patternComplete = false;
+      $('send-metrics').hidden = true;
+      $('send-capture').removeAttribute('data-result');
       if (message && this.active()) $('send-feedback').textContent = message;
     }
     this.renderExercise();
@@ -439,10 +438,10 @@ export class SendingUI {
     } else $(this.source === 'keyboard' ? 'send-dit' : 'send-key').focus({ preventScroll:true });
   }
 
-  async listen({ keepComparison = false, feedback = '' } = {}) {
+  async listen({ feedback = '' } = {}) {
     if (!this.usable()) return;
     this.listenHeld ||= !!this.inputHeld();
-    this.abort('', { preservePaddles: true, keepComparison });
+    this.abort('', { preservePaddles: true });
     const item = this.item, stage = this.stage;
     this.heard = false;
     this.playing = true; const generation = ++this.playGeneration;
@@ -488,50 +487,59 @@ export class SendingUI {
     if (local) this.tone.set(down, this.settings);
     clearTimeout(this.checkTimer); clearTimeout(this.holdTimer);
     if (down) {
-      this.lastTrace = null; this.paintTrace();
+      this.patternComplete = false;
+      this.paintTrace();
       this.holdTimer = setTimeout(() => this.abort('Key held too long. Release it and try again.'), 10000);
     }
     else {
       this.paintCapture();
+      if (this.source === 'straight') this.showReleasedMatch();
       if (!(this.native && this.usesPaddleSidetone)) this.checkTimer = setTimeout(() => this.finish(), this.idleDelay());
     }
   }
 
-  wordPause() {
+  inputPause() {
+    if (this.patternComplete) return 500;
     const { wpm, farnsworth } = this.settings;
-    return Math.max(500, timing(wpm, farnsworth).wordGap * 1000 * (1 + this.stage.tolerance) + 180);
+    const time = timing(wpm, farnsworth), target = this.item.target;
+    const gap = target.includes(' ') ? time.wordGap : sendingTokens(target).length > 1 ? time.letterGap : time.elementGap;
+    return Math.max(500, gap * 1000 * (1 + this.stage.tolerance) + 180);
   }
   idleDelay() {
     const { continueMode, pauseSeconds } = this.settings;
-    return Math.max(this.wordPause(), continueMode === 'timed' ? pauseSeconds * 1000 : 0);
+    return Math.max(this.inputPause(), continueMode === 'timed' ? pauseSeconds * 1000 : 0);
   }
   showPause(seconds) {
     $('send-pause-value').textContent = seconds.toFixed(1) + ' s';
     $('send-pause').setAttribute('aria-valuetext', seconds + ' seconds');
-    const minimum = this.wordPause();
-    $('send-pause-hint').textContent = seconds * 1000 < minimum
-      ? `Your current word spacing needs at least ${(Math.ceil(minimum / 100) / 10).toFixed(1)} s.`
-      : 'Each mark restarts the pause.';
+    $('send-pause-hint').textContent = 'Each mark restarts the pause. Longer gaps are allowed inside unfinished groups and words.';
   }
   paintCapture() {
     const decoded = decodeSending(this.edges, this.settings);
+    this.patternComplete = matchesSendingTarget(decoded, this.item.target);
     $('send-decoded').textContent = decoded.decoded || '';
     this.paintTrace();
   }
 
   paintTrace() {
     if (!this.item) return;
-    if (this.lastTrace && !this.edges.length) {
-      this.trace.set(this.lastTrace.data, 'Last attempt · '+this.lastTrace.target, true, this.lastTrace.passed);
-      return;
-    }
     const complete = !!this.result?.valid;
     const showTarget = this.stage.guided || this.revealed || complete;
-    const data = sendingTrace(showTarget ? this.item.target : '', this.settings, this.edges,
-      { keyerTimed: this.source !== 'straight', tolerance: this.stage.tolerance });
-    const passed = this.result?.passed === true;
-    this.trace.set(data, '', complete, passed);
-    if (complete) this.lastTrace = {data, target:this.item.target, passed};
+    this.trace.set(this.traceFor(showTarget ? this.item.target : ''), complete, this.result?.passed === true);
+  }
+
+  traceFor(target) {
+    return sendingTrace(target, this.settings, this.edges, { keyerTimed: this.source !== 'straight', tolerance: this.stage.tolerance });
+  }
+
+  // A keyer can have another mark queued after key-up. Only its idle signal
+  // establishes that the last generated mark has actually finished.
+  showReleasedMatch() {
+    const release = this.edges.at(-1);
+    if (!release || release.down || release === this.feedbackRelease || this.result || this.keyer?.busy || this.inputHeld()) return;
+    this.feedbackRelease = release;
+    const data = this.trace.data;
+    this.trace.showMatchedSend(data.expected.length ? data : this.traceFor(this.item.target));
   }
 
   straight(down, at = performance.now()) {
@@ -592,6 +600,7 @@ export class SendingUI {
       this.abort('Paddle timing was interrupted. Tap dit (E) to listen and try again.');
       this.updateMute();
     }
+    if (!this.keyer?.busy) this.showReleasedMatch();
   }
 
   keyboardContact(contact, down, owner = contact) {
@@ -615,6 +624,7 @@ export class SendingUI {
     if (!this.usable() || !this.keyer) return;
     this.keyer.advance(performance.now());
     if (this.keyer.busy) this.keyerFrame = requestAnimationFrame(() => this.tickKeyer());
+    else this.showReleasedMatch();
   }
 
   key(event, down) {
@@ -663,7 +673,8 @@ export class SendingUI {
     this.result = gradeSending(this.edges, this.item.target, this.settings, this.stage, { keyerTimed: this.source !== 'straight' });
     const grade = this.result;
     if (!grade.valid) { $('send-feedback').textContent = grade.issue; return; }
-    const award = recordSending(s, this.item.target, grade, { assisted: this.assisted });
+    const award = recordSending(s, this.item.target, grade, { assisted: this.assisted, sessionId: this.sessionId });
+    this.sessionId = award.sessionId;
     this.onEarn(award.xp,award.id); this.persist();
     $('send-capture').dataset.result = grade.passed ? 'good' : 'retry';
     // Joined prosigns share patterns with some punctuation. Use the matched
@@ -673,9 +684,14 @@ export class SendingUI {
     $('send-metrics').hidden = false;
     const score = type => { const rows = grade.parts?.filter(p => type === 'marks' ? !p.type.includes('gap') : p.type.includes('gap')) || []; return rows.length ? `${Math.round(100 * rows.reduce((sum, p) => sum + Math.max(0, 1 - p.error), 0) / rows.length)}%` : '—'; };
     $('send-metrics').replaceChildren(make('span', '', `Marks ${score('marks')}${this.source === 'straight' ? '' : ' · keyer timed'}`), make('span', '', `Spacing ${score('gaps')}`));
-    if (grade.passed && award.levelUp) {
-      const milestone = sendingBadges(s).find(c => c.end === this.stage.level);
-      this.rewards.show({ kind: milestone ? 'badge' : 'level', title: milestone ? `${milestone.name} complete` : this.stage.level === SENDING_LEVELS ? 'Sending course complete' : `Sending level ${this.stage.level} complete`, detail: award.nextLevel ? `Next: ${sendingStage(award.nextLevel).title}` : `All ${SENDING_LEVELS} levels are available for review.`, icon: 'check', badges: milestone ? [milestone] : [] });
+    if (award.levelUp || award.badges.length) {
+      const milestone = award.levelUp && sendingBadges(s).find(c => c.end === this.stage.level);
+      const titles = award.badges.map(b => b.title);
+      if (milestone) titles.push(`${milestone.name} complete`);
+      const levelTitle = this.stage.level === SENDING_LEVELS ? 'Sending course complete' : `Sending level ${this.stage.level} complete`;
+      this.rewards.show({ kind: titles.length ? 'badge' : 'level', title: titles.join(' · ') || levelTitle,
+        detail: award.levelUp ? (award.nextLevel ? `Up next · ${sendingStage(award.nextLevel).title}` : levelTitle) : award.badges[0].description,
+        icon: award.badges[0]?.icon || 'check', badges: titles });
     }
     this.render();
     if (this.settings.continueMode === 'timed') {

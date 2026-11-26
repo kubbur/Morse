@@ -26,8 +26,12 @@ export function mergeSessions(left, right) {
 }
 
 export function listeningSessions(records) {
+  return groupSessions(sanitizeSessions(records));
+}
+
+function groupSessions(records) {
   const sessions = [];
-  for (const row of sanitizeSessions(records).sort((a, b) => a.start - b.start || a.end - b.end)) {
+  for (const row of records.sort((a, b) => a.start - b.start || a.end - b.end)) {
     const last = sessions.at(-1);
     if (last && row.start - last.end <= SESSION_GAP_MS) {
       last.end = Math.max(last.end, row.end);
@@ -35,6 +39,52 @@ export function listeningSessions(records) {
     } else sessions.push({ ...row });
   }
   return sessions.map(row => ({ ...row, duration: row.end - row.start }));
+}
+
+// Only the recording UI appends to its current fragment. Paired devices
+// create separate fragments, which can be merged by ID and grouped by time.
+// Keep membership only for attempts still present in the short result log.
+export function mergeSendingSessions(left, right, results) {
+  const fragments = mergeSessions(left?.fragments, right?.fragments);
+  if (!fragments.length) return undefined;
+  const ids = new Set(fragments.map(row => row.id));
+  const recorded = {};
+  for (const { id } of results) {
+    const fragment = right?.recorded?.[id] ?? left?.recorded?.[id];
+    if (ids.has(fragment)) recorded[id] = fragment;
+  }
+  return { fragments, recorded };
+}
+
+export function recordSendingSession(sending, result, previousId) {
+  const history = sending.sessionHistory ??= { fragments: [], recorded: {} };
+  let row = history.fragments.find(s => s.id === previousId);
+  if (!row || result.at < row.end || result.at - row.end > SESSION_GAP_MS) {
+    row = { id: result.id, start: result.at, end: result.at, answers: 0, correct: 0, clean: 0, xp: 0 };
+    history.fragments.push(row);
+  }
+  row.end = result.at;
+  row.answers++;
+  if (result.xp > 0) { row.correct++; row.clean++; }
+  row.xp += result.xp;
+  history.recorded[result.id] = row.id;
+  sending.sessionHistory = mergeSendingSessions(history, null, sending.results);
+  return row.id;
+}
+
+export function practiceSessions(profile) {
+  const listening = listeningSessions(profile.stats.sessions).map(s => ({ ...s, activity: 'Listen' }));
+  const history = profile.sending.sessionHistory;
+  const earlier = new Map();
+  for (const row of profile.sending.results) {
+    if (!validId(row.id) || !timestamp(row.at) || history?.recorded[row.id]) continue;
+    const clean = Number(row.xp > 0); // Only an unassisted pass earns sending XP.
+    earlier.set(row.id, { start: row.at, end: row.at, answers: 1, correct: clean, clean, xp: row.xp });
+  }
+  const combined = groupSessions([...earlier.values(), ...(history?.fragments || [])]).map(s => ({ ...s, activity: 'Send' }));
+  // The oldest retained result can fall in the middle of a long session.
+  if (combined.length && profile.sending.attempts > combined.reduce((n, s) => n + s.answers, 0)) combined[0].partial = true;
+  return [...listening, ...combined].sort((a, b) => b.end - a.end || b.start - a.start);
 }
 
 export function sessionsFromRounds(rounds) {

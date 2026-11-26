@@ -59,6 +59,7 @@ export class BuiltInPaddle {
           return;
         }
         if (ui.down || !ui.edges.length || ui.result) return;
+        ui.showReleasedMatch();
         if (at - ui.originAt - ui.edges.at(-1).at >= ui.idleDelay()) ui.finish();
       },
     });
