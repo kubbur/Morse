@@ -16,10 +16,47 @@ export const SEND_BADGES = [
   { id: 'send-hundred', icon: 'flame', title: '100 clean sends', description: 'Send 100 answers cleanly.', earned: s => s.clean >= 100 },
   { id: 'send-alphabet', icon: 'book', title: 'Alphabet sent', description: 'Match the Morse pattern for each of the 26 letters.', earned: s => [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].every(c => s.sounds[c]?.good > 0) },
   { id: 'send-thousand', icon: 'flag', title: '1,000 characters sent', description: 'Send 1,000 characters in clean answers.', earned: s => s.characters >= 1000 },
+  ...[25, 50, 250, 500, 1000].map(n => ({
+    id: 'send-clean-' + n, icon: 'check', title: n.toLocaleString('en') + ' clean sends',
+    description: 'Send ' + n.toLocaleString('en') + ' answers cleanly without help.', earned: s => s.clean >= n,
+  })),
+  ...[50, 250, 500, 2500, 5000].map(n => ({
+    id: 'send-characters-' + n, icon: 'layers', title: n.toLocaleString('en') + ' characters sent',
+    description: 'Send ' + n.toLocaleString('en') + ' characters in clean answers.', earned: s => s.characters >= n,
+  })),
+  ...[
+    ['dit-dah', 'Dit and dah', 'ET'], ['vowels', 'Five vowels', 'AEIOU'],
+    ['cq', 'Calling CQ', 'CQ'], ['report', 'Signal report', 'RST'],
+    ['digits', 'All ten digits', '0123456789'], ['punctuation', 'CW punctuation', '.,?/'],
+  ].map(([id, title, characters]) => ({
+    id: 'send-' + id, icon: 'book', title, description: 'Match each of these characters in sending practice: ' + [...characters].join(' '),
+    earned: s => [...characters].every(c => s.sounds[c]?.good > 0),
+  })),
+  ...[10, 50, 100].map(n => ({
+    id: 'send-first-try-' + n, icon: 'spark', title: n + ' first-try sends',
+    description: 'Send ' + n + ' exercises cleanly on your first attempt.',
+    earned: s => Object.values(s.activity || {}).reduce((total, row) => total + row.clean, 0) >= n,
+  })),
 ];
 
 export function earnedSendBadges(sending) {
   return SEND_BADGES.filter(badge => badge.earned(sending));
+}
+
+// A device writes its own counters. Re-imports, pairing and retried pushes can
+// take their maxima without counting a first attempt twice.
+export function mergeSendActivity(left, right) {
+  const activity = {};
+  for (const source of [left, right]) {
+    for (const [id, row] of Object.entries(object(source)).slice(0, 100)) {
+      if (!/^[a-f\d-]{36}$/i.test(id) || !row) continue;
+      const prior = activity[id], first = Math.max(prior?.first || 0, count(row.first));
+      const days = Array.isArray(row.days) ? row.days.slice(-366).filter(d => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) : [];
+      activity[id] = { first, clean: Math.min(first, Math.max(prior?.clean || 0, count(row.clean))),
+        days: [...new Set([...(prior?.days || []), ...days])].sort().slice(-366) };
+    }
+  }
+  return Object.keys(activity).length ? activity : undefined;
 }
 
 export function sanitizeSendingSettings(input) {
@@ -54,6 +91,8 @@ export function sanitizeSending(input) {
   result.results=Array.isArray(s.results) ? s.results.slice(-300).filter(r=>r && typeof r.id==='string' && /^[0-9a-f-]{36}$/i.test(r.id) && Number.isSafeInteger(r.at)).map(r=>({id:r.id,at:r.at,xp:count(r.xp)})) : [];
   const history = mergeSendingSessions(s.sessionHistory, null, result.results);
   if (history) result.sessionHistory = history;
+  const activity = mergeSendActivity(s.activity);
+  if (activity) result.activity = activity;
   for (const key of ['attempts', 'clean', 'characters', 'earned']) result[key] = count(s[key]);
   result.clean = Math.min(result.clean, result.attempts);
   for (let level = 1; level <= SENDING_LEVELS; level++) {
@@ -189,12 +228,18 @@ export function advanceSending(sending) {
   return true;
 }
 
-export function recordSending(sending, target, grade, { assisted = false, sessionId } = {}) {
+export function recordSending(sending, target, grade, { assisted = false, sessionId, stream, firstAttempt, day } = {}) {
   const stage = sendingStage(sending.level);
   if (!stage.items.some(item => item.target === target) || !grade.valid || !grade.complete) return { xp: 0, levelUp: false, badges: [] };
   const previousBadges = new Set(earnedSendBadges(sending));
   const record = sending.records[stage.level] ||= { attempts: 0, good: 0, best: 0, mastered: false, turn: 0, focusHistory: [], history: [], covered: [] };
   const passed = grade.passed && !assisted;
+  if (stream && day) {
+    const activity = sending.activity ||= {};
+    const row = activity[stream] ||= { first: 0, clean: 0, days: [] };
+    if (firstAttempt) { row.first++; if (passed) row.clean++; }
+    if (!row.days.includes(day)) row.days = [...row.days, day].sort().slice(-366);
+  }
   sending.attempts++; record.attempts++;
   record.best = Math.max(record.best, grade.quality);
   record.history = [...record.history, passed].slice(-8);
@@ -227,6 +272,8 @@ export function recordSending(sending, target, grade, { assisted = false, sessio
 
 export function mergeSending(baseInput, localInput, remoteInput) {
   const b = sanitizeSending(baseInput), l = sanitizeSending(localInput), r = sanitizeSending(remoteInput), result = structuredClone(r);
+  const activity = mergeSendActivity(r.activity, l.activity);
+  if (activity) result.activity = activity;
   const results=new Map([...r.results,...l.results].map(row=>[row.id,row]));
   result.results=[...results.values()].sort((a,b)=>a.at-b.at).slice(-300);
   const history = mergeSendingSessions(l.sessionHistory, r.sessionHistory, result.results);

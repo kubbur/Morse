@@ -93,6 +93,15 @@ test('upgrade a restored website database, adopt its browser, pair a Mac and con
     assert.equal((await call('scores/leaderboard')).entries[0].xp,90);
     assert.ok(db.db.prepare('SELECT id FROM credentials').all().every(r=>r.id.startsWith('website:')));
     assert.equal(db.db.prepare('SELECT encrypted FROM credentials WHERE id=?').get(cookieNames(desk.id).private),undefined);
+    assert.equal((await call('scores/session')).status,200);
+    const state=await call('scores/listing',{callsign:'TEST1'});
+    assert.equal(state.status,200); assert.equal(state.xp,90);
+    const show=await call('scores/visibility',{callsign:'TEST1',generation:1,revision:state.revision,visible:true,xp:40,marks:{}});
+    assert.equal(show.status,200,show.error); assert.equal(show.xp,100,'The linked website owns the higher total');
+    assert.equal((await call('scores/leaderboard')).entries[0].xp,100);
+    const hide=await call('scores/visibility',{callsign:'TEST1',generation:2,revision:show.revision,visible:false});
+    assert.equal(hide.status,200,hide.error); assert.deepEqual((await call('scores/leaderboard')).entries,[]);
+    assert.equal((await browser('status')).profile.stats.xp,100);
     const original=new SyncStore(before);
     try {assert.equal(original.request('status',legacy.setToken,{}).profile.stats.xp,90);}
     finally {original.close();}

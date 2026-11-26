@@ -512,3 +512,218 @@ test('recovery codes require a private connection and rotation retires the earli
     assert.equal(b.state.profiles.length,1); assert.equal(b.p.stats.xp,20);
   } finally {e.close();}
 });
+
+function chooseVisibility(f, visible, call = 'TEST1') {
+  f.storage.atomic(() => {
+    f.storage.chooseListing(f.p,call,visible);
+    f.storage.setItem(STORAGE_KEY,JSON.stringify(f.state));
+  });
+}
+const ranks = e => e.scores.request('leaderboard',null,null,{}).entries;
+test('visibility uses the higher total, keeps hidden work and survives retries without creating private saves', async t => {
+  const exchange = new Exchange(':memory:'); t.after(()=>exchange.close());
+  let lose = '', lastTotal;
+  const f = fixture(exchange,async(a,p,next)=>{
+    if(a === 'scores/total') lastTotal = structuredClone(p.body);
+    const receipt = await next(a,p);
+    if(a === lose) { lose=''; throw Error('lost response'); }
+    return receipt;
+  });
+  f.earn(20); f.share(true); f.earn(20); await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,20);
+  assert.equal(f.p.stats.xp,40);
+  chooseVisibility(f,true); lose='scores/visibility';
+  await f.station.flushScores(); await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,40);
+  assert.equal(f.storage.row().listings.TEST1.revision,1);
+  f.earn(20); lose='scores/total';
+  await f.station.flushScores(); assert.equal(f.storage.row().scores.length,1);
+  await f.station.flushScores(); assert.equal(ranks(exchange)[0].xp,60);
+  assert.equal(f.storage.row().scores.length,0);
+  assert.deepEqual(Object.keys(lastTotal).sort(),['activity','callsign','generation','marks','results','revision','xp']);
+  assert.equal(lastTotal.activity.xp,20); assert.ok(Object.hasOwn(lastTotal.marks,lastTotal.activity.stream));
+  assert.ok(Object.keys(lastTotal.marks).every(id=>/^[0-9a-f]{64}$/.test(id)));
+  assert.ok(!JSON.stringify(lastTotal).includes(f.storage.row().stream));
+  chooseVisibility(f,false); await f.station.flushScores(); assert.deepEqual(ranks(exchange),[]);
+  assert.throws(()=>exchange.scores.request('total',f.cookies.scores,null,lastTotal),/sharing|visibility/i);
+  f.earn(20); f.earn(20); await f.station.flushScores(); assert.deepEqual(ranks(exchange),[]);
+  chooseVisibility(f,true); await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,100);
+  assert.equal(f.storage.scoreTotal(f.p),100);
+  assert.equal(exchange.private.get('SELECT count(*) n FROM saves').n,0);
+  const impostor = fixture(exchange); chooseVisibility(impostor,true); await impostor.station.flushScores();
+  assert.match(impostor.station.scoreError,/claimed/);
+  assert.throws(()=>exchange.scores.request('visibility',impostor.cookies.scores,null,{callsign:'TEST1',generation:10,revision:3,visible:false}),/claimed/);
+  assert.equal(ranks(exchange)[0].xp,100);
+});
+test('a higher historical public score governs future gains without creating private XP or adding overlapping totals', async t => {
+  const e=new Exchange(':memory:'); t.after(()=>e.close());
+  const f=fixture(e); f.share(true); await f.station.flushScores();
+  await f.station.exchange('scores/history',{generation:f.storage.row().generation,xp:500,id:randomUUID()});
+  f.earn(20); chooseVisibility(f,true); await f.station.flushScores();
+  assert.equal(ranks(e)[0].xp,500);
+  assert.equal(f.storage.scoreTotal(f.p),500);
+  f.earn(20); assert.equal(f.storage.scoreTotal(f.p),520);
+  await f.station.flushScores(); assert.equal(ranks(e)[0].xp,520);
+  assert.equal(f.p.stats.xp,40);
+  chooseVisibility(f,false); await f.station.flushScores();
+  f.earn(20); chooseVisibility(f,true); await f.station.flushScores();
+  assert.equal(ranks(e)[0].xp,540);
+  assert.equal(f.storage.scoreTotal(f.p),540);
+});
+test('concurrent owner devices retain each new result, fence stale visibility and reject a revoked publisher', async t=>{
+  const e=new Exchange(':memory:'); t.after(()=>e.close());
+  const a=fixture(e), b=fixture(e);
+  const invitation=await a.station.start('Browser'); await b.station.join(invitation.invitation,'Mac');
+  await a.station.approve((await a.station.request('status')).invite.claim);
+  await b.station.flush();
+  chooseVisibility(a,true); await a.station.flushScores();
+  chooseVisibility(b,true); await b.station.flushScores();
+  assert.equal(b.storage.row().listings.TEST1.revision,1);
+  a.earn(20); b.earn(20);
+  await Promise.all([a.station.flushScores(),b.station.flushScores()]);
+  assert.equal(ranks(e)[0].xp,40);
+  a.earn(20); chooseVisibility(b,false); await b.station.flushScores();
+  await a.station.flushScores();
+  assert.deepEqual(ranks(e),[]); assert.equal(a.p.leaderboard,false);
+  const stale={callsign:'TEST1',generation:20,revision:1,visible:true,xp:999,marks:{}};
+  assert.throws(()=>e.scores.request('visibility',a.cookies.scores,a.cookies.private,stale),/another device/);
+  chooseVisibility(a,true); await a.station.flushScores();
+  assert.equal(ranks(e)[0].xp,60);
+  await b.station.observeListing(); assert.equal(b.p.leaderboard,true);
+  b.earn(20); await b.station.flushScores(); assert.equal(ranks(e)[0].xp,80);
+  const other=(await a.station.request('status')).devices.find(d=>!d.current);
+  await a.station.request('disconnect',{device:other.id});
+  assert.throws(()=>e.scores.request('listing',b.cookies.scores,b.cookies.private,{callsign:'TEST1'}),/revoked/);
+});
+test('old websites receive no lifetime data and pending offline visibility survives relaunch', async t=>{
+  const e=new Exchange(':memory:'); t.after(()=>e.close());
+  const requests=[], f=fixture(e,async(action,p,next)=>{
+    requests.push(action);
+    if(action==='scores/listing') throw Object.assign(Error('Unknown operation'),{status:404});
+    return next(action,p);
+  });
+  f.earn(); chooseVisibility(f,true); await f.station.flushScores();
+  assert.match(f.station.scoreError,/website leaderboard update/);
+  assert.deepEqual(requests,['scores/session','scores/listing']); assert.deepEqual(ranks(e),[]);
+  const saved=f.storage.storage.getItem(STORAGE_KEY);
+  const reopened=new PracticeStorage(memory({[STORAGE_KEY]:saved}));
+  assert.equal(reopened.row().visibilityQueue[0].snapshot.xp,20);
+  f.station.storage=reopened; f.station.requestImpl=f.transport;
+  await f.station.flushScores(); assert.equal(ranks(e)[0].xp,20);
+});
+test('a SQLite backup restores a hidden listing, its owner and the acknowledged score',async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'morse-visibility-restore-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const path=join(directory,'local.sqlite'), e=new Exchange(path);
+  const f=fixture(e); f.earn(20); chooseVisibility(f,true); await f.station.flushScores();
+  chooseVisibility(f,false); await f.station.flushScores();
+  const backup=await snapshot(path,join(directory,'snapshots')); e.close();
+  const restored=new Exchange(await restore(backup,join(directory,'restored'))); t.after(()=>restored.close());
+  assert.deepEqual(ranks(restored),[]);
+  const status=restored.scores.request('listing',f.cookies.scores,null,{callsign:'TEST1'});
+  assert.equal(status.visible,false); assert.equal(status.xp,20);
+  const receipt=restored.scores.request('visibility',f.cookies.scores,null,{callsign:'TEST1',generation:3,revision:status.revision,visible:true,xp:20,marks:{}});
+  assert.equal(receipt.xp,20); assert.equal(ranks(restored)[0].xp,20);
+});
+
+test('a hide fences an already dispatched total, and its old revision cannot publish after a re-show',async t=>{
+  const e=new Exchange(':memory:'); t.after(()=>e.close());
+  let entered, release, delayed;
+  const gate=new Promise(r=>{release=r;});
+  const dispatched=new Promise(r=>{entered=r;});
+  const f=fixture(e,async(a,p,next)=>{
+    if(a==='scores/total' && !delayed) { delayed=p.body; entered(); await gate; }
+    return next(a,p);
+  });
+  chooseVisibility(f,true); await f.station.flushScores();
+  f.earn(20); const inflight=f.station.flushScores(); await dispatched;
+  chooseVisibility(f,false); f.station.consentChanged();
+  for (let i=0;i<50 && ranks(e).length;i++) await new Promise(r=>setTimeout(r,2));
+  assert.deepEqual(ranks(e),[]); release(); await inflight;
+  assert.deepEqual(f.storage.row().scores,[]);
+  chooseVisibility(f,true); await f.station.flushScores();
+  assert.equal(ranks(e)[0].xp,20);
+  assert.throws(()=>e.scores.request('total',f.cookies.scores,null,delayed),/sharing|visibility/i);
+  assert.equal(e.private.get('SELECT count(*) n FROM score_results').n,0);
+});
+test('an existing result-only app can contribute until a hide; re-showing cannot replay its stale queue',async t=>{
+  const e=new Exchange(':memory:');t.after(()=>e.close());
+  const f=fixture(e); f.share(true); await f.station.flushScores(); chooseVisibility(f,true); await f.station.flushScores();
+  const generation=f.storage.row().generation;
+  const result = () => ({id:randomUUID(),kind:'send',xp:10,day:new Date().toISOString().slice(0,10)});
+  await f.station.exchange('scores/submit',{generation,results:[result()]});
+  assert.equal(ranks(e)[0].xp,10);
+  chooseVisibility(f,false); await f.station.flushScores(); chooseVisibility(f,true); await f.station.flushScores();
+  assert.throws(()=>e.scores.request('submit',f.cookies.scores,null,{generation:f.storage.row().generation,results:[result()]}),/visibility/);
+  await f.station.exchange('scores/consent',{callsign:'TEST1',enabled:true,generation:100});
+  await f.station.exchange('scores/submit',{generation:100,results:[result()]});
+  assert.equal(ranks(e)[0].xp,20);
+});
+test('hiding a legacy score anchors later private earnings without uploading them in the hide',async t=>{
+  const e=new Exchange(':memory:');t.after(()=>e.close());
+  let hide;
+  const f=fixture(e,(a,p,next)=>{if(a==='scores/visibility' && !p.body.visible) hide=p.body;return next(a,p);});
+  f.share(true); await f.station.flushScores();
+  await f.station.exchange('scores/history',{generation:f.storage.row().generation,xp:400,id:randomUUID()});
+  chooseVisibility(f,false); await f.station.flushScores();
+  assert.deepEqual(Object.keys(hide).sort(),['callsign','generation','revision','visible']);
+  f.earn(20); assert.equal(f.storage.scoreTotal(f.p),420);
+  chooseVisibility(f,true); await f.station.flushScores(); assert.equal(ranks(e)[0].xp,420);
+});
+
+test('large imports use whole totals and returning device counters cannot count an overlapping import twice',async t=>{
+  const e=new Exchange(':memory:'); t.after(()=>e.close());
+  const f=fixture(e);
+  f.earn(20); chooseVisibility(f,true); await f.station.flushScores();
+  const original=f.storage.row().stream;
+  for (let index=0;index<110;index++) f.p.credits[randomUUID()]=10;
+  f.p.credits[original]=100; f.p.stats.xp=1200;
+  await f.station.flushScores(); assert.equal(ranks(e)[0].xp,1200);
+  f.p.credits={[original]:100}; f.p.stats.xp=100;
+  await f.station.flushScores();
+  assert.equal(ranks(e)[0].xp,1200); assert.equal(f.storage.scoreTotal(f.p),1200);
+  f.p.stats.xp=1200; f.earn(20); await f.station.flushScores(); assert.equal(ranks(e)[0].xp,1220);
+});
+
+test('importing a newer copy of a known stream raises only the lifetime floor, even after reconnecting',async t=>{
+  const e=new Exchange(':memory:');t.after(()=>e.close());
+  const f=fixture(e);f.share(true);await f.station.flushScores();
+  await f.station.exchange('scores/history',{generation:f.storage.row().generation,xp:500,id:randomUUID()});
+  f.earn(20);chooseVisibility(f,true);await f.station.flushScores();
+  const stream=f.storage.row().stream;
+  f.p.credits[stream]=100; f.p.stats.xp=100;
+  assert.equal(f.storage.scoreTotal(f.p),500);
+  await f.station.flushScores(); await f.station.flushScores(); assert.equal(ranks(e)[0].xp,500);
+  f.earn(20);await f.station.flushScores(); assert.equal(ranks(e)[0].xp,520);
+  f.p.credits[stream]=700; f.p.stats.xp=700;
+  await f.station.flushScores(); assert.equal(ranks(e)[0].xp,700);
+  chooseVisibility(f,false);await f.station.flushScores();chooseVisibility(f,true);await f.station.flushScores();
+  assert.equal(ranks(e)[0].xp,700);
+});
+test('more than one batch of offline practice advances a higher acknowledged score exactly once',async t=>{
+  const e=new Exchange(':memory:');t.after(()=>e.close());
+  const f=fixture(e);f.share(true);await f.station.flushScores();
+  await f.station.exchange('scores/history',{generation:f.storage.row().generation,xp:2000,id:randomUUID()});
+  chooseVisibility(f,true);await f.station.flushScores();
+  for(let index=0;index<40;index++) f.earn(20);
+  assert.equal(f.storage.scoreTotal(f.p),2800);
+  await f.station.flushScores(); await f.station.flushScores(); await f.station.flushScores();
+  assert.equal(f.storage.row().scores.length,0);
+  assert.equal(ranks(e)[0].xp,2800);
+});
+
+test('a new owner device reconnecting with an old offline show cannot undo a later hide',async t=>{
+  const e=new Exchange(':memory:'); t.after(()=>e.close());
+  const a=fixture(e), b=fixture(e);
+  const invite=await a.station.start('Mac'); await b.station.join(invite.invitation,'Browser');
+  await a.station.approve((await a.station.request('status')).invite.claim); await b.station.flush();
+  chooseVisibility(b,true);
+  a.earn(20); chooseVisibility(a,true); await a.station.flushScores();
+  chooseVisibility(a,false); await a.station.flushScores();
+  await b.station.flushScores();
+  assert.deepEqual(ranks(e),[]); assert.equal(b.p.leaderboard,false);
+  assert.deepEqual(b.storage.row().visibilityQueue,[]); assert.match(b.storage.row().listingError,/hidden/);
+  chooseVisibility(b,true); await b.station.flushScores();
+  assert.equal(ranks(e)[0].xp,20); assert.equal(b.p.leaderboard,true);
+});

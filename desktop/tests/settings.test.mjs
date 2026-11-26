@@ -85,10 +85,13 @@ test('Mac and browser settings, course reset and recovery controls in an offline
       ...['browser','mac-website'].map(mode => [mode, 'sending-controls-scenario.js']),
       ['mac-website', 'sending-resume-scenario.js'],
       ['browser','sending-feedback-scenario.js'],
+      ['browser','leaderboard-visibility-scenario.js'],
     ];
     for(const [mode, scenario] of cases) await t.test(mode+' '+scenario,async()=>{
       const bootstrap=join(dir,mode+'.js');
-      await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state:oldSave()})+';\n'+setup);
+      const state=oldSave(), listing=scenario==='leaderboard-visibility-scenario.js';
+      if (listing) Object.assign(state.profiles[0],{callsign:'TEST1',leaderboard:true});
+      await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state,listing})+';\n'+setup);
       const base=mode==='browser' ? root : staged;
       execFileSync(binary,[join(base,'website/public'),bootstrap,join(fixtures,scenario)],{timeout:60000,stdio:'pipe'});
     });

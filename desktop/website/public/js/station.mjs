@@ -1,5 +1,6 @@
 import { DeviceSync } from './device-sync.mjs';
-import { newProfile } from './progress.mjs';
+import { newProfile, STORAGE_KEY } from './progress.mjs';
+import { publicSnapshot, scoreSnapshot } from './practice-storage.mjs';
 import { syncProfile, syncChanged, hasLocalChanges, playbackOnDevice } from './sync-data.mjs';
 
 export class Station extends DeviceSync {
@@ -35,7 +36,136 @@ export class Station extends DeviceSync {
   changed() {
     super.changed();
     const row=this.storage.row();
-    if (row.needsConsent || row.scores.length || row.history?.decision==='queued') this.queueScores();
+    if (this.hasScores(row)) this.queueScores();
+  }
+  hasScores(row) {
+    if (row.visibilityQueue?.length) return true;
+    if (!row.listings) return row.needsConsent || row.scores.length || row.history?.decision === 'queued';
+    const p = this.getProfile(), listing = row.listings[p.callsign];
+    if (!p.leaderboard || !listing?.visible) return false;
+    return row.scores.length || JSON.stringify(scoreSnapshot(p,row)) !== JSON.stringify(listing.local);
+  }
+  rememberListing(call, receipt, snapshot, intent, keys = {}, accepted) {
+    const row = this.storage.row(), p = this.getProfile();
+    if (!Number.isSafeInteger(receipt.revision) || receipt.revision < 0 || !Number.isSafeInteger(receipt.xp) || receipt.xp < 0 || ![true,false,null].includes(receipt.visible))
+      throw Error('The website returned an invalid listing.');
+    if (receipt.covered !== undefined && (!receipt.covered || typeof receipt.covered !== 'object' || Array.isArray(receipt.covered) ||
+        Object.entries(receipt.covered).some(([id,n]) => !/^[a-f0-9]{64}$/.test(id) || !Number.isSafeInteger(n) || n < 0 || n > 1e9)))
+      throw Error('The website returned invalid score counters.');
+    let updateChoice = false;
+    this.storage.atomic(() => {
+      const last = row.listings[call] || {};
+      if (receipt.revision < (last.revision || 0)) return;
+      row.listings[call] = { ...last, revision:receipt.revision, visible:receipt.visible === true,
+        xp:Math.max(last.xp || 0,receipt.xp), ...(snapshot && (receipt.visible || last.sentEarned == null) ? {sentEarned:snapshot.earned || 0} : {}),
+        ...(receipt.absoluteOnly ? {absoluteOnly:true} : {}), ...(snapshot ? {local:snapshot,ackXP:Math.max(receipt.xp,snapshot.xp),
+          covered:Object.fromEntries(Object.entries(snapshot.marks).map(([id,n])=>[id,receipt.covered?.[keys[id]] ?? n]))} : {}) };
+      if (accepted) row.scores = row.scores.filter(r=>!accepted.has(r.id));
+      if (intent) row.visibilityQueue = row.visibilityQueue.filter(i => i.call !== call || i.generation !== intent.generation);
+      if (p.callsign === call && !row.visibilityQueue?.some(i => i.call === call) && receipt.visible !== null && p.leaderboard !== receipt.visible) {
+        updateChoice = true;
+        if (!receipt.visible) row.scores = [];
+        const state = JSON.parse(this.storage.getItem(STORAGE_KEY));
+        const saved = state.profiles.find(p => p.id === this.getProfile().id);
+        if (saved) saved.leaderboard = receipt.visible;
+        this.storage.setItem(STORAGE_KEY,JSON.stringify(state));
+      }
+    });
+    if (updateChoice) p.leaderboard = receipt.visible;
+  }
+  async observeListing() {
+    const p = this.getProfile(), row = this.storage.row(), call = p.callsign;
+    if (!this.canPublish() || this.publishing || !call || !row.listings?.[call] || row.visibilityQueue?.length || this.storage.failed) return;
+    const generation = row.generation;
+    const receipt = await this.exchange('scores/listing',{callsign:call});
+    if (this.getProfile().callsign !== call || this.storage.row().generation !== generation || this.storage.failed) return;
+    const last = this.storage.row().listings[call];
+    if (receipt.revision < last.revision || receipt.revision === last.revision && receipt.xp <= last.xp) return;
+    this.rememberListing(call,receipt,null);
+    this.changedScoresOnReconnect();
+    this.onStatus(this.status);
+  }
+  async flushListing() {
+    const p = this.getProfile(), row = this.storage.row(), generation = row.generation;
+    const current = () => this.getProfile().id === p.id && this.storage.row().generation === generation && !this.storage.failed;
+    await this.exchange('scores/session');
+    if (!current()) return;
+    const intent = row.visibilityQueue?.[0];
+    if (intent) {
+      const callsign = intent.call;
+      const keys = {};
+      let receipt;
+      try {
+        if (intent.revision === null) {
+          const state = await this.exchange('scores/listing',{callsign});
+          if (!current()) return;
+          if (intent.visible && state.visible === false) {
+            // An offline device without a previously observed revision cannot
+            // tell whether someone hid the callsign after it queued this show.
+            this.rememberListing(callsign,state,null,intent);
+            this.storage.atomic(() => { row.listingError = 'This callsign is hidden. Check the box again to show it on the leaderboard.'; });
+            this.onScoresPublished?.();
+            return;
+          }
+          this.storage.atomic(() => { intent.revision = state.revision; });
+        }
+        const body = {callsign,generation:intent.generation,revision:intent.revision,visible:intent.visible};
+        if (intent.visible) Object.assign(body,await publicSnapshot(callsign,intent.snapshot,keys,row));
+        if (!current()) return;
+        receipt = await this.exchange('scores/visibility',body);
+      } catch (error) {
+        if (!current()) return;
+        if (error.status === 404 && intent.legacyFence) {
+          await this.exchange('scores/consent',{callsign,generation:intent.generation,enabled:false});
+          if (current()) this.storage.atomic(() => { intent.legacyFence=false; });
+        }
+        if (error.status === 403 && !intent.visible && callsign !== p.callsign && current()) {
+          this.storage.atomic(() => { row.visibilityQueue = row.visibilityQueue.filter(i => i !== intent); });
+          return;
+        }
+        if (error.status !== 409 || !current()) throw error;
+        receipt = await this.exchange('scores/listing',{callsign});
+        if (!current()) return;
+        this.rememberListing(callsign,receipt,null,intent);
+        this.storage.atomic(() => { this.storage.row().listingError = 'Visibility changed on another device. Its choice is shown here.'; });
+        this.onScoresPublished?.();
+        return;
+      }
+      if (!current()) return;
+      // The snapshot on a hide stays on this installation. It anchors XP
+      // earned privately if the owner later chooses to show the total again.
+      this.rememberListing(callsign,receipt,intent.visible === receipt.visible ? intent.snapshot : null,intent,keys);
+      this.onScoresPublished?.();
+      return;
+    }
+    const callsign = p.callsign, listing = row.listings[callsign];
+    if (!p.leaderboard || !listing?.visible) return;
+    const snapshot = scoreSnapshot(p,row), results = row.scores.slice(0,25);
+    const keys = {};
+    const total = { ...snapshot, xp:this.storage.scoreTotal(p) };
+    const body = {callsign,generation,revision:listing.revision,results,...await publicSnapshot(callsign,total,keys,row)};
+    if (!current()) return;
+    let receipt;
+    try { receipt = await this.exchange('scores/total',body); }
+    catch (error) {
+      if (error.status !== 409 || !current()) throw error;
+      const actual = await this.exchange('scores/listing',{callsign});
+      if (!current()) return;
+      if (actual.revision === listing.revision) throw error;
+      this.rememberListing(callsign,actual,null);
+      if (actual.visible) {
+        // A hide and re-show on another device fences older score batches. Its
+        // new public baseline already includes the lifetime total.
+        this.storage.atomic(() => { this.storage.row().scores = []; });
+      }
+      this.onScoresPublished?.();
+      return;
+    }
+    if (!current()) return;
+    const accepted = new Set(Array.isArray(receipt.acknowledged) ? receipt.acknowledged : []);
+    if (!Array.isArray(receipt.acknowledged) || accepted.size !== results.length || results.some(r=>!accepted.has(r.id))) throw Error('The website did not acknowledge this score batch.');
+    this.rememberListing(callsign,receipt,snapshot,null,keys,accepted);
+    this.onScoresPublished?.();
   }
   queueScores(delay=200) {
     if (!this.canPublish() || this.scoreTimer || this.disposed) return;
@@ -43,7 +173,10 @@ export class Station extends DeviceSync {
   }
   consentChanged() {
     const row=this.storage.row(), p=this.getProfile();
-    if (this.publishing && !p.leaderboard && !this.storage.failed) {
+    if (this.publishing && row.listings && row.visibilityQueue?.some(i => !i.visible) && !this.storage.failed) {
+      // Apply an explicit hide promptly even with an earlier request in flight.
+      void this.flushListing().catch(() => {});
+    } else if (this.publishing && !row.listings && !p.leaderboard && !this.storage.failed) {
       // Fence a submit that has left this process. The server rejects its old generation.
       void this.exchange('scores/consent',{generation:row.generation,callsign:p.callsign,enabled:false}).catch(()=>{});
     }
@@ -58,7 +191,12 @@ export class Station extends DeviceSync {
     this.publishing=true;
     try {
       const profile=this.getProfile(), owner=profile.id, row=this.storage.row(owner);
-      if (!(row.needsConsent || row.scores.length || row.history?.decision==='queued')) return;
+      if (!this.hasScores(row)) return;
+      if (row.listings) {
+        await this.flushListing();
+        this.scoreError = null;
+        return;
+      }
       const generation=row.generation, current=()=>!this.storage.failed && this.getProfile().id===owner && this.storage.row(owner).generation===generation;
       await this.exchange('scores/session');
       if (!current()) return;
@@ -86,11 +224,14 @@ export class Station extends DeviceSync {
         }
       }
       this.scoreError=null;
-    } catch(error) { this.scoreError=error.message; }
+    } catch(error) {
+      this.scoreError = error.status === 404 && this.storage.row().listings
+        ? 'Waiting for the website leaderboard update. Your visibility change or score is saved here.' : error.message;
+    }
     finally {
       this.publishing=false;
       const row=this.storage.row();
-      if (row.needsConsent || row.scores.length || row.history?.decision==='queued') this.queueScores(this.scoreError?15000:50);
+      if (this.hasScores(row)) this.queueScores(this.scoreError?15000:50);
       this.onStatus(this.status);
     }
   }
@@ -101,7 +242,7 @@ export class Station extends DeviceSync {
   }
   changedScoresOnReconnect() {
     const row=this.storage.row();
-    if (row.needsConsent || row.scores.length || row.history?.decision==='queued') this.queueScores();
+    if (this.hasScores(row)) this.queueScores();
   }
   apply(meta) {
     if (!meta?.remote || meta.pending || meta.replacement || !this.ready()) return meta;
@@ -128,7 +269,7 @@ export class Station extends DeviceSync {
     super.report(changes);
   }
   receive(result,meta) {
-    if (result.connected && !this.status.connected && this.getProfile().leaderboard) {
+    if (result.connected && !this.status.connected && this.getProfile().leaderboard && !this.storage.row().listings) {
       this.storage.atomic(() => { this.storage.row().needsConsent = true; });
       this.queueScores();
     }
@@ -136,7 +277,7 @@ export class Station extends DeviceSync {
       if (hasLocalChanges(meta,syncProfile(this.getProfile()))) {
         this.schedule(0); return meta;
       }
-      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,legacySendingSessions:meta.legacySendingSessions};
+      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,legacySendingSessions:meta.legacySendingSessions,legacySendActivity:meta.legacySendActivity};
       const received=super.receive(result,meta);
       if (received?.force) {received.previous=previous;this.save(received);}
       return received;

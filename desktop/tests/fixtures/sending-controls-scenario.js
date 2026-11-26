@@ -109,7 +109,7 @@
     await waitMs(950);
     check(heard.length === n && current().sending.attempts === prior, 'Leaving Send played or graded an interrupted answer');
   } else {
-    tab('lab'); change('send-source', 'paddle'); testPaddleReady(); tab('send');
+    tab('lab'); change('send-source', 'paddle'); testPaddleReady(); tab('send'); await new Promise(resolve => setTimeout(resolve,20)); testPaddleElement(0,0);
     await wait(() => el('send-input-status').textContent.includes('Paddle ready'), 'Converter ready');
     el('send-listen').click();
     await wait(() => heard.length === 4 && !el('send-listen').disabled, 'Native listen');

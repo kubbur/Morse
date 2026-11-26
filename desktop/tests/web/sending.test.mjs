@@ -30,7 +30,8 @@ test('sending badges credit saved practice, announce each new milestone once and
   Object.assign(s, { clean: 99, attempts: 110, characters: 998 });
   s.sounds = Object.fromEntries([...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].map(c => [c, {seen:1,good:1,recent:[true]}]));
   assert.deepEqual(pass(s, 'EE').badges.map(b => b.id), ['send-hundred','send-thousand']);
-  const expected = SEND_BADGES.map(b => b.id);
+  const expected = ['send-first','send-group','send-ten','send-hundred','send-alphabet','send-thousand','send-clean-25','send-clean-50',
+    'send-characters-50','send-characters-250','send-characters-500','send-dit-dah','send-vowels','send-cq','send-report'];
   for (const reloaded of [resetSendingProgress(p), syncProfile(p), importState(JSON.stringify({version:1,profiles:[p],activeId:p.id})).profiles[0]]) {
     assert.deepEqual(earnedSendBadges(reloaded.sending).map(b => b.id), expected);
   }
@@ -650,4 +651,25 @@ test('a stable paddle connection resets retry backoff and unsolicited connection
   c.source.emit(snapshot(0, 0)); timers.tick(10000);
   c.source.onerror(); assert.match(statuses.at(-1)[1], /Reconnecting in 1s/);
   timers.tick(1000); assert.equal(sources.length, 4);
+});
+
+test('tracked first sends distinguish a clean retry, merge by device and never infer first attempts from old totals', async () => {
+  const { BADGES } = await import('../../website/public/js/progress.mjs');
+  assert.ok(SEND_BADGES.length >= BADGES.length);
+  assert.equal(new Set(SEND_BADGES.map(b=>b.id)).size,SEND_BADGES.length);
+  const a = emptySending(), b = emptySending(), base = emptySending();
+  const id=crypto.randomUUID(), day='2026-11-25';
+  const correct=gradeSending(edgesFor('E'),'E',settings), miss=gradeSending(edgesFor('T'),'E',settings);
+  recordSending(a,'E',miss,{stream:id,firstAttempt:true,day});
+  recordSending(a,'E',correct,{stream:id,firstAttempt:false,day});
+  assert.deepEqual(a.activity[id],{first:1,clean:0,days:[day]});
+  recordSending(a,'E',correct,{stream:id,firstAttempt:true,day:'2026-11-26'});
+  const other=crypto.randomUUID();
+  recordSending(b,'E',correct,{stream:other,firstAttempt:true,day});
+  const merged=mergeSending(base,a,b);
+  assert.equal(merged.activity[id].first,2); assert.equal(merged.activity[id].clean,1);
+  assert.equal(merged.activity[other].clean,1);
+  assert.deepEqual(mergeSending(base,a,merged).activity,merged.activity);
+  assert.equal(sanitizeSending({version:3,attempts:200,clean:180}).activity,undefined);
+  assert.deepEqual(sanitizeSending(merged).activity,merged.activity);
 });

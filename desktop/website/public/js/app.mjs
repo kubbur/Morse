@@ -729,13 +729,18 @@ function renderControls() {
   $('summary-wpm').textContent = `${settings.wpm} WPM`;
   $('summary-farnsworth').textContent = settings.farnsworth >= settings.wpm ? 'Standard spacing' : `${settings.farnsworth} Farnsworth`;
   $('summary-tone').textContent = `${settings.tone} Hz`;
-  $('lesson-name').textContent = isEndless(settings) ? 'Endless radio' : LESSONS.find(lesson => lesson.id === settings.lesson).name;
-  $('course-control').hidden = settings.lesson !== 'starter' || isEndless(settings) || stage?.audioCourse && !stage.audioAlphabet;
-  $('course-plan').textContent = isGrowingCourse(settings) ? '400 levels. Learn letters, short CW phrases and digits through 148; punctuation and radio signals at 149–192. Rebuild the alphabet by ear at 193–292, then digits and symbols at 293–372, with short refreshers between blocks. Levels 373–400 build from short groups to radio messages. Choose any level below.' : 'Automatic letters use Random groups. Other materials keep the alphabet you choose here.';
-  $('course-level-control').hidden = !isGrowingCourse(settings);
-  $('free-level-control').hidden = isGrowingCourse(settings) || isEndless(settings);
-  $('track-control').hidden = settings.lesson !== 'starter' || settings.content !== 'groups';
-  $('lab-track').querySelector('option[value="endless"]').disabled = !profile().endless.unlocked;
+  const activity = isEndless(settings) ? 'endless' : isGrowingCourse(settings) ? 'guided' : settings.lesson === 'koch' ? 'koch' : 'custom';
+  const picker = $('listen-activity');
+  picker.value = activity;
+  picker.querySelector('[value="endless"]').disabled = !profile().endless.unlocked;
+  $('lesson-name').textContent = picker.selectedOptions[0].textContent;
+  $('activity-alphabet').hidden = activity !== 'custom';
+  $('lab-lesson').querySelector('[value="starter"]').hidden = settings.lesson !== 'starter';
+  $('activity-format').hidden = activity !== 'custom' && activity !== 'koch';
+  $('course-control').hidden = settings.lesson !== 'starter' || activity === 'endless' || stage?.audioCourse && !stage.audioAlphabet;
+  $('course-plan').textContent = activity === 'guided' ? 'Start at any level, or adjust the number of course letters.' : 'Use the characters from your current course level.';
+  $('course-level-control').hidden = activity !== 'guided';
+  $('free-level-control').hidden = activity === 'guided' || activity === 'endless';
   $('endless-lock').hidden = profile().endless.unlocked;
   $('koch-control').hidden = settings.lesson !== 'koch';
   $('custom-control').hidden = settings.lesson !== 'custom';
@@ -892,6 +897,9 @@ function renderPractice() {
   document.querySelector('.receiver').dataset.listening = String(!!listening);
   const mission = isEndless(settings) ? radioMission(p.endless) : null;
   const stage = isGrowingCourse(settings) ? courseStage(settings.courseLevel) : null;
+  $('listen-chapter').textContent = mission ? 'Endless radio' : stage ? 'Guided listening course' : settings.lesson === 'koch' ? 'Koch lessons' : 'Custom listening practice';
+  $('receiver-heading').textContent = listening ? 'Copy by ear' : focused ? 'Character review' : mission ? mission.label :
+    stage ? stage.label : LESSONS.find(lesson => lesson.id === settings.lesson).name + ' · ' + CONTENT[settings.content];
   $('learn-label').textContent = stage?.audioCourse ? 'Reference' : stage?.legacyLevel >= 153 && stage.legacyLevel <= 196 ? 'Learn symbols' : stage?.kind === 'frequencies' ? 'Learn frequencies' : stage?.shortCopies ? 'Lesson reference' : stage?.catalogue ? 'Learn phrases' : 'Learn letters';
   $('receiver-stage').dataset.track = isEndless(settings) ? 'endless' : 'course';
   $('practice-instruction').hidden = !mission;
@@ -960,7 +968,7 @@ function renderPractice() {
   $('daily-progress').setAttribute('aria-valuetext', `${count} of ${settings.goal} signals copied today`);
   $('daily-progress').firstElementChild.style.width = `${Math.min(100, count / settings.goal * 100)}%`;
   $('daily-message').textContent = count >= settings.goal ? 'Daily goal reached.' : `${settings.goal - count} more to reach today’s goal.`;
-  $('xp-count').textContent = `${p.stats.xp.toLocaleString()} XP`;
+  $('xp-count').textContent = `${governingXP(p).toLocaleString()} XP`;
   renderPath();
   renderAudioState();
   renderCopyPace();
@@ -1071,6 +1079,7 @@ function weakCharacters() {
   return practiceNeeds(profile().review);
 }
 
+let progressActivity = 'listen';
 function renderJourney() {
   const p = profile();
   const checkpoint = activeListening(p);
@@ -1083,13 +1092,9 @@ function renderJourney() {
   $('listening-confidence').innerHTML = phases.map(({ sound, phase }) => `<span class="confidence-sound" data-phase="${phase}" title="${escape(sound)}: ${phase === 'live' ? 'Learn with the pattern' : phase === 'review' ? 'Pattern after your answer' : 'Pattern only when requested'}"><strong>${escape(sound.length > 1 ? `<${sound}>` : sound)}</strong><small>${phase === 'live' ? 'Learn' : phase === 'review' ? 'Review' : 'By ear'}</small></span>`).join('');
   const stats = p.stats;
   const badges = new Set([...collectedBadges(p), ...earnedSendBadges(p.sending)].map(b => b.id));
-  const letters = alphabetFor(p.settings);
-  $('course-journey').hidden = !isGrowingCourse(p.settings);
-  $('course-title').textContent = p.settings.courseLevel >= 101 ? 'Learned characters' : 'Learned characters';
-  const stage = courseStage(p.settings.courseLevel);
-  $('course-count').textContent = stage.audioNumbers ? `${stage.digits.length}/10 digits by ear` : `${p.settings.courseCount}/26 letters${letters.length > p.settings.courseCount ? ` + ${letters.length - p.settings.courseCount} symbols` : ''}`;
-  $('course-journey-copy').textContent = `Level ${p.settings.courseLevel}/${COURSE_LEVELS} · ${stage.label}. ${stage.audioCourse ? 'Patterns appear after each answer. Each added character starts with singles before longer groups.' : letters.length < COURSE_LETTERS.length ? `Next character: ${COURSE_LETTERS[letters.length]}, after singles, pairs, triples and mixed review. New characters start at singles; learned characters remain in the exercises.` : 'Learn radio symbols, rebuild the characters by ear, then copy longer radio messages.'}`;
-  $('course-journey-letters').innerHTML = characterChips([...letters, ...(isGrowingCourse(p.settings) ? courseStage(p.settings.courseLevel).prosigns || [] : [])]);
+  const guided = isGrowingCourse(p.settings);
+  $('course-count').textContent = guided ? `Level ${p.settings.courseLevel}/${COURSE_LEVELS}` : $('lesson-name').textContent;
+  $('course-journey-copy').textContent = `${sounds.length} sounds in this activity. Learn, Review and By ear show when each pattern is available.`;
   $('copying-styles').innerHTML = ['flexible', 'head'].map(mode => {
     const entry = stats.modes[mode];
     return `<div class="copying-style"><strong>${mode === 'head' ? 'Head-copy · listen first' : 'Flexible copying'}</strong><span>${entry.total ? `${entry.total} completed · ${Math.round(entry.clean / entry.total * 100)}% first-listen accuracy · ${entry.quick} quick copies · best ${entry.best} characters` : mode === 'head' ? 'Hear the whole signal, then type. No answers recorded yet.' : 'Type as you listen or after the signal. No answers recorded yet.'}</span></div>`;
@@ -1099,12 +1104,35 @@ function renderJourney() {
   $('confusion-pairs').innerHTML = pairs.map(pair => `<span class="confusion-pair"><b>${escape(pair.sound)} → ${escape(pair.other)}</b><span>${pair.count} ${pair.count === 1 ? 'mix-up' : 'mix-ups'}</span></span>`).join('');
   $('radio-journey').hidden = !p.endless.unlocked;
   $('radio-journey-progress').textContent = `Paragon ${p.endless.rank} · ${p.endless.xp}/${rankGoal(p.endless.rank)} XP · ${p.endless.contacts} completed contacts`;
-  const cards = [
+  const send = progressActivity === 'send';
+  $('send-progress-panels').hidden = !send;
+  $('listen-progress-panels').hidden = send;
+  $('progress-listen').setAttribute('aria-pressed', String(!send));
+  $('progress-send').setAttribute('aria-pressed', String(send));
+  $('progress-total').textContent = `${governingXP(p).toLocaleString()} total XP · ${badges.size} badges`;
+  const first = { total: 0, clean: 0 }, sendDays = {};
+  for (const row of Object.values(p.sending.activity || {})) {
+    first.total += row.first; first.clean += row.clean;
+    for (const day of row.days) sendDays[day] = 1;
+  }
+  for (const row of p.sending.results) sendDays[localDay(new Date(row.at))] = 1;
+  for (const row of p.sending.sessionHistory?.fragments || []) {
+    sendDays[localDay(new Date(row.start))] = sendDays[localDay(new Date(row.end))] = 1;
+  }
+  const streak = dayStreak(send ? { days: sendDays } : stats);
+  const cards = send ? [
+    ['CLEAN SIGNALS SENT', p.sending.clean.toLocaleString(), `${p.sending.attempts.toLocaleString()} sending attempts`],
+    ['FIRST-ATTEMPT ACCURACY', first.total ? Math.round(100 * first.clean / first.total) + '%' : '—', `${first.clean} of ${first.total} exercises clean on the first attempt since tracking began`],
+    ['SENDING STREAK', streak + (streak === 1 ? ' day' : ' days'), 'Consecutive days of sending practice'],
+  ] : [
     ['SIGNALS COPIED', stats.solved.toLocaleString(), `${stats.total.toLocaleString()} rounds of listening`],
-    ['FIRST-LISTEN ACCURACY', stats.total ? `${Math.round(stats.clean / stats.total * 100)}%` : '—', 'Correct, first try, without help'],
-    ['YOUR LISTENING STREAK', `${dayStreak(stats)} ${dayStreak(stats) === 1 ? 'day' : 'days'}`, `${stats.bestStreak} clean copies in your best run`],
-    ['TOTAL XP', `${stats.xp.toLocaleString()} XP`, `${badges.size} of ${BADGES.length + SEND_BADGES.length} badges earned`],
+    ['FIRST-LISTEN ACCURACY', stats.total ? Math.round(100 * stats.clean / stats.total) + '%' : '—', 'Correct, first try, without help'],
+    ['LISTENING STREAK', streak + (streak === 1 ? ' day' : ' days'), `${stats.bestStreak} clean copies in your best run`],
   ];
+  const weakSend = Object.entries(p.sending.sounds).filter(([, row]) => row.recent.includes(false))
+    .sort(([, a], [, b]) => a.recent.filter(Boolean).length / a.recent.length - b.recent.filter(Boolean).length / b.recent.length);
+  $('send-weak-characters').innerHTML = weakSend.length ? '<div class="weak-chips">' + weakSend.map(([c, row]) =>
+    `<span class="weak-item"><strong>${escape(c)}</strong><small>${row.recent.filter(Boolean).length}/${row.recent.length} correct</small></span>`).join('') + '</div>' : '<p class="empty-note">No recent missed patterns.</p>';
   $('stats-grid').innerHTML = cards.map(([label, value, caption]) => `<article class="card stat-card"><span class="eyebrow">${label}</span><strong>${value}</strong><p>${caption}</p></article>`).join('');
   const days = Array.from({ length: 7 }, (_, index) => { const date = new Date(); date.setDate(date.getDate() - 6 + index); return { date, count: stats.days[localDay(date)] || 0 }; });
   const max = Math.max(5, ...days.map(d => d.count));
@@ -1124,10 +1152,19 @@ function renderJourney() {
   }).join('')}</tbody></table>` : '<p class="empty-note">No practice sessions recorded.</p>';
 }
 
-function saveSharing(callsign, enabled) {
+function governingXP(p) {
+  return storage.scoreTotal(p);
+}
+for (const activity of ['listen', 'send']) $('progress-' + activity).addEventListener('click', () => {
+  progressActivity = activity;
+  renderJourney();
+});
+
+function saveSharing(callsign, enabled, explicit = true) {
   const p = profile(), previous = { callsign: p.callsign, leaderboard: p.leaderboard };
   try {
-    storage.atomic(() => { storage.consent(p, callsign, enabled); storage.setItem(STORAGE_KEY, JSON.stringify(state)); });
+    if (!explicit && p.callsign === callsign && p.leaderboard === enabled) return;
+    storage.atomic(() => { storage.chooseListing(p, callsign, enabled); storage.setItem(STORAGE_KEY, JSON.stringify(state)); });
   } catch (error) {
     Object.assign(p, previous);
     throw error;
@@ -1137,7 +1174,7 @@ function saveSharing(callsign, enabled) {
 }
 function renderSavedProgress() {
   const p = profile();
-  $('progress-summary').textContent = `Listening: Level ${levelNumber(p.settings)} · Sending: Level ${p.sending.level}/${SENDING_LEVELS} · ${p.stats.xp.toLocaleString()} XP`;
+  $('progress-summary').textContent = `Listening: Level ${levelNumber(p.settings)} · Sending: Level ${p.sending.level}/${SENDING_LEVELS} · ${governingXP(p).toLocaleString()} XP`;
   if (deviceSync) renderDeviceSync(deviceSync.status);
   const older = state.profiles.filter(saved => saved.id !== p.id);
   $('earlier-saves').hidden = !older.length;
@@ -1149,7 +1186,13 @@ function renderSavedProgress() {
   $('storage-note').textContent = window.morseMac ? 'Your progress is saved on this Mac. Export a copy to keep it elsewhere.' :
     'Your progress is saved in this browser. Export a copy before clearing site data.';
   const row = storage.row(p.id);
-  const held = row.previousScores || [];
+  const legacy = !!(p.callsign && p.leaderboard && !row.listings);
+  $('use-total-xp').hidden = !legacy;
+  $('use-total-xp').textContent = 'Show my total of ' + p.stats.xp.toLocaleString() + ' XP';
+  $('callsign-help').textContent = legacy ? 'Your earlier choice shares new scores only. Choose below to include all earlier XP, or uncheck to hide your callsign.' :
+    'Showing your callsign includes earlier Listen and Send XP. Unchecking hides your station when connected.';
+  renderListingStatus();
+  const held = row.listings ? [] : row.previousScores || [];
   $('previous-results').hidden = !held.length;
   if (held.length) {
     const xp = held.reduce((sum,r)=>sum+r.xp,0);
@@ -1157,7 +1200,7 @@ function renderSavedProgress() {
     $('share-previous-results').disabled = !p.leaderboard || !p.callsign;
   }
   const h=row.history;
-  $('legacy-scores').hidden=h?.decision!=='pending';
+  $('legacy-scores').hidden=!!row.listings || h?.decision!=='pending';
   if (h?.decision==='pending' && $('publish-history').hidden) $('legacy-score-summary').textContent=h.xp.toLocaleString()+' XP from the previous desktop app. This stays private until you confirm.';
   if (!identityDirty) {
     $('learner-callsign').value = p.callsign || '';
@@ -1165,6 +1208,12 @@ function renderSavedProgress() {
   }
 }
 
+function renderListingStatus() {
+  const p = profile(), row = storage.row(p.id), listing = row.listings?.[p.callsign];
+  const intent = row.visibilityQueue?.[0];
+  $('listing-state').textContent = deviceSync?.scoreError || row.listingError || (intent ? `Waiting for the website to ${intent.visible ? 'show' : 'hide'} ${intent.call}.` :
+    listing ? listing.visible ? `Visible on the leaderboard · ${listing.xp.toLocaleString()} XP confirmed` : 'Hidden on the leaderboard.' : '');
+}
 async function refreshLeaderboard(force = false) {
   if (mac?.syncMode === 'staging') $('leaderboard-title').textContent = 'Local test leaderboard';
   if (mac?.syncMode === 'offline') {
@@ -1177,16 +1226,22 @@ async function refreshLeaderboard(force = false) {
   leaderboardLoading = true;
   $('leaderboard-message').textContent = 'Loading…';
   try {
+    await deviceSync.observeListing().catch(() => {});
     const result = await deviceSync.request('leaderboard');
     if (profile().id !== owner) { leaderboardRefreshDue = true; return; }
     if (result.erased) { deviceSync.receive(result, deviceSync.meta()); return; }
     const p = profile(), callsign = p.callsign;
+    if (view === 'journey') renderJourney();
     const station = result.me?.callsign === callsign ? result.me : result.entries.find(entry => entry.callsign === callsign);
-    $('leaderboard-rows').innerHTML = result.entries.map(entry => `<tr${entry.callsign === callsign ? ' class="leaderboard-self"' : ''}><td>${entry.rank}</td><th scope="row">${escape(entry.callsign)}</th><td>${entry.xp.toLocaleString()}</td><td><span class="leaderboard-streak" aria-label="${entry.streak}-day listening streak">${entry.streak}${entry.streak}<span aria-hidden="true">d</span></span></td></tr>`).join('');
+    $('leaderboard-rows').innerHTML = result.entries.map(entry => `<tr${entry.callsign === callsign ? ' class="leaderboard-self"' : ''}><td>${entry.rank}</td><th scope="row">${escape(entry.callsign)}</th><td>${entry.xp.toLocaleString()}</td><td><span class="leaderboard-streak" aria-label="${entry.streak}-day practice streak">${entry.streak}<span aria-hidden="true">d</span></span></td></tr>`).join('');
     const pendingXP = storage.row(p.id).scores.reduce((sum, score) => sum + score.xp, 0);
-    const comparison = station ? `${callsign} · #${station.rank} · ${station.xp.toLocaleString()} leaderboard XP` : `${callsign} · outside the displayed rankings`;
-    const status = !p.leaderboard ? ' · Sharing off' : pendingXP ? ` · ${pendingXP.toLocaleString()} XP waiting to upload` : '';
-    $('leaderboard-me').textContent = callsign ? `${comparison} · ${p.stats.xp.toLocaleString()} total XP${status}` : '';
+    const row = storage.row(p.id), listing = row.listings?.[callsign];
+    const comparison = station ? `${callsign} · #${station.rank} · ${station.xp.toLocaleString()} leaderboard XP` :
+      listing?.visible ? `${callsign} · outside the top 50 · ${listing.xp.toLocaleString()} leaderboard XP` :
+      listing?.visible === false ? `${callsign} · hidden` : `${callsign} · outside the displayed rankings`;
+    const change = row.visibilityQueue?.find(intent => intent.call === callsign);
+    const status = change ? (change.visible ? ' · Waiting to show on the website' : ' · Waiting to hide on the website') : !p.leaderboard ? ' · Sharing off' : pendingXP ? ` · ${pendingXP.toLocaleString()} XP waiting to upload` : !row.listings ? ' · Only eligible shared results count. You can include earlier XP in Saved progress.' : '';
+    $('leaderboard-me').textContent = callsign ? `${comparison} · ${governingXP(p).toLocaleString()} total XP${status}` : '';
     $('leaderboard-message').textContent = result.entries.length ? 'Top 50 stations' : 'No leaderboard entries yet.';
     leaderboardUpdated = Date.now();
   } catch { $('leaderboard-message').textContent = 'The leaderboard is offline. Your progress stays saved here.'; }
@@ -1246,7 +1301,8 @@ function renderDeviceSync(status) {
   else if (mac) description = 'On the website, open Saved progress, enable private sync, then choose Pair another device. Paste the link here and approve the matching code on the website.';
   else description = 'Enable private sync here, then choose Pair another device. Only progress that has reached the website can be recovered.';
   $('sync-description').textContent = description;
-  if (deviceSync?.scoreError) $('callsign-message').textContent=deviceSync.scoreError;
+  renderListingStatus();
+
   $('sync-status').dataset.error = String(!!status.error);
   const devices = status.devices || [];
   const deviceKey = JSON.stringify(status.connected ? devices : []);
@@ -1530,6 +1586,7 @@ function openDialog(name) {
     $('import-confirmation').hidden = true;
     $('progress-message').textContent = '';
     deviceSync?.schedule(0);
+    void deviceSync?.observeListing().then(() => { if ($(name).open) renderSavedProgress(); }).catch(() => {});
   }
   $(name).showModal();
 }
@@ -1563,10 +1620,11 @@ function openChart() {
   openDialog('chart-dialog');
 }
 
-function changeView(next, { lesson = false } = {}) {
+function changeView(next) {
   if (!['practice', 'send', 'journey', 'lab'].includes(next)) return;
   cancelAnswerFocus();
-  sender?.pause();
+  if (view === 'send' && next !== view) sender?.pause();
+  if (next === 'send' && view !== next) sender?.preparePrompt();
   stopPlayback();
   view = next;
   history.replaceState(null, '', `#${next}`);
@@ -1574,15 +1632,15 @@ function changeView(next, { lesson = false } = {}) {
   if (next === 'journey') { void refreshService(); refreshLeaderboard(); }
   window.scrollTo({ top: 0, behavior: 'instant' });
   if (next === 'lab' && !$('sound-choice').hidden) $('sound-choice').scrollIntoView({ block:'nearest' });
-  if (lesson) {
-    $('lesson-settings').scrollIntoView({ block: 'start', behavior: 'instant' });
-    $('lab-lesson').focus({ preventScroll: true });
-  } else if (next === 'practice' && !showLessonGuidance()) focusAnswer({ select: profile().round?.completed });
+  if (next === 'practice' && !showLessonGuidance()) focusAnswer({ select: profile().round?.completed });
 }
 
 function changeSettings(updates) {
   stopPlayback();
   const p = profile();
+  if ($('activity-dialog').open && $('listen-activity').value === 'custom' && p.settings.lesson === 'starter' && updates.content === 'groups') {
+    updates = { ...updates, lesson:'custom', custom:alphabetFor(p.settings) };
+  }
   if (updates.track === 'endless' && !p.endless.unlocked) { announce(`Finish level ${COURSE_LEVELS} to unlock endless radio.`); return; }
   if (Object.hasOwn(updates, 'visualSupport')) updates = { ...updates, showMorse: updates.visualSupport !== 'off' };
   if (Object.hasOwn(updates, 'courseLevel') || Object.hasOwn(updates, 'courseCount')) updates = { ...updates, track: 'course' };
@@ -1610,7 +1668,7 @@ function changeSettings(updates) {
   } else if (p.round?.plays && !p.round.completed) p.round.assisted = true;
   persist();
   render();
-  if (view === 'practice') showLessonGuidance();
+  if (view === 'practice' && !$('activity-dialog').open) showLessonGuidance();
 }
 
 function nextRound({ skipped = false, draft = '' } = {}) {
@@ -1701,8 +1759,15 @@ function checkAnswer(event) {
   }
 }
 
-$('lab-lesson').innerHTML = LESSONS.map(lesson => `<option value="${lesson.id}">${lesson.name}</option>`).join('');
-$('lab-level').innerHTML = Array.from({ length: 10 }, (_, i) => `<option value="${i + 1}">Level ${i + 1} · ${i + 1} character${i ? 's' : ''}</option>`).join('');
+$('lab-lesson').innerHTML = LESSONS.filter(lesson => lesson.id !== 'koch').map(lesson =>
+  `<option value="${lesson.id}">${lesson.id === 'starter' ? 'Current course letters' : lesson.name}</option>`).join('');
+$('listen-activity').addEventListener('change', event => {
+  const activity = event.target.value, settings = profile().settings;
+  if (activity === 'guided' || activity === 'endless') changeSettings({ track: activity === 'endless' ? 'endless' : 'course', lesson: 'starter', content: 'groups' });
+  else if (activity === 'koch') changeSettings({ track: 'course', lesson: 'koch', content: 'groups' });
+  else changeSettings({ track: 'course', lesson: ['starter', 'koch'].includes(settings.lesson) ? 'letters' : settings.lesson });
+});
+$('lab-level').innerHTML = Array.from({ length: 10 }, (_, i) => `<option value="${i + 1}">${i + 1} character${i ? 's' : ''}</option>`).join('');
 $('lab-course-level').innerHTML = Array.from({ length: COURSE_LEVELS }, (_, i) => `<option value="${i + 1}">${i + 1} · ${courseStage(i + 1).label} · ${courseStage(i + 1).letterCount} letters${listeningCheckpoint(i + 1) ? ' · By ear follows' : ''}</option>`).join('');
 
 document.addEventListener('click', event => {
@@ -1895,8 +1960,8 @@ $('reveal-button').addEventListener('click', () => {
   focusAnswer({ select: true });
 });
 $('lab-test').addEventListener('click', preview);
-$('choose-lesson').addEventListener('click', () => changeView('lab', { lesson: true }));
-$('fix-lesson').addEventListener('click', () => changeView('lab', { lesson: true }));
+$('choose-lesson').addEventListener('click', () => openDialog('activity-dialog'));
+$('fix-lesson').addEventListener('click', () => openDialog('activity-dialog'));
 $('reset-audio').addEventListener('click', () => { changeSettings({ rise: DEFAULT_SETTINGS.rise, fall: DEFAULT_SETTINGS.fall, curve: DEFAULT_SETTINGS.curve }); announce('Tone envelope reset.'); });
 $('theme-toggle').addEventListener('click', () => { state.theme = state.theme === 'dark' ? 'light' : 'dark'; persist(); renderHeader(); });
 $('open-progress').addEventListener('click', () => { openDialog('progress-dialog'); void refreshService(); });
@@ -2038,7 +2103,7 @@ $('confirm-import').addEventListener('click', () => {
   const imported = { ...state, theme: pendingImport.theme, profiles: state.profiles.map(p => p.id === restored.id ? restored : p) };
   try { storage.setItem(`${STORAGE_KEY}.backup`, JSON.stringify(state)); }
   catch { $('progress-message').textContent = 'Could not back up the current save. Export it before importing.'; return; }
-  try { storage.atomic(()=>{ if (restored.callsign!==profile().callsign) storage.consent(profile(),restored.callsign,false); storage.setItem(STORAGE_KEY, JSON.stringify(imported)); storage.row().stream=crypto.randomUUID(); storage.row().foundation=syncProfile(restored); deviceSync?.replace('import'); }); }
+  try { storage.atomic(()=>{ if (restored.callsign!==profile().callsign) storage.chooseListing({ ...profile() },restored.callsign,false); storage.setItem(STORAGE_KEY, JSON.stringify(imported)); storage.row().stream=crypto.randomUUID(); storage.row().foundation=syncProfile(restored); deviceSync?.replace('import'); }); }
   catch { $('progress-message').textContent = 'Could not save the imported progress. Your current progress was kept.'; return; }
   stopPlayback({ save: false });
   state = imported;
@@ -2189,7 +2254,7 @@ window.addEventListener('hashchange', () => {
   if (['practice', 'send', 'journey', 'lab'].includes(next)) changeView(next);
 });
 
-sender = new SendingUI({ getProfile: profile, persist, soundChoice: renderSoundChoice, inputSettingsOpen: () => view === 'lab', active: () => view === 'send', onEarn: (xp,id) => { storage.result(profile(),'send',xp,id); profile().stats.xp = Math.min(1e9, profile().stats.xp + xp); } });
+sender = new SendingUI({ getProfile: profile, persist, activitySource: () => ({ stream: storage.row().stream ||= crypto.randomUUID(), day: localDay() }), soundChoice: renderSoundChoice, inputSettingsOpen: () => view === 'lab', active: () => view === 'send', onEarn: (xp,id) => { storage.result(profile(),'send',xp,id); profile().stats.xp = Math.min(1e9, profile().stats.xp + xp); } });
 ensureRound();
 const initialView = location.hash.slice(1);
 if (['practice', 'send', 'journey', 'lab'].includes(initialView)) view = initialView;
@@ -2211,7 +2276,8 @@ function stationFor(id) {
     onScoresPublished: () => {
       if (state.activeId !== id) return;
       leaderboardUpdated = 0;
-      if (view === 'journey') void refreshLeaderboard(true);
+      if (view === 'journey') { renderJourney(); void refreshLeaderboard(true); }
+      if ($('progress-dialog').open) renderSavedProgress();
     },
     onErased: () => { if (state.activeId === id) clearMorseData(); },
   });
@@ -2221,7 +2287,7 @@ function stationFor(id) {
 function resumeStations() {
   for (const p of state.profiles) {
     const row = storage.row(p.id);
-    if (p.id === state.activeId || row.private || row.scores.length || row.needsConsent || row.history?.decision === 'queued') stationFor(p.id).schedule(0);
+    if (p.id === state.activeId || row.private || row.scores.length || row.needsConsent || row.visibilityQueue?.length || row.history?.decision === 'queued') stationFor(p.id).schedule(0);
   }
 }
 deviceSync = stationFor(state.activeId);
@@ -2255,31 +2321,37 @@ $('callsign-intro-form').addEventListener('submit', async event => {
     $('join-leaderboard').disabled = false; $('skip-callsign').disabled = false;
   }
 });
+$('use-total-xp').addEventListener('click', () => {
+  saveSharing(profile().callsign,true); renderSavedProgress();
+});
 $('learner-callsign').addEventListener('input', () => { identityDirty = true; });
 $('list-on-leaderboard').addEventListener('change', () => {
   const p = profile(), enabled = $('list-on-leaderboard').checked;
   const sameCallsign = !!p.callsign && sanitizeCallsign($('learner-callsign').value) === p.callsign;
   identityDirty = !sameCallsign;
   if (enabled && !sameCallsign) {
-    $('callsign-message').textContent = 'Save your callsign to start sharing new scores.';
+    $('callsign-message').textContent = 'Save your callsign to show your total XP.';
     return;
   }
   try {
     saveSharing(p.callsign, enabled);
-    $('callsign-message').textContent = enabled ? 'Sharing on for new scores.' : 'Sharing off. Pending scores cleared.';
+    $('callsign-message').textContent = ''; renderSavedProgress();
   } catch {
     $('list-on-leaderboard').checked = p.leaderboard;
     $('callsign-message').textContent = 'Could not save the sharing change. Try again.';
   }
 });
 $('save-callsign').addEventListener('click', event => pairingAction(event.currentTarget, async () => {
-  const raw = $('learner-callsign').value.trim(), callsign = sanitizeCallsign(raw), listed = $('list-on-leaderboard').checked;
+  const p = profile(), raw = $('learner-callsign').value.trim(), callsign = sanitizeCallsign(raw), listed = $('list-on-leaderboard').checked;
   $('callsign-message').textContent = '';
   if (raw && !callsign) { $('callsign-message').textContent = 'Use 2–16 letters, numbers or / for your callsign.'; return; }
   if (listed && !callsign) { $('callsign-message').textContent = 'Add your callsign to join the leaderboard.'; return; }
-  saveSharing(callsign,listed);
+  // Editing a callsign on a legacy save does not opt its owner into sharing
+  // their lifetime score. Show the new choice on its own labeled control.
+  const newLegacyIdentity = p.callsign && callsign !== p.callsign && p.leaderboard && !storage.row().listings;
+  saveSharing(callsign,listed && !newLegacyIdentity,false);
   identityDirty = false; renderSavedProgress(); leaderboardUpdated = 0;
-  $('callsign-message').textContent = listed ? 'Callsign saved. Eligible scores will be submitted when connected.' : 'Callsign saved. Score sharing is off.';
+  $('callsign-message').textContent = newLegacyIdentity ? 'Callsign saved. Check the sharing box to show its total XP.' : 'Callsign saved.';
 }));
 $('refresh-leaderboard').addEventListener('click', () => refreshLeaderboard(true));
 $('delete-all-data').addEventListener('click', () => {

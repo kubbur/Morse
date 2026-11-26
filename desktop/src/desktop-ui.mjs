@@ -62,16 +62,15 @@ if (api) {
     finally { changingTyping=false; showInput(); }
   };
   const updates = document.createElement('section');
-  updates.className='card lab-card'; updates.id='mac-updates';
-  updates.innerHTML=`<h2>Updates</h2><p id="mac-version" class="muted small-copy"></p>
+  updates.className='card update-bar'; updates.id='mac-updates';
+  updates.innerHTML=`<div class="update-version"><h2>Updates</h2><span id="mac-version" class="muted small-copy"></span></div>
     <p id="update-status" role="status"></p>
     <div class="pair-actions"><button type="button" class="button secondary" id="update-check">Check for updates</button>
     <button type="button" class="button primary" id="update-install" hidden>Install update</button>
     <button type="button" class="text-button" id="update-release" hidden>Open GitHub release</button></div>
-    <div class="field"><label><input type="checkbox" id="update-auto"> Automatically update</label>
-    <small>Let Morse check for and download updates in the background.</small></div>
+    <label class="update-auto"><input type="checkbox" id="update-auto"> Automatically update</label>
     <details id="update-notes"><summary>What’s new</summary><p class="update-notes small-copy" id="update-notes-text"></p></details>`;
-  document.querySelector('#view-lab .lab-grid').append(updates);
+  document.querySelector('#view-lab .page-intro').after(updates);
   const notice=document.createElement('button');
   notice.id='morse-update'; notice.hidden=true; notice.className='text-button'; notice.type='button';
   document.querySelector('.header-actions').prepend(notice);

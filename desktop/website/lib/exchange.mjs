@@ -6,7 +6,7 @@ import { parseProgressJson } from '../public/js/import-validation.mjs';
 
 export const actions = new Set([
   ...['status','start','join','approve','cancel','push','disconnect','recovery-code','recover','adopt'].map(a=>'private/'+a),
-  ...['session','consent','prepare','submit','leaderboard','history','history-preview'].map(a=>'scores/'+a),
+  ...['session','listing','visibility','total','consent','prepare','submit','leaderboard','history','history-preview'].map(a=>'scores/'+a),
 ]);
 export function cookieNames(scope) {
   if (typeof scope !== 'string' || !/^[\w-]{1,80}$/.test(scope)) throw new SyncError(400,'Invalid learner.');

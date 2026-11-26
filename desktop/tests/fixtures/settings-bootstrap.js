@@ -13,9 +13,23 @@ const callbacks = [], commands = [], requests = [];
 const hardware = { type:'status', source:'off', phase:'waiting', output:'auto', outputs:[], outputReady:false, session:1, epoch:1,
   wpm:33, spacing:20, pitch:725, volume:38, rise:3, fall:9, curve:2, hasTone:true, hasVolume:true, sharedSound:false };
 function snapshot() { return { connected:true, profile:serverProfile, seq:0, revision:1, epoch:'fixture-epoch', devices:[] }; }
+const listing = { visible:null, revision:0, xp:30 };
 function exchange(action,body) {
   requests.push(action);
   if (action==='capabilities') return {status:200, privateSync:config.mode==='mac-staging', scores:config.mode==='mac-staging', leaderboard:config.mode!=='mac-local'};
+  if (config.listing && action.startsWith('scores/')) {
+    if (action==='scores/leaderboard') return {entries:listing.visible===false ? [] : [{rank:1,callsign:'TEST1',xp:listing.xp,streak:1}],me:null};
+    if (action==='scores/session') return {ready:true};
+    if (action==='scores/listing') return {...listing};
+    if (action==='scores/visibility') {
+      if (body.revision!==listing.revision) return {status:409,error:'Listing changed.'};
+      if (body.visible!==listing.visible) listing.revision++;
+      listing.visible=body.visible;
+      if (body.visible) listing.xp=Math.max(listing.xp,body.xp);
+      return {...listing};
+    }
+    if (action==='scores/total') return {...listing,acknowledged:body.results.map(r=>r.id)};
+  }
   if (action==='scores/leaderboard') return {entries:[{rank:1,callsign:'TEST1',xp:30,streak:1}],me:null};
   if (action==='private/adopt') return {status:403,error:'No earlier browser credential.'};
   if (action==='private/start') {

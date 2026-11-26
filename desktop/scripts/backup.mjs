@@ -12,7 +12,8 @@ function verify(path) {
     if(integrity.length!==1 || integrity[0].integrity_check!=='ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw Error('SQLite validation failed.');
     const present = new Set(db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all().map(row=>row.name));
     const v2 = ['foundations','revisions','score_results','revoked_publishers','publishers','stations','recovery_codes'];
-    const required = ['saves','devices','leaderboard','epochs', ...(v2.some(table=>present.has(table)) ? v2 : [])];
+    const visibility = ['score_listings','score_counters','visibility_receipts','legacy_score_grants'];
+    const required = ['saves','devices','leaderboard','epochs', ...(visibility.some(table=>present.has(table)) ? visibility : []), ...(v2.some(table=>present.has(table)) ? v2 : [])];
     for (const table of required) if (!present.has(table)) throw Error('Incomplete Morse database: '+table);
   } finally { db.close(); }
 }

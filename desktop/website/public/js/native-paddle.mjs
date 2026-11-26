@@ -90,7 +90,9 @@ export class BuiltInPaddle {
         if (row.type === 'reset') this.stream.receive(row);
         else if (this.active && this.connected && this.configured && row.session === this.status?.session && row.epoch === this.status?.epoch) {
           if (Number.isSafeInteger(row.seq) && row.seq <= this.captureAfter) return;
+          const wasReady = this.readyForInput;
           this.stream.receive(row);
+          if (wasReady !== this.readyForInput) ui.renderInput();
         }
       }
     });
@@ -109,6 +111,9 @@ export class BuiltInPaddle {
     this.resetStream();
     this.ui.sidetone.setAvailable(false);
     void this.api.paddle('input', input);
+  }
+  get readyForInput() {
+    return this.active && this.connected && this.configured && this.stream.neutral && !this.ui.migrationPending;
   }
   get acceptsVBand() {
     return this.input === 'vband' && this.active && this.connected && this.configured && !this.ui.migrationPending;

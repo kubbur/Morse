@@ -18,11 +18,29 @@
   expect(new Set(keys).size===keys.length,'Duplicate settings controls');
   expect(get('view-lab').contains(get('send-source')) && get('view-lab').contains(get('send-keyer')), 'Input settings placement');
   expect(!get('view-lab').contains(get('send-setup')) && !get('view-lab').querySelector('[data-view="practice"]'),'Settings still shows quick controls or forced return');
-  expect(get('view-lab').textContent.includes('Listening material') && get('view-lab').textContent.includes('Copying and progression'),'Listening settings headings');
+  expect(get('view-lab').textContent.includes('Listening preferences') && !get('view-lab').contains(get('lab-lesson')),'Listening preferences and activity separation');
   expect(document.querySelector('label[for=lab-goal]').textContent==='Daily listening goal','Goal scope');
+  if (fixture.mode === 'browser') {
+    const old = current().settings.courseLevel;
+    tab('practice');
+    if (get('guidance-dialog').open) get('guidance-close').click();
+    get('choose-lesson').click();
+    expect(get('activity-dialog').open && !get('view-practice').hidden && get('listen-activity').value === 'guided', 'Choose activity without leaving Listen');
+    change('listen-activity','koch'); change('lab-koch',4);
+    expect(!get('koch-control').hidden && get('activity-alphabet').hidden && current().settings.kochCount===4, 'Koch exercise controls');
+    change('listen-activity','custom'); change('lab-lesson','numbers'); change('lab-level',2);
+    expect(current().settings.lesson==='numbers' && current().settings.level===2 && !get('activity-format').hidden, 'Two-digit custom exercise');
+    expect(!get('guidance-dialog').open && get('listen-activity').querySelector('[value=endless]').disabled, 'Activity dialog opened extra guidance or unlocked Endless too soon');
+    change('listen-activity','guided');
+    expect(current().settings.courseLevel===old && !get('course-level-control').hidden, 'Return to guided checkpoint');
+    get('activity-dialog').querySelector('.button.primary').click();
+    if (get('guidance-dialog').open) get('guidance-close').click();
+    tab('lab');
+  }
   expect(!get('sound-choice').hidden,'Legacy timing choice missing');
   const mac=fixture.mode.startsWith('mac');
   if(mac) {
+    expect(get('mac-updates').previousElementSibling.contains(get('lab-title')) && get('mac-updates').nextElementSibling.contains(get('input-settings')), 'Updates bar directly above Input');
     expect(get('update-notes-text').textContent==='Local release notes' && !get('update-auto').checked,'Installed release notes and update opt-in');
     get('update-check').click();
     await wait(()=>!get('morse-update').hidden,'Update available notice');
@@ -74,6 +92,11 @@
     if(fixture.mode==='mac-staging') expect(get('leaderboard-title').textContent==='Local test leaderboard','Test board source missing');
   }
   expect(get('copying-styles').textContent.includes('No answers recorded') && !get('copying-styles').textContent.includes('Ready'),'Copying status');
+  get('progress-send').click();
+  expect(get('listen-progress-panels').hidden && !get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-ATTEMPT ACCURACY') && get('stats-grid').children.length===3, 'Sending dashboard metrics');
+  expect(get('send-badge-grid').children.length>=get('badge-grid').children.length && get('send-weak-characters').textContent.includes('No recent'), 'Sending badges and weak sounds');
+  get('progress-listen').click();
+  expect(!get('listen-progress-panels').hidden && get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-LISTEN'), 'Listening dashboard metrics');
   expect(!get('journey-recovery'),'Duplicate progress dialog button');
   get('open-progress').click();
   expect(!get('station-empty') && !get('saved-learner'),'Multiple learner controls');
@@ -245,7 +268,7 @@
   expect(get('send-trace').hidden && get('send-hit').hidden && !get('send-decoded').textContent,'Blind exercise revealed its target or showed an empty dash');
   if (mac) {
     Object.defineProperty(document,'hasFocus',{configurable:true,value:()=>true});
-    change('send-source','paddle'); testPaddleReady();
+    change('send-source','paddle'); testPaddleReady(); await tick(); testPaddleElement(0,0);
     await wait(()=>get('send-input-status').textContent.includes('Paddle ready'),'Native paddle status');
     await tick();
     get('send-listen').click();

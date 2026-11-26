@@ -71,8 +71,8 @@ export class KeyTone {
 }
 
 export class SendingUI {
-  constructor({ getProfile, persist, active, inputSettingsOpen = () => false, soundChoice = () => false, onEarn = () => {} }) {
-    Object.assign(this, { getProfile, persist, active, inputSettingsOpen, soundChoice, onEarn });
+  constructor({ getProfile, persist, active, activitySource = () => ({}), inputSettingsOpen = () => false, soundChoice = () => false, onEarn = () => {} }) {
+    Object.assign(this, { getProfile, persist, active, activitySource, inputSettingsOpen, soundChoice, onEarn });
     this.audio = new MorseAudio(); this.tone = new KeyTone();
     this.trace = new SendingTraceView($('send-trace'), $('send-hit'));
     this.edges = []; this.source = loadInput(); $('send-source').value = this.source; this.contacts = { dit: false, dah: false };
@@ -329,7 +329,8 @@ export class SendingUI {
     $('send-paddles').hidden = !keyboard || !showButtons;
     const soundStatus = !this.sidetone.supported ? 'update Morse Paddle for automatic mute' : this.muteState === 'error' ? 'sidetone control unavailable; reconnect' : this.muteState === 'muted' ? 'sidetone muted' : this.muteState === 'sending' ? 'Mac sidetone' : 'setting paddle sound';
     const awake = this.wakeState === 'held' ? ' · screen awake' : ['blocked', 'unsupported', 'released'].includes(this.wakeState) ? ' · screen may sleep' : '';
-    $('send-input-status').textContent = usb ? (this.native && this.connectionStatus !== 'ready' ? this.connectionMessage || 'Preparing VBand sidetone output…' : 'Listening for VBand Control keys' + awake) : converter ? this.connectionStatus === 'ready' ? `Paddle ready · ${soundStatus}${awake}` : this.connectionMessage || (this.native ? 'Checking the paddle adapter…' : 'Morse Paddle · connect on this Mac') : keyboard ? `Dot ${dotKey} · Dash ${dashKey}` : 'Straight key · hold Space or the button';
+    const arming = this.native && (usb || converter) && this.connectionStatus === 'ready' && !this.connection?.readyForInput;
+    $('send-input-status').textContent = arming ? 'Preparing input · release both paddles' : usb ? (this.native && this.connectionStatus !== 'ready' ? this.connectionMessage || 'Preparing VBand sidetone output…' : 'Listening for VBand Control keys' + awake) : converter ? this.connectionStatus === 'ready' ? `Paddle ready · ${soundStatus}${awake}` : this.connectionMessage || (this.native ? 'Checking the paddle adapter…' : 'Morse Paddle · connect on this Mac') : keyboard ? `Dot ${dotKey} · Dash ${dashKey}` : 'Straight key · hold Space or the button';
     if (!this.native) {
       $('send-keyer-help').textContent = converter ? 'Match the keyer mode and sending speed in Morse Paddle.' : 'Sending speed and iambic mode control the paddle elements.';
     }
@@ -380,6 +381,7 @@ export class SendingUI {
     }
     this.abort('', { preservePaddles });
     this.item = sendingExercise(this.getProfile().sending, previous);
+    this.firstAttempt = true;
     this.assisted = false; this.revealed = false; this.heard = false;
     if (autoListen && this.usable()) void this.listen({ feedback });
     else {
@@ -415,6 +417,13 @@ export class SendingUI {
       if (message && this.active()) $('send-feedback').textContent = message;
     }
     this.renderExercise();
+  }
+
+  preparePrompt() {
+    // A native paddle event cannot activate Web Audio. Resume in the tab gesture.
+    this.audio.unlock().catch(() => {
+      if (this.active()) $('send-feedback').textContent = 'Tap Hear signal to enable audio.';
+    });
   }
 
   pause() {
@@ -673,7 +682,8 @@ export class SendingUI {
     this.result = gradeSending(this.edges, this.item.target, this.settings, this.stage, { keyerTimed: this.source !== 'straight' });
     const grade = this.result;
     if (!grade.valid) { $('send-feedback').textContent = grade.issue; return; }
-    const award = recordSending(s, this.item.target, grade, { assisted: this.assisted, sessionId: this.sessionId });
+    const award = recordSending(s, this.item.target, grade, { assisted: this.assisted, sessionId: this.sessionId, firstAttempt: this.firstAttempt, ...this.activitySource() });
+    if (award.id) this.firstAttempt = false;
     this.sessionId = award.sessionId;
     this.onEarn(award.xp,award.id); this.persist();
     $('send-capture').dataset.result = grade.passed ? 'good' : 'retry';

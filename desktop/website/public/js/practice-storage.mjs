@@ -50,6 +50,7 @@ export class PracticeStorage {
     return {
       get failed() { return store.failed; },
       row: () => store.row(id),
+      scoreTotal: profile => store.scoreTotal(profile),
       getItem: key => key === SYNC_KEY ? store.row(id).private : store.getItem(key),
       setItem(key, value) {
         if (key !== SYNC_KEY) return store.setItem(key, value);
@@ -134,6 +135,42 @@ export class PracticeStorage {
     }
     Object.assign(profile, { callsign, leaderboard: sharing });
   }
+  chooseListing(profile, callsign, visible) {
+    const row = this.row(profile.id), old = profile.callsign, wasSharing = profile.leaderboard;
+    const previousGen = row.generation, priorTotal = this.scoreTotal(profile), wasLegacy = !row.listings;
+    this.consent(profile, callsign, visible);
+    if (!callsign && !old) return;
+    row.stream ||= crypto.randomUUID();
+    row.listings ||= {};
+    row.visibilityQueue ||= [];
+    if (row.generation === previousGen) row.generation++;
+    const queue = (call, show) => {
+      if (!call) return;
+      row.visibilityQueue = row.visibilityQueue.filter(intent => intent.call !== call);
+      const snapshot = scoreSnapshot(profile,row);
+      if (call === old) snapshot.xp = Math.max(snapshot.xp,priorTotal);
+      row.visibilityQueue.push({ call, visible:show, generation:row.generation, revision:row.listings[call]?.revision ?? null, snapshot, legacyFence:!show && wasLegacy && wasSharing });
+    };
+    if (old && old !== callsign && (wasSharing || row.listings[old]?.visible)) queue(old,false);
+    if (visible || callsign && (old === callsign && wasSharing || row.listings[callsign])) queue(callsign, visible);
+    row.needsConsent = false;
+    row.scores = [];
+    delete row.previousScores;
+    delete row.listingError;
+    if (row.history?.decision === 'queued') row.history.decision = 'pending';
+  }
+  scoreTotal(profile) {
+    const row = this.row(profile.id), listing = row.listings?.[profile.callsign];
+    if (!listing) return profile.stats.xp;
+    if (listing.absoluteOnly) return Math.max(profile.stats.xp,listing.xp || 0);
+    const movement = Object.entries(listing.covered || listing.local?.marks || {}).reduce((sum,[key,n]) =>
+      sum + Math.max(0,(profile.credits?.[key] || 0) - n),0);
+    // A restored or imported credit counter can move forward without this
+    // installation playing anything. Only actual new practice advances a
+    // higher public baseline. A larger restored lifetime total still wins.
+    const earned = Math.max(0,(row.earned || 0) - (listing.local?.earned || 0));
+    return Math.min(1e9,Math.max(profile.stats.xp,listing.xp || 0,(listing.ackXP || 0) + Math.min(movement,earned)));
+  }
   decidePreviousScores(profile, publish) {
     this.atomic(() => {
       const row=this.row(profile.id);
@@ -145,6 +182,7 @@ export class PracticeStorage {
   result(profile, kind, xp, id = crypto.randomUUID()) {
     if (xp>0) {
       const row=this.row(profile.id);
+      row.earned = Math.min(1e9,(row.earned || 0) + xp);
       row.stream ||= crypto.randomUUID();
       profile.credits ||= {};
       profile.credits[row.stream]=Math.min(1e9,(profile.credits[row.stream] || 0)+xp);
@@ -154,4 +192,29 @@ export class PracticeStorage {
     }
     return id;
   }
+}
+
+export function scoreSnapshot(profile, row) {
+  // Keep the request below the score endpoint's 16 KiB limit even after
+  // repeated imports from many installations. The total always covers all XP.
+  const entries = Object.entries(profile.credits || {});
+  const earned = row.earned || 0;
+  if (entries.length > 100) return { xp:profile.stats.xp, marks:{}, earned, absoluteOnly:true };
+  const marks = Object.fromEntries(entries.sort(([a],[b])=>a.localeCompare(b)));
+  if (row.stream) marks[row.stream] = profile.credits?.[row.stream] || 0;
+  return { xp:profile.stats.xp, marks, earned };
+}
+
+export async function publicSnapshot(call, snapshot, keys = {}, row) {
+  const marks = {};
+  for (const [id, amount] of Object.entries(snapshot.marks)) {
+    // Only the public counters for this callsign leave the score path.
+    const bytes = await crypto.subtle.digest('SHA-256',new TextEncoder().encode('morse-score/' + call + '/' + id));
+    const key = Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2,'0')).join('');
+    marks[key] = amount; keys[id] = key;
+  }
+  const anchor = row?.listings?.[call]?.sentEarned, stream = keys[row?.stream];
+  const xp = Number.isSafeInteger(anchor) ? Math.max(0,snapshot.earned-anchor) : 0;
+  const activity = stream && xp ? { stream, xp:Math.min(xp,marks[stream]) } : null;
+  return { xp:snapshot.xp, marks, ...(activity?.xp ? {activity} : {}), ...(snapshot.absoluteOnly ? {absoluteOnly:true} : {}) };
 }

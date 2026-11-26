@@ -1,7 +1,7 @@
 {
   "name": "morse-desktop",
   "productName": "Morse",
-  "version": "1.1.4",
+  "version": "1.1.5-dev.1",
   "private": true,
   "description": "Morse code listening and sending practice for Mac.",
   "type": "module",

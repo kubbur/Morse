@@ -85,6 +85,9 @@ export function hasLocalChanges(meta, local) {
   if (!base.sending.sessionHistory && local.sending.sessionHistory && meta.legacySendingSessions) {
     base = { ...base, sending: { ...base.sending, sessionHistory: local.sending.sessionHistory } };
   }
+  if (meta.legacySendActivity && !base.sending.activity && local.sending.activity) {
+    base = { ...base, sending: { ...base.sending, activity: local.sending.activity } };
+  }
   return syncChanged(base, local);
 }
 

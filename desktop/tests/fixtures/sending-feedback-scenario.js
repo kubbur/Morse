@@ -104,5 +104,14 @@
   expect(getComputedStyle(get('.trace-call'),'::after').content !== 'none', 'Missing static finishing star');
   paint('E E', [], true);
   expect(get('.trace-verdict').hidden && !get('.trace-clean,.trace-perfect,.trace-burst,.send-fireworks'), 'Clear retained a previous reward');
+  for (const width of [280, 680]) {
+    capture.style.width = width + 'px';
+    paint('R',Array.from({length:140},(_,i)=>i*80));
+    view.draw();
+    const track = get('.trace-scroll'), trace = capture.querySelector('.send-trace');
+    expect(track.scrollWidth > track.clientWidth && track.scrollHeight === track.clientHeight, 'Long messages must pan only horizontally');
+    expect(!['auto','scroll'].includes(getComputedStyle(trace).overflowY) && get('.trace-feedback').getBoundingClientRect().bottom <= capture.getBoundingClientRect().bottom,
+      'Long sending feedback created a vertical scrollbar or extended below the panel');
+  }
   window.testComplete = true;
 })().catch(error => { window.testFailure = error.message; });

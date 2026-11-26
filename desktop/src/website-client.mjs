@@ -67,7 +67,7 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
     const keyFor = name => mode === 'staging' ? name : 'website:'+name;
     if (!await safeStorage.isAsyncEncryptionAvailable()) return { status:503,error:'Private credential storage is unavailable.' };
     const cookies=[];
-    const required = action === 'scores/consent' ? [names.scores,names.private] : [names[kind]];
+    const required = ['scores/consent','scores/listing','scores/visibility','scores/total'].includes(action) ? [names.scores,names.private] : [names[kind]];
     for (const name of required) {
       const row=db.prepare('SELECT encrypted FROM credentials WHERE id=?').get(keyFor(name));
       if (row) { const {result}=await safeStorage.decryptStringAsync(Buffer.from(row.encrypted)); cookies.push(name+'='+result); }

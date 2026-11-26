@@ -33,6 +33,8 @@
   };
   let plays = 0, finishPlayback;
   const { MorseAudio } = await import('/js/audio.mjs');
+  let unlocks = 0;
+  MorseAudio.prototype.unlock = async () => { unlocks++; };
   MorseAudio.prototype.play = () => {
     plays++;
     return new Promise(resolve => { finishPlayback = () => resolve({ completed: true }); });
@@ -91,6 +93,7 @@
   testPaddleElement(1, 4600);
   testPaddleReconnect();
   testPaddleReady();
+  await new Promise(resolve => setTimeout(resolve,20)); testPaddleElement(0,0);
   await wait(() => ready() && el('send-input-status').textContent.includes('Paddle ready'), 'Reconnected output required another Play');
   testPaddleElement(2, 10); testPaddleElement(0, 1400);
   check(!el('send-decoded').textContent && attempts() === before, 'Interrupted route was graded');
@@ -109,5 +112,27 @@
   check(attempts() === before + 1 && plays === 3, 'Timed answer advanced early at 20 WPM');
   testPaddleElement(0, 10160);
   await wait(() => attempts() === before + 2 && plays === 4, '20 WPM did not advance at the selected two-second pause');
+  finishPlayback();
+  await wait(ready,'Next timed prompt finished');
+  let clock = 20000;
+  for (const other of ['journey','lab','practice']) {
+    tab(other);
+    if (el('guidance-dialog').open) el('guidance-close').click();
+    const stale = [[0,0],[1,40],[2,100],[0,300]].map(([kind,t]) => testPaddleElement(kind,clock+t,true));
+    const beforePlays = plays, beforeUnlock = unlocks, beforeAttempts = attempts();
+    tab('send');
+    await new Promise(resolve => setTimeout(resolve,20));
+    check(unlocks === beforeUnlock+1 && !el('send-input-status').textContent.includes('Paddle ready'), 'Audio and capture rearmed on entry from '+other);
+    stale.forEach(deliver => deliver());
+    testPaddleElement(1,clock+400); testPaddleElement(2,clock+460); testPaddleElement(0,clock+500);
+    check(plays === beforePlays && el('send-input-status').textContent.includes('Paddle ready'), 'Old or held dit started playback from '+other);
+    testPaddleElement(1,clock+700); testPaddleElement(2,clock+880); testPaddleElement(0,clock+1000);
+    check(plays === beforePlays, 'A dah started a prompt');
+    testPaddleElement(1,clock+1100); testPaddleElement(2,clock+1160); testPaddleElement(0,clock+1300);
+    await wait(()=>plays===beforePlays+1,'Single dit played prompt after '+other);
+    finishPlayback(); await wait(ready,'Ready to send after dit');
+    check(attempts()===beforeAttempts && !el('send-decoded').textContent,'Prompt command counted as an answer');
+    clock += 3000;
+  }
   window.testComplete = true;
 })().catch(error => { window.testFailure = error.message; });
