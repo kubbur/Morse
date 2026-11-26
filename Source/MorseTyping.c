@@ -1,7 +1,13 @@
 #include "MorseTyping.h"
 #include <math.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+static uint64_t typingTimeNs(void) { return GetTickCount64() * UINT64_C(1000000); }
+#else
 #include <time.h>
+static uint64_t typingTimeNs(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW); }
+#endif
 
 static char decode(const char *marks) {
     static const struct { char text; const char *code; } alphabet[] = {
@@ -31,7 +37,7 @@ void initTypingQueue(TypingQueue *q) {
 static uint64_t newDestination(uint64_t old, uint32_t pid) {
     return ((old + (UINT64_C(1)<<32)) & UINT64_C(0xffffffff00000000)) | pid;
 }
-void selectTypingDestination(TypingQueue *q, pid_t pid) {
+void selectTypingDestination(TypingQueue *q, uint32_t pid) {
     uint64_t old=atomic_load(&q->destination);
     while ((uint32_t)old!=(uint32_t)pid &&
            !atomic_compare_exchange_weak(&q->destination,&old,newDestination(old,(uint32_t)pid))) {}
@@ -43,7 +49,7 @@ void resetTypingSession(TypingQueue *q) {
 static void enqueue(TypingQueue *q, uint64_t destination, char character, bool spaceBefore) {
     unsigned write=atomic_load_explicit(&q->writeIndex,memory_order_relaxed);
     if (write-atomic_load_explicit(&q->readIndex,memory_order_acquire)>=TypingQueueSize) return;
-    q->slots[write%TypingQueueSize]=(TypedCharacter){destination,clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW),character,spaceBefore};
+    q->slots[write%TypingQueueSize]=(TypedCharacter){destination,typingTimeNs(),character,spaceBefore};
     atomic_store_explicit(&q->writeIndex,write+1,memory_order_release);
 }
 bool takeTypedCharacter(TypingQueue *q, TypedCharacter *result) {
@@ -53,7 +59,7 @@ bool takeTypedCharacter(TypingQueue *q, TypedCharacter *result) {
         TypedCharacter item=q->slots[read%TypingQueueSize];
         atomic_store_explicit(&q->readIndex,++read,memory_order_release);
         if (item.destination==atomic_load(&q->destination) &&
-            clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)-item.createdNs<UINT64_C(1000000000)) {
+            typingTimeNs()-item.createdNs<UINT64_C(1000000000)) {
             *result=item; return true;
         }
     }

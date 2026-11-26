@@ -1,0 +1,34 @@
+Morse for Windows x64 — test build
+
+Extract the entire application ZIP to a folder and open Morse.exe. The
+resources folder contains the Windows audio helper. Listening, keyboard
+sending and progress storage work offline. Windows builds on this branch
+are unsigned and have no automatic updater.
+
+Using the passive 3.5 mm paddle converter
+
+1. Plug the converter into a CTIA headset combo jack or USB audio adapter
+   that supports both stereo headphones and a headset microphone. If the
+   driver asks what you plugged in, choose Headset.
+2. In Settings > Input choose Audio converter (3.5 mm). Select the actual
+   headset headphone output and headset microphone return. These choices
+   are kept on this PC. Windows must allow microphone access for desktop apps.
+3. Select speakers or another device for sidetone. If Windows routes both
+   outputs to the same headphones, Morse can still score silently. Use a
+   separate output for audible sidetone. Listen prompts use the system
+   default output. Keep the converter output stereo and turn off microphone
+   enhancements or noise suppression if the driver filters the sensing tones.
+4. Leave both paddles released during startup. Press each side and then both.
+   The contact display should show Released, Dit, Dah and Both paddles.
+   If necessary, use Calibrate input and measure the four positions. The
+   thresholds are saved for the selected headphone/microphone pair.
+5. In Send, practise normally. Swap dot and dash contacts in Settings if
+   required. To type into another app, enable Write in the focused app with
+   the converter selected, switch to a text field, and release both paddles.
+
+VBand USB uses left and right Control in the focused trainer. Choose an
+audible sidetone output for VBand.
+
+Hardware validation: the automated test feeds synthetic left/right pilot
+returns into the production detector. Jack wiring, microphone processing
+and acoustic latency need a test with a physical Windows PC and adapter.

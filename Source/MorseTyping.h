@@ -2,7 +2,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>
-#include <sys/types.h>
 
 typedef struct {
     uint64_t destination, createdNs;
@@ -27,7 +26,7 @@ typedef struct {
 } TypingDecoder;
 
 void initTypingQueue(TypingQueue *queue);
-void selectTypingDestination(TypingQueue *queue, pid_t pid);
+void selectTypingDestination(TypingQueue *queue, uint32_t pid);
 void resetTypingSession(TypingQueue *queue);
 bool takeTypedCharacter(TypingQueue *queue, TypedCharacter *result);
 void prepareTypingBlock(TypingDecoder *decoder, TypingQueue *queue, bool neutral);

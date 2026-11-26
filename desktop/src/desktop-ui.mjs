@@ -1,10 +1,15 @@
 const $ = id => document.getElementById(id);
 const api=window.morseMac;
 if (api) {
+  const windows=api.platform==='win32';
   $('send-keyer-help').textContent='Sending speed and keyer mode also control the paddle sidetone.';
   const panel=document.createElement('section');
   panel.className='field';
   panel.innerHTML=`<div id="native-hardware" class="field">
+    ${windows ? `<div id="converter-route" class="field">
+      <label for="converter-pilot">Converter headphone output</label><select id="converter-pilot"></select>
+      <label for="converter-mic">Converter microphone return</label><select id="converter-mic"></select>
+      <small id="converter-contacts" role="status"></small></div>` : ''}
     <label for="native-output">Sidetone output</label><select id="native-output"></select><small id="native-playing"></small>
     <label><input type="checkbox" id="native-words"> Use timed word spaces when typing</label>
     <button type="button" id="native-start">Calibrate input</button>
@@ -22,6 +27,11 @@ if (api) {
     const source=$('send-source').value, converter=source==='paddle';
     $('native-hardware').hidden=!converter && source!=='vband';
     $('native-start').hidden=!converter;
+    if (windows) {
+      $('converter-route').hidden=!converter;
+      $('native-write-help').textContent=converter ? 'Switch to a text field and release both paddles before starting a letter.' :
+        'External typing on Windows uses the audio converter.';
+    }
     if (!converter) $('native-cal').hidden=true;
     const write=$('native-write');
     write.checked=!!latest?.typing;
@@ -32,20 +42,38 @@ if (api) {
     $('native-feedback').textContent=''; showInput();
   });
   showInput();
+  function setDevices(select, options, selected) {
+    if (!options.some(o=>o.id===selected)) options.push({id:selected,name:'Selected device (disconnected)'});
+    const key=JSON.stringify(options);
+    if (select.dataset.devices!==key) {
+      select.replaceChildren(...options.map(o=>new Option(o.name,o.id)));
+      select.dataset.devices=key;
+    }
+    select.value=selected;
+  }
   api.onPaddle(row=>{
     if (row.type!=='status') return;
     latest=row; showInput();
     if (!row.output) return;
-    const outputs=[{id:'auto',name:'Automatic'},{id:'speakers',name:'Mac speakers'},...(row.outputs || [])];
-    if (!outputs.some(o=>o.id===row.output)) outputs.push({id:row.output,name:'Selected Bluetooth output (disconnected)'});
-    $('native-output').replaceChildren(...outputs.map(o=>new Option(o.name,o.id)));
-    $('native-output').value=row.output; $('native-playing').textContent=row.playing;
+    const outputs=windows ? [{id:'auto',name:'Windows default output'},...(row.source==='paddle' || row.output==='silent' ? [{id:'silent',name:'Silent practice'}] : [])] :
+      [{id:'auto',name:'Automatic'},{id:'speakers',name:'Mac speakers'}];
+    setDevices($('native-output'),[...outputs,...(row.outputs || [])],row.output);
+    $('native-playing').textContent=row.playing;
+    if (windows) {
+      setDevices($('converter-pilot'),[{id:'none',name:'Choose headphones…'},...(row.outputs || [])],row.pilot || 'none');
+      setDevices($('converter-mic'),[{id:'none',name:'Choose microphone…'},...(row.inputs || [])],row.mic || 'none');
+      $('converter-contacts').textContent=row.phase==='ready' ? ['Released','Dit','Dah','Both paddles'][row.mask || 0] : row.detail;
+    }
     $('native-words').checked=row.wordSpaces;
     $('native-step').textContent=(row.sampling?'Measuring… ':'' )+(instructions[row.calibration] || '');
     $('native-measure').disabled=row.sampling || ![1,2,3,4].includes(row.calibration);
     $('native-boost').disabled=row.calibration!==1;
   });
   $('native-output').onchange=e=>send('output',e.target.value);
+  if (windows) {
+    $('converter-pilot').onchange=e=>send('pilot',e.target.value);
+    $('converter-mic').onchange=e=>send('mic',e.target.value);
+  }
   $('native-words').onchange=e=>send('word-spaces',e.target.checked);
   $('native-start').onclick=()=>{ $('native-cal').hidden=false; send('calibrate'); };
   $('native-measure').onclick=()=>send('sample',$('native-boost').checked);
@@ -61,47 +89,50 @@ if (api) {
     catch { $('native-feedback').textContent='The paddle engine is unavailable.'; }
     finally { changingTyping=false; showInput(); }
   };
-  const updates = document.createElement('section');
-  updates.className='card update-bar'; updates.id='mac-updates';
-  updates.innerHTML=`<div class="update-version"><h2>Updates</h2><span id="mac-version" class="muted small-copy"></span></div>
-    <p id="update-status" role="status"></p>
-    <div class="pair-actions"><button type="button" class="button secondary" id="update-check">Check for updates</button>
-    <button type="button" class="button primary" id="update-install" hidden>Install update</button>
-    <button type="button" class="text-button" id="update-release" hidden>Open GitHub release</button></div>
-    <label class="update-auto"><input type="checkbox" id="update-auto"> Automatically update</label>
-    <details id="update-notes"><summary>What’s new</summary><p class="update-notes small-copy" id="update-notes-text"></p></details>`;
-  document.querySelector('#view-lab .page-intro').after(updates);
-  const notice=document.createElement('button');
-  notice.id='morse-update'; notice.hidden=true; notice.className='text-button'; notice.type='button';
-  document.querySelector('.header-actions').prepend(notice);
-  notice.onclick=()=>{
-    document.querySelector('.main-nav [data-view="lab"]').click();
-    $('update-notes').open=true; updates.scrollIntoView({block:'center'}); $('update-notes').querySelector('summary').focus({preventScroll:true});
-  };
-  let updateState;
-  function drawUpdate(state) {
-    if (!state) return;
-    updateState=state;
-    const busy=state.phase==='checking';
-    $('mac-version').textContent='Installed version '+state.version;
-    $('update-status').textContent=state.message || (busy ? 'Checking GitHub…' : state.available ? 'Morse '+state.available+' is available.' :
-        !state.enabled ? 'Update checks are disabled in this test session.' : state.phase==='checked' ? 'You’re up to date.' : '');
-    $('update-check').disabled=!state.enabled || busy;
-    $('update-auto').checked=state.automatic; $('update-auto').disabled=!state.automaticSupported;
-    $('update-release').hidden=!state.available;
-    $('update-install').hidden=!state.available; $('update-install').disabled=busy;
-    $('update-install').textContent=state.installable ? 'Install update' : 'Download update';
-    notice.hidden=!state.available; notice.textContent='Update available';
-    $('update-notes-text').textContent=(state.available ? state.notes : state.installedNotes) || 'No release notes were provided for this version.';
+  if (!windows) installUpdateControls();
+  function installUpdateControls() {
+    const updates = document.createElement('section');
+    updates.className='card update-bar'; updates.id='mac-updates';
+    updates.innerHTML=`<div class="update-version"><h2>Updates</h2><span id="mac-version" class="muted small-copy"></span></div>
+      <p id="update-status" role="status"></p>
+      <div class="pair-actions"><button type="button" class="button secondary" id="update-check">Check for updates</button>
+      <button type="button" class="button primary" id="update-install" hidden>Install update</button>
+      <button type="button" class="text-button" id="update-release" hidden>Open GitHub release</button></div>
+      <label class="update-auto"><input type="checkbox" id="update-auto"> Automatically update</label>
+      <details id="update-notes"><summary>What’s new</summary><p class="update-notes small-copy" id="update-notes-text"></p></details>`;
+    document.querySelector('#view-lab .page-intro').after(updates);
+    const notice=document.createElement('button');
+    notice.id='morse-update'; notice.hidden=true; notice.className='text-button'; notice.type='button';
+    document.querySelector('.header-actions').prepend(notice);
+    notice.onclick=()=>{
+      document.querySelector('.main-nav [data-view="lab"]').click();
+      $('update-notes').open=true; updates.scrollIntoView({block:'center'}); $('update-notes').querySelector('summary').focus({preventScroll:true});
+    };
+    let updateState;
+    function drawUpdate(state) {
+      if (!state) return;
+      updateState=state;
+      const busy=state.phase==='checking';
+      $('mac-version').textContent='Installed version '+state.version;
+      $('update-status').textContent=state.message || (busy ? 'Checking GitHub…' : state.available ? 'Morse '+state.available+' is available.' :
+          !state.enabled ? 'Update checks are disabled in this test session.' : state.phase==='checked' ? 'You’re up to date.' : '');
+      $('update-check').disabled=!state.enabled || busy;
+      $('update-auto').checked=state.automatic; $('update-auto').disabled=!state.automaticSupported;
+      $('update-release').hidden=!state.available;
+      $('update-install').hidden=!state.available; $('update-install').disabled=busy;
+      $('update-install').textContent=state.installable ? 'Install update' : 'Download update';
+      notice.hidden=!state.available; notice.textContent='Update available';
+      $('update-notes-text').textContent=(state.available ? state.notes : state.installedNotes) || 'No release notes were provided for this version.';
+    }
+    const action=(name,value)=>api.update(name,value).catch(()=>{
+      if (updateState) drawUpdate(updateState);
+      $('update-status').textContent='The update settings could not be accessed.';
+    });
+    $('update-check').onclick=()=>action('check');
+    $('update-auto').onchange=e=>action('automatic',e.target.checked);
+    $('update-install').onclick=()=>action('install');
+    $('update-release').onclick=()=>action('release');
+    api.onUpdate(drawUpdate);
+    void action('state').then(drawUpdate);
   }
-  const action=(name,value)=>api.update(name,value).catch(()=>{
-    if (updateState) drawUpdate(updateState);
-    $('update-status').textContent='The update settings could not be accessed.';
-  });
-  $('update-check').onclick=()=>action('check');
-  $('update-auto').onchange=e=>action('automatic',e.target.checked);
-  $('update-install').onclick=()=>action('install');
-  $('update-release').onclick=()=>action('release');
-  api.onUpdate(drawUpdate);
-  void action('state').then(drawUpdate);
 }

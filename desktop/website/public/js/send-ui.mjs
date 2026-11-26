@@ -327,7 +327,7 @@ export class SendingUI {
     }
     $('send-key').hidden = keyboard;
     $('send-paddles').hidden = !keyboard || !showButtons;
-    const soundStatus = !this.sidetone.supported ? 'update Morse Paddle for automatic mute' : this.muteState === 'error' ? 'sidetone control unavailable; reconnect' : this.muteState === 'muted' ? 'sidetone muted' : this.muteState === 'sending' ? 'Mac sidetone' : 'setting paddle sound';
+    const soundStatus = !this.sidetone.supported ? 'update Morse Paddle for automatic mute' : this.muteState === 'error' ? 'sidetone control unavailable; reconnect' : this.muteState === 'muted' ? 'sidetone muted' : this.muteState === 'sending' ? (this.native?.platform === 'win32' ? (this.connection?.status?.audible ? 'Windows sidetone' : 'silent practice') : 'Mac sidetone') : 'setting paddle sound';
     const awake = this.wakeState === 'held' ? ' · screen awake' : ['blocked', 'unsupported', 'released'].includes(this.wakeState) ? ' · screen may sleep' : '';
     const arming = this.native && (usb || converter) && this.connectionStatus === 'ready' && !this.connection?.readyForInput;
     $('send-input-status').textContent = arming ? 'Preparing input · release both paddles' : usb ? (this.native && this.connectionStatus !== 'ready' ? this.connectionMessage || 'Preparing VBand sidetone output…' : 'Listening for VBand Control keys' + awake) : converter ? this.connectionStatus === 'ready' ? `Paddle ready · ${soundStatus}${awake}` : this.connectionMessage || (this.native ? 'Checking the paddle adapter…' : 'Morse Paddle · connect on this Mac') : keyboard ? `Dot ${dotKey} · Dash ${dashKey}` : 'Straight key · hold Space or the button';

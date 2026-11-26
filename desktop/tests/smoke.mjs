@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { APP_ORIGIN } from '../src/policy.mjs';
 import { root } from '../scripts/stage.mjs';
 
-const executable = process.env.MORSE_DESKTOP_EXECUTABLE || (process.platform === 'darwin' ? join(root, `build/packages/Morse-darwin-${process.arch}/Morse.app/Contents/MacOS/Morse`) : join(root, 'build/packages/Morse-linux-x64/Morse'));
+const executable = process.env.MORSE_DESKTOP_EXECUTABLE || join(root,'build/packages',`Morse-${process.platform}-${process.arch}`,process.platform==='darwin' ? 'Morse.app/Contents/MacOS/Morse' : process.platform==='win32' ? 'Morse.exe' : 'Morse');
 const temporary = await mkdtemp(join(tmpdir(), 'morse-desktop-smoke-'));
 const output = join(root, 'build/test-results'); await mkdir(output, { recursive: true });
 const checks = [], errors=[];
@@ -54,9 +54,10 @@ async function launch() {
 async function stop() {
   if (child && child.exitCode === null && !child.signalCode && child.pid) {
     const ended = once(child,'exit');
-    child.kill('SIGTERM');
     const timer = setTimeout(() => child?.kill('SIGKILL'), 10000);
     try {
+      if (process.platform==='win32' && browser) await browser.contexts()[0].pages()[0].close();
+      else child.kill('SIGTERM');
       const [code, signal] = await ended;
       assert.equal(signal, null, 'Morse must quit through its normal lifecycle');
       assert.equal(code, 0);
@@ -130,6 +131,15 @@ try {
   assert.equal(await page.locator('#send-source').inputValue(),'vband');
   await page.locator('#send-source').selectOption('paddle');
   assert.equal(await page.locator('#native-start').isVisible(),true);
+  if (process.platform==='win32') {
+    await page.locator('#converter-pilot option[value="none"]').waitFor({state:'attached'});
+    assert.equal(await page.locator('#converter-mic').inputValue(),'none');
+    assert.equal(await page.locator('#native-output').inputValue(),'auto');
+    assert.equal(await page.locator('#mac-updates').count(),0);
+    const response=await page.evaluate(()=>morseMac.paddle('sample',false));
+    assert.match(response.error,/converter/i);
+    checked('packaged Windows helper reports missing converter endpoints and exposes all three audio selectors');
+  }
   checked('adapter selection survives quit and relaunch, and calibration is available for the audio converter');
   await page.locator('#send-source').selectOption('keyboard');
   await page.locator('#paddle-dot-key').fill('j');

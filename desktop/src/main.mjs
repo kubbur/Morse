@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, dialog, session, shell, ipcMain, powerMonitor, safeStorage, nativeImage } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { join, isAbsolute, resolve } from 'node:path';
+import { join, isAbsolute, relative, resolve, sep } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
 import { APP_ORIGIN, WEBSITE, appDocument, allowedRequest, allowedPermission, progressExport } from './policy.mjs';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -12,7 +12,7 @@ import { checkUpdate } from './updates.mjs';
 import { macInstaller, UpdateManager } from './update-manager.mjs';
 
 app.setName('Morse');
-process.umask(0o077);
+if (process.platform !== 'win32') process.umask(0o077);
 const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url));
 let window, db, paddle, updates, updateTimer, exchange, closing = false, stopping = false;
 const isolated = app.commandLine.hasSwitch('morse-isolated');
@@ -24,7 +24,8 @@ if (isolated || staged) {
   if (!isAbsolute(path) || resolve(path) === personal) throw new Error('Supply a separate test profile directory.');
   mkdirSync(path,{recursive:true,mode:0o700});
   const directory = realpathSync(path);
-  const inPersonal = directory === personal || directory.startsWith(personal+'/');
+  const offset = relative(personal, directory);
+  const inPersonal = !isAbsolute(offset) && offset !== '..' && !offset.startsWith('..'+sep);
   if (inPersonal) throw new Error('Select a test directory outside the personal Morse profile.');
   app.setPath('userData',directory);
 } else if (app.getVersion().includes('-dev.')) {
@@ -189,8 +190,10 @@ else {
     const browserSession=session.fromPartition('persist:morse');
     browserSession.protocol.handle('http',await bundledTrainer(join(app.getAppPath(),'website/public')));
     installSessionPolicy(); registerIPC();
-    if (process.platform==='darwin') {
-      const helper=app.isPackaged ? join(process.resourcesPath,'../Helpers/MorseKeyer') : join(app.getAppPath(),'../native/MorseKeyer');
+    if (process.platform==='darwin' || process.platform==='win32') {
+      const win=process.platform==='win32';
+      const helper=app.isPackaged ? join(process.resourcesPath,win ? 'MorseKeyer.exe' : '../Helpers/MorseKeyer') :
+        join(app.getAppPath(),'../native',win ? 'MorseKeyer.exe' : 'MorseKeyer');
       paddle=new PaddleService(helper,join(dir,'paddle'),row=>publish('paddle-event',row),isolated);
       paddle.start();
       for (const signal of ['suspend','resume','lock-screen']) powerMonitor.on(signal,()=>{ paddle.command('interrupt'); publish('paddle-event',{type:'reset'}); });

@@ -17,6 +17,8 @@ Morse saves progress on your Mac and works offline. Open **Saved progress** to e
 
 ## Using a paddle
 
+The separate `windows` branch contains the Windows x64 desktop test build and a native WASAPI driver for the passive converter. Download **Morse-windows-x64** from a successful Windows build, extract the application ZIP and launch **Morse.exe**. [Windows builds](https://github.com/kubbur/Morse/actions/workflows/build-windows.yml?query=branch%3Awindows) · [Windows converter setup](desktop/WINDOWS.txt)
+
 Open Morse and go to **Settings → Input**. Choose your adapter.
 
 - **Audio converter (3.5 mm)** uses the Mac’s headset input. Quit the old Morse Paddle app if it is running, allow Microphone access and release both paddles during calibration.

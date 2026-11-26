@@ -2,10 +2,7 @@
 #import "Sidetone.h"
 #import "ElementStream.h"
 
-typedef NS_ENUM(unsigned, PaddleCalibrationStep) {
-    InputInactive, InputReleased, InputFirst, InputOther, InputBoth,
-    InputCalibrated, InputOverlap, InputUnavailable
-};
+#include "PaddleCalibration.h"
 
 typedef NS_ENUM(unsigned, PaddleInputMode) {
     PaddleInputAudio, PaddleInputVBand, PaddleInputOff

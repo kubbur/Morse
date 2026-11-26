@@ -86,13 +86,18 @@ def stage(source, work):
     core.mkdir()
     for name in ["Sidetone.h", "Sidetone.c", "MorseTyping.h", "MorseTyping.c", "MorseEngine.h", "ElementStream.h"]:
         shutil.copyfile(native / name, core / name)
-    text = (native / "MorseEngine.m").read_text()
-    common = [
-        section(text, "enum { MaxBlock =", "static double monotonicSeconds("),
-        section(text, "typedef struct { double phase[2], gain;", "static OSStatus speakerRender("),
-        section(text, "typedef void (*ContactCallback)", "typedef struct {\n    Detector detector;"),
-    ]
-    (core / "ReleaseDSP.inc").write_text("\n\n".join(common) + "\n")
+    if (native / "PaddleDSP.h").is_file():
+        shutil.copyfile(native / "PaddleDSP.h", core / "ReleaseDSP.inc")
+        shutil.copyfile(native / "PaddleCalibration.h", core / "PaddleCalibration.h")
+    else:
+        # Older source packages keep their portable routines inside MorseEngine.m.
+        text = (native / "MorseEngine.m").read_text()
+        common = [
+            section(text, "enum { MaxBlock =", "static double monotonicSeconds("),
+            section(text, "typedef struct { double phase[2], gain;", "static OSStatus speakerRender("),
+            section(text, "typedef void (*ContactCallback)", "typedef struct {\n    Detector detector;"),
+        ]
+        (core / "ReleaseDSP.inc").write_text("\n\n".join(common) + "\n")
     app = work / "Payload/Morse.app"
     web = app / "Trainer"
     shutil.copytree(desktop / "website/public", web)

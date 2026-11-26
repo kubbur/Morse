@@ -1183,7 +1183,8 @@ function renderSavedProgress() {
     button.textContent = `Export ${saved.callsign || saved.name} · ${saved.stats.xp.toLocaleString()} XP`;
     button.onclick = () => exportLearner(saved); return button;
   }));
-  $('storage-note').textContent = window.morseMac ? 'Your progress is saved on this Mac. Export a copy to keep it elsewhere.' :
+  $('storage-note').textContent = window.morseMac?.platform === 'win32' ? 'Your progress is saved on this PC. Export a copy to keep it elsewhere.' :
+    window.morseMac ? 'Your progress is saved on this Mac. Export a copy to keep it elsewhere.' :
     'Your progress is saved in this browser. Export a copy before clearing site data.';
   const row = storage.row(p.id);
   const legacy = !!(p.callsign && p.leaderboard && !row.listings);

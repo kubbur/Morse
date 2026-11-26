@@ -65,3 +65,8 @@ Before switching the running site:
 A live backup still needs a host-specific schedule, retention and a restore from an off-host copy. The included restore tests use disposable databases.
 
 Electron and Chromium license notices are inside the app. The trainer’s notices are in `website/THIRD-PARTY-LICENSES.md`.
+
+## Windows x64 development build
+
+
+On the `windows` branch, install Node 24, Python 3, and Visual Studio with Desktop development with C++, the Windows SDK and LLVM/Clang. From `desktop`, run `npm ci`, `npm run test:native`, `npm test` and `npm run package:windows`. The portable ZIP and SHA-256 checksum are in `dist`. Run `npm run test:smoke` to launch the packaged trainer with a temporary profile and test saving and relaunch. [Converter setup](WINDOWS.txt)

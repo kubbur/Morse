@@ -1,4 +1,4 @@
-import { buildNative } from './native.mjs';
+import { buildNative, buildWindows } from './native.mjs';
 import { addSparkle, bundleVersion } from './sparkle.mjs';
 import { packager } from '@electron/packager';
 import { flipFuses, FuseVersion, FuseV1Options, getCurrentFuseWire } from '@electron/fuses';
@@ -11,8 +11,8 @@ import { createHash } from 'node:crypto';
 import { root, stageApp } from './stage.mjs';
 
 const platform = process.argv[2] || 'darwin';
-const architectures = (process.argv[3] || 'arm64,x64').split(',');
-if (!['darwin', 'linux'].includes(platform) || architectures.some(arch => !['arm64', 'x64'].includes(arch))) throw new Error('Unsupported build target.');
+const architectures = (process.argv[3] || (platform==='win32' ? 'x64' : 'arm64,x64')).split(',');
+if (!['darwin', 'linux','win32'].includes(platform) || architectures.some(arch => !(platform==='win32' ? ['x64'] : ['arm64','x64']).includes(arch))) throw new Error('Unsupported build target.');
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const out = join(root, 'build/packages');
 const dist = join(root, 'dist'); await mkdir(dist, { recursive: true });
@@ -22,11 +22,12 @@ for (const arch of architectures) {
     dir: input, out, platform, arch, name: 'Morse', executableName: 'Morse',
     appBundleId: 'digital.kubbur.morse', appCategoryType: 'public.app-category.education',
     appVersion: pkg.version, buildVersion: bundleVersion(pkg.version), electronVersion: pkg.devDependencies.electron,
-    overwrite: true, prune: false, asar: true, icon: join(root, 'assets/icon.icns'),
+    overwrite: true, prune: false, asar: true, icon: join(root, platform==='win32' ? 'assets/icon.ico' : 'assets/icon.icns'),
     extendInfo: { NSMicrophoneUsageDescription: 'Read the two paddle contacts through the wired headset adapter.' },
     download: { cacheRoot: process.env.ELECTRON_CACHE || join(root, 'build/downloads') },
   });
-  const bundle = platform === 'darwin' ? join(directory, 'Morse.app') : join(directory, 'Morse');
+  const bundle = join(directory, platform==='darwin' ? 'Morse.app' : platform==='win32' ? 'Morse.exe' : 'Morse');
+  if (platform==='win32') buildWindows(join(directory,'resources/MorseKeyer.exe'));
   if (platform === 'darwin') {
     buildNative(join(bundle,'Contents/Helpers/MorseKeyer'),[arch==='x64'?'x86_64':'arm64']);
     // Keep the download to the app and install note. Required runtime notices
@@ -69,11 +70,15 @@ for (const arch of architectures) {
     const name = `Morse-${pkg.version}-mac-${arch}.zip`, path = join(dist, name);
     execFileSync('python3', [join(root, 'scripts/archive.py'), directory, path, join(root, 'INSTALL.txt')], { stdio: 'inherit' });
     results.push({ architecture: arch, file: name, sha256: createHash('sha256').update(await readFile(path)).digest('hex'), signing, fuses: await getCurrentFuseWire(bundle) });
+  } else if (platform==='win32') {
+    const name=`Morse-${pkg.version}-windows-${arch}.zip`, path=join(dist,name);
+    execFileSync('python',[join(root,'scripts/archive.py'),directory,path,join(root,'WINDOWS.txt')],{stdio:'inherit'});
+    results.push({architecture:arch,file:name,sha256:createHash('sha256').update(await readFile(path)).digest('hex'),signing:'unsigned',fuses:await getCurrentFuseWire(bundle)});
   } else results.push({ architecture: arch, executable: `build/packages/Morse-${platform}-${arch}/Morse`, fuses: await getCurrentFuseWire(bundle) });
 }
 const report = { name: 'Morse', version: pkg.version, electron: pkg.devDependencies.electron, platform, createdAt: new Date().toISOString(), builds: results };
-const reportDirectory = platform === 'darwin' ? dist : join(root, 'build/test-results');
+const reportDirectory = platform === 'linux' ? join(root, 'build/test-results') : dist;
 await mkdir(reportDirectory, { recursive: true });
 await writeFile(join(reportDirectory, `${platform}-build.json`), JSON.stringify(report, null, 2) + '\n');
-if (platform === 'darwin') await writeFile(join(dist, 'SHA256SUMS.txt'), results.map(r => `${r.sha256}  ${r.file}`).join('\n') + '\n');
+if (platform !== 'linux') await writeFile(join(dist, platform==='win32' ? 'SHA256SUMS-windows.txt' : 'SHA256SUMS.txt'), results.map(r => `${r.sha256}  ${r.file}`).join('\n') + '\n');
 console.log(JSON.stringify(report, null, 2));

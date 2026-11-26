@@ -10,7 +10,7 @@ export function validCommand(op, v) {
     case 'vband': return !!v && integer(v.mask,0,3) && integer(v.epoch,0,0xffffffff) && Number.isSafeInteger(v.session) && v.session > 0;
     case 'sample': case 'mute': case 'reverse': case 'word-spaces': return typeof v === 'boolean';
     case 'volume': return integer(v, 0, 100);
-    case 'output': return typeof v === 'string' && v.length > 0 && v.length <= 512;
+    case 'mic': case 'pilot': case 'output': return typeof v === 'string' && v.length > 0 && v.length <= 512;
     case 'sound': return validCommand('keyer',v) && integer(v.pitch,200,2000) && v.pitch%50===0 && integer(v.rise,1,30) && integer(v.fall,1,30) && integer(v.curve,0,2) && integer(v.volume,0,100);
     case 'keyer': return v && integer(v.wpm, 5, 80) && integer(v.farnsworth, 1, v.wpm) && ['a','b'].includes(v.keyer);
     case 'envelope': return v && integer(v.pitch, 200, 2000) && integer(v.rise, 1, 30) && integer(v.fall, 1, 30) && integer(v.curve, 0, 2) && typeof v.wordSpaces === 'boolean';
@@ -29,7 +29,9 @@ export class PaddleService {
   }
   start() {
     if (this.child || this.stopped) return;
-    const child = this.child = spawn(this.executable, [this.directory, this.isolated ? 'isolated' : 'app'], { stdio: ['pipe','pipe','ignore'] });
+    const args = [this.directory, this.isolated ? 'isolated' : 'app'];
+    if (process.platform === 'win32') args.push(String(process.pid));
+    const child = this.child = spawn(this.executable, args, { windowsHide:true, stdio: ['pipe','pipe','ignore'] });
     const session = ++this.generation;
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     child.stdin.on('error', () => child.kill());
