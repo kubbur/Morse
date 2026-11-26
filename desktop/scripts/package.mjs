@@ -17,17 +17,20 @@ const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const out = join(root, 'build/packages');
 const dist = join(root, 'dist'); await mkdir(dist, { recursive: true });
 const input = await stageApp(join(root, `build/app-${platform}`)), results = [];
+const windowsHelper = join(root, 'build/native/MorseKeyer.exe');
+if (platform==='win32') buildWindows(windowsHelper);
 for (const arch of architectures) {
   const [directory] = await packager({
     dir: input, out, platform, arch, name: 'Morse', executableName: 'Morse',
     appBundleId: 'digital.kubbur.morse', appCategoryType: 'public.app-category.education',
     appVersion: pkg.version, buildVersion: bundleVersion(pkg.version), electronVersion: pkg.devDependencies.electron,
     overwrite: true, prune: false, asar: true, icon: join(root, platform==='win32' ? 'assets/icon.ico' : 'assets/icon.icns'),
+    win32metadata: {CompanyName:'kubbur', FileDescription:'Morse listening and sending trainer'},
+    extraResource: platform==='win32' ? windowsHelper : undefined,
     extendInfo: { NSMicrophoneUsageDescription: 'Read the two paddle contacts through the wired headset adapter.' },
     download: { cacheRoot: process.env.ELECTRON_CACHE || join(root, 'build/downloads') },
   });
   const bundle = join(directory, platform==='darwin' ? 'Morse.app' : platform==='win32' ? 'Morse.exe' : 'Morse');
-  if (platform==='win32') buildWindows(join(directory,'resources/MorseKeyer.exe'));
   if (platform === 'darwin') {
     buildNative(join(bundle,'Contents/Helpers/MorseKeyer'),[arch==='x64'?'x86_64':'arm64']);
     // Keep the download to the app and install note. Required runtime notices

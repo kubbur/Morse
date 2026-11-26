@@ -17,6 +17,7 @@ function publicRankings(data) {
 export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
   if (!['staging','offline','website'].includes(mode)) throw Error('Unknown Morse website mode.');
   const origin = mode === 'staging' ? testOrigin : siteOrigin;
+  const localDevice = process.platform==='win32' ? 'PC' : 'Mac';
   let cached, pending;
   async function capabilities() {
     if (mode === 'offline') return { privateSync:false, scores:false, leaderboard:false };
@@ -43,11 +44,11 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
     if (action !== 'capabilities' && !actions.has(action)) return {status:400,error:'Unknown operation.'};
     let capabilitiesNow;
     try { capabilitiesNow = await capabilities(); }
-    catch { return {status:503,error:'Could not reach the Morse website. Progress is saved on this Mac.'}; }
+    catch { return {status:503,error:`Could not reach the Morse website. Progress is saved on this ${localDevice}.`}; }
     if (action === 'capabilities') return {status:200,...capabilitiesNow};
     if (!capabilitiesNow.scores) {
       if (action !== 'scores/leaderboard' || !capabilitiesNow.leaderboard)
-        return {status:503,error:'Saved on this Mac.',localOnly:true};
+        return {status:503,error:`Saved on this ${localDevice}.`,localOnly:true};
       // The running v1 service exposes anonymous rankings. Never send a learner, a
       // cookie, consent or a score to its identity/whole-profile routes.
       const response = await fetcher(origin+'/api/sync/leaderboard',{method:'POST',redirect:'error',credentials:'omit',
@@ -84,7 +85,7 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
       }
     }
     if (!response.headers.get('content-type')?.includes('application/json'))
-      return {status:503,error:'The website is unavailable. Progress is saved on this Mac.'};
+      return {status:503,error:`The website is unavailable. Progress is saved on this ${localDevice}.`};
     return {...await response.json(),status:response.status};
   };
 }

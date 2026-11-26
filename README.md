@@ -1,6 +1,6 @@
 # Morse
 
-Morse code listening and sending practice for Mac and the web.
+Morse code listening and sending practice for Mac, Windows and the web.
 
 [Open the web app](https://morse.kubbur.digital/) · [Latest release](https://github.com/kubbur/Morse/releases/latest) · [Project page](https://kubbur.github.io/Morse/)
 
@@ -9,19 +9,20 @@ Morse code listening and sending practice for Mac and the web.
 | File | Download |
 | --- | --- |
 | **Morse for Mac 1.1.5** | [Apple Silicon](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-mac-x64.zip) |
+| **Morse for Windows x64 (test build)** | [Download the application ZIP from a successful Windows build](https://github.com/kubbur/Morse/actions?query=branch%3Awindows) · [Converter setup](desktop/WINDOWS.txt) |
 | **Paddle and converter assembly guide** | [PDF with BOM and wiring diagrams](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf) |
 
-Requires macOS 13 or later. Unzip the download and move **Morse.app** to **Applications**. These builds are signed ad hoc. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
+On Windows, extract the entire application ZIP and open **Morse.exe**. The app includes its WASAPI audio helper.
+
+The Mac build requires macOS 13 or later. Unzip the download and move **Morse.app** to **Applications**. These builds are signed ad hoc. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
 
 Morse saves progress on your Mac and works offline. Open **Saved progress** to export or import a save. The Mac can display the website leaderboard. Private pairing and score uploads require the website’s version 2 service. [Release notes](desktop/RELEASE.md)
 
 ## Using a paddle
 
-The separate `windows` branch contains the Windows x64 desktop test build and a native WASAPI driver for the passive converter. Download **Morse-windows-x64** from a successful Windows build, extract the application ZIP and launch **Morse.exe**. [Windows builds](https://github.com/kubbur/Morse/actions/workflows/build-windows.yml?query=branch%3Awindows) · [Windows converter setup](desktop/WINDOWS.txt)
-
 Open Morse and go to **Settings → Input**. Choose your adapter.
 
-- **Audio converter (3.5 mm)** uses the Mac’s headset input. Quit the old Morse Paddle app if it is running, allow Microphone access and release both paddles during calibration.
+- **Audio converter (3.5 mm)** uses a wired headset output and microphone return. On Windows, select both devices and the sidetone output in Settings. On Mac, quit the old Morse Paddle app if it is running. Allow microphone access and release both paddles during startup.
 - **VBand USB adapter** uses left Control for dit and right Control for dah. Use **Swap dot and dash contacts** if needed.
 
 Open **Send** to practise. Enable **Write in the focused app** in Settings if you want to type in other applications.
