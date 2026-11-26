@@ -7,18 +7,34 @@ const steps = [
 let index = 0, since = null, session = null, last = null, started = false, pending = false, generation = 0;
 let switching = false, marking = false;
 let advancing = false, advancedBaseline = null;
+let switchBoundary = null, holdInputFrame = null;
 let audibleAtStart = 0, ditAtStart = 0, dahAtStart = 0, missedAtStart = 0, observations = [], probeEpoch = null;
 const positions = ['released','left','right','both'];
 const holds = ['Release both paddles','Hold only the left paddle','Hold only the right paddle','Hold both paddles'];
 function reset() {
-  index=0; since=null; observations=[]; audibleAtStart=ditAtStart=dahAtStart=missedAtStart=0;
+  index=0; since=null; holdInputFrame=null; observations=[]; audibleAtStart=ditAtStart=dahAtStart=missedAtStart=0;
   $('heard').checked=false; $('heard').disabled=true; $('result').textContent='';
 }
 function listeningTest(row) { return row?.testMode === 'airpods' || row?.testMode === 'speaker'; }
 function destination(row) {
-  return row.testMode === 'airpods' ? (row.sidetoneOutput?.name || 'AirPods') : 'the iPhone speaker';
+  return row.testMode === 'airpods' || row.testMode === 'airpods-switch' ? (row.sidetoneOutput?.name || 'AirPods') : 'the iPhone speaker';
+}
+function freshSwitchCapture(row) {
+  const t=row.switchTest, now=t.current;
+  return t.atSwitch && (t.inputAssignmentStatus === 0 || t.usedPreferredWiredInput) && now.sameInputQueue && now.samePlayer &&
+    now.destinationListed && !now.inputError && now.inputQueueRunning !== 0 && now.inputIdleSeconds != null &&
+    now.inputIdleSeconds < 1 && t.clientRate > 0 &&
+    now.capturedFrames - t.atSwitch.capturedFrames >= t.clientRate / 2;
 }
 function canConfirmSound() {
+  if (last?.testMode === 'airpods-switch') {
+    const t=last.switchTest;
+    return !!(freshSwitchCapture(last) && t.before?.originalMicListed && t.before?.originalJackListed &&
+      t.before?.capturedFrames > 0 && !t.current.sidetoneError &&
+      (!t.finished || t.finished === 'Stopped by tester') && last.outputAttempt?.startStatus === 0 &&
+      last.sidetoneDestination === 'airpods' && last.status.outputReady && last.status.phase === 'ready' &&
+      index === steps.length && last.returnedSidetoneFrames > audibleAtStart);
+  }
   if (last?.testMode === 'system-speaker') {
     const sound=last.systemSound;
     return !!(last.active && last.status.phase === 'ready' && last.contactPlayerRunning && last.capturedFrames &&
@@ -32,6 +48,17 @@ function canConfirmSound() {
     last.sidetoneDestination === last.testMode && index === steps.length && last.returnedSidetoneFrames > audibleAtStart;
 }
 function verdict() {
+  if (last?.testMode === 'airpods-switch') {
+    const t=last.switchTest;
+    if (t.finished && t.finished !== 'Stopped by tester') return t.finished;
+    if (!t.atSwitch) return 'AirPods switch unobserved.';
+    if (!freshSwitchCapture(last)) return 'AirPods selected. Fresh capture on the retained streams is unconfirmed.';
+    if (index !== steps.length) return 'AirPods selected. The post-switch paddle sequence is incomplete.';
+    if (!canConfirmSound() || !$('heard').checked) return 'Post-switch contacts detected. Keyed sidetone in the AirPods is unconfirmed.';
+    if ($('heard-pilots').checked) return 'Post-switch contacts and keyed sidetone observed. Steady sensing tones also reached the AirPods.';
+    return t.current.originalMicListed ? 'Passed. Wired paddles and audible keyed sidetone in AirPods after switching.' :
+      'Post-switch paddles and AirPods sidetone observed. The original mic is absent from the listed route.';
+  }
   if (last?.testMode === 'system-speaker') {
     if (last.systemSound?.error) return 'System speaker test unavailable.';
     if (index !== steps.length) return 'System speaker test incomplete.';
@@ -52,6 +79,7 @@ function verdict() {
   return $('heard').checked ? 'Passed. Wired paddles with sidetone on '+destination(last)+'.' : 'Contacts passed. Confirm where you heard the sidetone.';
 }
 function showTest(mode) {
+  $('switch-test').hidden = mode !== 'airpods-switch';
   $('system-test').hidden = mode !== 'system-speaker';
   $('signal-test').hidden = mode !== 'signal';
   $('reference-test').hidden = mode !== 'reference';
@@ -112,12 +140,16 @@ function draw(row) {
     if (row.capturedFrames >= row.rate)
       $('routes').textContent += '\nOutput / input frame count  '+Math.round(100*row.returnedWiredOutputFrames/row.capturedFrames)+'%';
   }
+  const t=row.switchTest, boundary=t?.atSwitch?.time ?? null;
   const ready = row.active && status.phase === 'ready';
-  $('left').classList.toggle('down',!!(ready && (row.mask & 1)));
-  $('right').classList.toggle('down',!!(ready && (row.mask & 2)));
+  const liveContacts=ready && !t?.finished && (!t?.atSwitch || freshSwitchCapture(row));
+  $('left').classList.toggle('down',!!(liveContacts && (row.mask & 1)));
+  $('right').classList.toggle('down',!!(liveContacts && (row.mask & 2)));
   if (!started) return;
-  if (session !== status.session || ((listeningTest(row) || row.testMode === 'system-speaker') && probeEpoch !== status.epoch)) {
+  if (session !== status.session || ((listeningTest(row) || t || row.testMode === 'system-speaker') && probeEpoch !== status.epoch) ||
+      (t && boundary !== switchBoundary)) {
     reset(); session=status.session; probeEpoch=status.epoch;
+    switchBoundary=boundary;
     $('heard-reference').checked=false; $('system-note').textContent='';
   }
   $('state').textContent=status.detail;
@@ -125,6 +157,26 @@ function draw(row) {
   if (row.testMode === 'reference') { drawComparison(row.jackComparison); return; }
   if (row.testMode === 'signal') { drawMeter(row); return; }
   $('heard-label').textContent='I heard the keyed sidetone from '+destination(row)+'.';
+  if (t) {
+    const n=t.current;
+    $('switch-stop').disabled=!!t.finished || switching;
+    $('heard-pilots').disabled=!t.atSwitch;
+    $('switch-readout').textContent=t.atSwitch ? [
+      'Original player '+(n.samePlayer ? 'retained' : 'lost')+' ('+(n.playerPlaying ? 'playing' : 'stopped')+') · Original mic queue '+(n.sameInputQueue ? 'retained' : 'lost'),
+      (n.capturedFrames-t.atSwitch.capturedFrames).toLocaleString()+' new input frames since the switch',
+      n.originalMicListed ? 'iOS lists the original wired mic.' : 'iOS no longer lists the original wired mic.',
+      n.inputError || n.sidetoneError ? 'Queue errors · mic '+n.inputError+' · sidetone '+n.sidetoneError : ''
+    ].join('\n') : 'Start on Headphone. Once wired capture is ready, choose AirPods in Control Center and return to Morse.';
+    if (t.finished) {
+      $('state').textContent=t.finished; $('step').textContent=''; $('result').textContent=verdict();
+      $('heard').disabled=!canConfirmSound(); return;
+    }
+    if (!t.atSwitch || !freshSwitchCapture(row)) {
+      $('step').textContent=t.atSwitch ? 'Check the jack voltage or stop to save this result.' : '';
+      $('heard').disabled=true; since=null; holdInputFrame=null;
+      return;
+    }
+  }
   if (row.testMode === 'system-speaker') {
     const s=row.systemSound, c=s.cues;
     $('speaker-reference').disabled = !s.ready || !s.allowedDuringRecording || !!s.busy || switching;
@@ -150,7 +202,7 @@ function draw(row) {
     next.disabled=switching || advancing;
     next.textContent=row.sidetoneOutput ? 'No sidetone here · try next route' : 'Try next route';
   }
-  const showSignals = row.testMode === 'contacts' || listeningTest(row);
+  const showSignals = row.testMode === 'contacts' || listeningTest(row) || !!t;
   $('contact-signal').hidden = !showSignals;
   if (showSignals) {
     const levels = row.contactSignal?.channels;
@@ -170,7 +222,8 @@ function draw(row) {
   if (index < steps.length) {
     if (row.mask === steps[index][0]) {
       since ??= performance.now();
-      if (performance.now()-since >= 250) {
+      if (t) holdInputFrame ??= row.capturedFrames;
+      if (performance.now()-since >= 250 && (!t || row.capturedFrames-holdInputFrame >= t.clientRate/4)) {
         if (index === 0) {
           audibleAtStart = row.returnedSidetoneFrames;
           if (row.systemSound) {
@@ -179,9 +232,11 @@ function draw(row) {
             missedAtStart=row.systemSound.missedMarks;
           }
         }
-        observations.push({mask:row.mask,time:new Date().toISOString(),audibleFrames:row.audibleFrames}); ++index; since=null;
+        const observed={mask:row.mask,time:new Date().toISOString(),audibleFrames:row.audibleFrames};
+        if (t) { observed.inputFrame=row.capturedFrames; observed.signal=row.contactSignal ?? null; }
+        observations.push(observed); ++index; since=null; holdInputFrame=null;
       }
-    } else since=null;
+    } else { since=null; holdInputFrame=null; }
   }
   $('step').textContent = steps[index]?.[1] || 'All four electrical states observed.';
   $('heard').disabled=!canConfirmSound();
@@ -213,7 +268,11 @@ async function poll() {
 }
 async function start(mode) {
   if (switching) return;
-  ++generation; reset(); session=null; last=null; started=false; switching=true; advancedBaseline=null;
+  ++generation; reset(); session=null; last=null; started=false; switching=true; advancedBaseline=null; switchBoundary=null;
+  $('switch-start').disabled=true; $('switch-stop').disabled=true;
+  if (mode==='airpods-switch') {
+    $('switch-volts-before').value=''; $('switch-volts-after').value=''; $('heard-pilots').checked=false;
+  }
   $('system-start').disabled=true; $('speaker-reference').disabled=true; $('heard-reference').checked=false;
   $('heard-reference').disabled=true; $('system-cues').textContent=''; $('system-note').textContent='';
   $('state').textContent='Opening the wired audio route…'; $('step').textContent='';
@@ -231,7 +290,7 @@ async function start(mode) {
     if (reply?.error) throw new Error(reply.error);
     started=true;
   } catch (error) { $('state').textContent=error.message || 'Could not start the adapter test.'; }
-  finally { switching=false; $('system-start').disabled=false; $('start').disabled=false; $('airpods').disabled=false; $('signal').disabled=false; $('reference').disabled=false; $('contacts').disabled=false; $('copy').disabled=false; }
+  finally { switching=false; $('switch-start').disabled=false; $('system-start').disabled=false; $('start').disabled=false; $('airpods').disabled=false; $('signal').disabled=false; $('reference').disabled=false; $('contacts').disabled=false; $('copy').disabled=false; }
   await poll();
 }
 $('system-start').onclick=()=>start('system-speaker');
@@ -250,6 +309,15 @@ $('speaker-reference').onclick=async () => {
 $('start').onclick=()=>start('speaker');
 $('next-route').onclick=()=>nextRoute(false);
 $('airpods').onclick=()=>start('airpods');
+$('switch-start').onclick=()=>start('airpods-switch');
+$('switch-stop').onclick=async () => {
+  if (switching || last?.testMode !== 'airpods-switch' || last.switchTest.finished) return;
+  const run=generation;
+  $('switch-stop').disabled=true;
+  try { await post({op:'paddle',name:'probe',value:'switch-stop'}); }
+  catch { if (run===generation) $('state').textContent='Could not stop the test.'; }
+  await poll();
+};
 $('contacts').onclick=()=>start('contacts');
 $('signal').onclick=()=>start('signal');
 $('reference').onclick=()=>start('reference-playback');
@@ -288,7 +356,11 @@ $('copy').onclick=async () => {
     draw(row);
     const report={at:new Date().toISOString(),verdict:verdict(),observations,
       heardFromSpeaker:!!(['speaker','system-speaker'].includes(last.testMode) && canConfirmSound() && $('heard').checked),
-      heardFromBluetooth:!!(last.testMode==='airpods' && canConfirmSound() && $('heard').checked),route:last};
+      heardFromBluetooth:!!(['airpods','airpods-switch'].includes(last.testMode) && canConfirmSound() && $('heard').checked),route:last};
+    if (row.switchTest) {
+      report.meterVoltsAC={beforeSwitch:meterVolts('switch-volts-before'),afterSwitch:meterVolts('switch-volts-after')};
+      report.heardSteadyPilotsInAirPods=!!row.switchTest.atSwitch && $('heard-pilots').checked;
+    }
     if (row.testMode === 'system-speaker') report.heardReferenceFromSpeaker =
       !!(row.systemSound.cues.reference.completed && $('heard-reference').checked);
     if (row.testMode === 'reference') report.meterVoltsAC={
@@ -298,5 +370,9 @@ $('copy').onclick=async () => {
     await post({op:'copy',text:pretty.length < 16000 ? pretty : JSON.stringify(report)}); $('copy').textContent='Copied';
   } catch { $('copy').textContent='Copy failed. Try again'; }
 };
-document.addEventListener('visibilitychange',()=>{ if(document.hidden){++generation;reset();session=null;} else void poll(); });
+document.addEventListener('visibilitychange',()=>{
+  if (!document.hidden) { void poll(); return; }
+  ++generation;
+  if (last?.switchTest) { since=null; holdInputFrame=null; } else { reset(); session=null; }
+});
 setInterval(poll,100); void poll();

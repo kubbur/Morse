@@ -64,3 +64,68 @@ assert.equal(run('canConfirmSound()'),false);
 row.routesExhausted=true;
 assert.doesNotMatch(run('verdict()'),/^Passed/);
 console.log('PASS wired-first advance, fresh post-bind contacts and frames, hearing confirmation, rejected route.');
+
+// Keep the same session throughout a manual output change. Pre-switch keying,
+// a frozen mic and an interrupted session must never produce a passing report.
+Object.assign(row,{testMode:'airpods-switch',routeStrategy:'retain wired streams through output switch',
+  routesExhausted:false,wiredBaseline:false,canAdvanceRoute:false,sidetoneOutput:null,outputAttempt:null,
+  sidetoneDestination:null,contactStates:[],returnedSidetoneFrames:0});
+const trial=row.switchTest={inputAssignmentStatus:0,clientRate:48000,finished:'',atSwitch:null,
+  before:{originalMicListed:true,originalJackListed:true,capturedFrames:96000},
+  current:{sameInputQueue:true,samePlayer:true,playerPlaying:true,destinationListed:false,
+    originalMicListed:true,inputQueueRunning:1,inputIdleSeconds:0,inputError:0,sidetoneError:0,capturedFrames:96000}};
+await elements.get('switch-start').onclick();
+sequence();
+assert.equal(run('index'),0);
+assert.equal(run('verdict()'),'AirPods switch unobserved.');
+assert.equal(commands.filter(r=>r.name==='next-route').length,1);
+row.capturedFrames=120000;
+trial.atSwitch={time:12,capturedFrames:96000};
+Object.assign(trial.current,{destinationListed:true,capturedFrames:row.capturedFrames});
+Object.assign(row,{sidetoneOutput:{name:'AirPods Pro'},sidetoneDestination:'airpods',
+  outputAttempt:{startStatus:0},returnedSidetoneFrames:100});
+sequence(); // Wall time advances while input frames stay frozen.
+assert.equal(run('index'),0);
+for (const mask of [0,1,0,2,0,3,0]) {
+  row.mask=mask;
+  run('draw(deviceReport)');
+  now+=300; row.capturedFrames+=14400; trial.current.capturedFrames=row.capturedFrames;
+  row.returnedSidetoneFrames+=mask ? 120 : 0;
+  run('draw(deviceReport)');
+}
+assert.equal(run('index'),7);
+assert.equal(run('canConfirmSound()'),true);
+assert.doesNotMatch(run('verdict()'),/^Passed/);
+elements.get('heard').checked=true;
+await elements.get('heard').onchange();
+assert.match(run('verdict()'),/^Passed/);
+assert.equal(commands.filter(r=>r.name==='confirm-output').length,1); // Only the earlier build 9 path saves settings.
+elements.get('heard-pilots').checked=true;
+assert.doesNotMatch(run('verdict()'),/^Passed/);
+elements.get('heard-pilots').checked=false;
+trial.current.originalMicListed=false;
+assert.match(run('verdict()'),/absent from the listed route/);
+trial.current.originalMicListed=true;
+for (const bad of [{samePlayer:false},{sameInputQueue:false},{destinationListed:false},
+  {inputIdleSeconds:2},{inputQueueRunning:0},{inputError:-1},{sidetoneError:-1}]) {
+  const good={...trial.current};
+  Object.assign(trial.current,bad);
+  assert.equal(run('canConfirmSound()'),false);
+  Object.assign(trial.current,good);
+}
+trial.inputAssignmentStatus=-50;
+assert.equal(run('canConfirmSound()'),false);
+trial.usedPreferredWiredInput=true;
+assert.equal(run('canConfirmSound()'),true);
+trial.finished='Morse entered the background.';
+assert.equal(run('canConfirmSound()'),false);
+assert.equal(run('verdict()'),trial.finished);
+trial.finished='Stopped by tester';
+elements.get('switch-volts-before').value='0.70';
+elements.get('switch-volts-after').value='0.02';
+await elements.get('copy').onclick();
+const copied=JSON.parse(commands.at(-1).text);
+assert.equal(copied.heardFromBluetooth,true);
+assert.deepEqual(copied.observations.map(o=>o.mask),[0,1,0,2,0,3,0]);
+assert.deepEqual(copied.meterVoltsAC,{beforeSwitch:0.7,afterSwitch:0.02});
+console.log('PASS manual AirPods switch, retained streams, post-switch electrical sequence, measured voltage and hearing.');

@@ -42,6 +42,7 @@ def main():
         sim("bootstatus", device, "-b")
         sim("install", device, str(app))
         bundle = info["CFBundleIdentifier"]
+        sim("privacy", device, "grant", "microphone", bundle)
         result = Path(sim("get_app_container", device, bundle, "data")) / "tmp/navigation-check.txt"
         sim("launch", device, bundle)
         deadline = time.monotonic() + 75

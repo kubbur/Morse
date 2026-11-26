@@ -14,6 +14,7 @@ static void finish(NSString *message, NSTimer *timer) {
     dispatch_async(dispatch_get_main_queue(), ^{
         __block NSUInteger step = 0;
         __block BOOL pending = NO;
+        __block BOOL switchProbeChecked = NO;
         [NSTimer scheduledTimerWithTimeInterval:.25 repeats:YES block:^(NSTimer *timer) {
             if (pending) return;
             UIWindow *window = nil;
@@ -34,11 +35,34 @@ static void finish(NSString *message, NSTimer *timer) {
                 finish([NSString stringWithFormat:@"FAIL web top %.1f, navigation bar bottom %.1f",CGRectGetMinY(content),CGRectGetMaxY(bar)],timer);
                 return;
             }
+            if (step == 0 && !switchProbeChecked) {
+                pending = YES;
+                NSString *test = @"const start=document.getElementById('switch-start');"
+                    "if(typeof start?.onclick!=='function') return 'loading';"
+                    "await start.onclick(); const post=globalThis.morsePhone.post;"
+                    "const initial=await post({op:'snapshot'});"
+                    "if(initial.testMode!=='airpods-switch'||!initial.switchTest?.current) return 'missing switch probe';"
+                    "const stop=document.getElementById('switch-stop');"
+                    "for(let i=0;stop.disabled&&i<30;i++) await new Promise(r=>setTimeout(r,100));"
+                    "if(stop.disabled)return 'stop unavailable';await stop.onclick();"
+                    "const stopped=await post({op:'snapshot'});"
+                    "const again=await post({op:'snapshot'});"
+                    "return stopped.switchTest?.finished==='Stopped by tester'&&"
+                    "stopped.switchTest.current.time===again.switchTest.current.time?'ok':'missing retained report';";
+                [web callAsyncJavaScript:test arguments:@{} inFrame:nil inContentWorld:WKContentWorld.pageWorld
+                    completionHandler:^(id value, NSError *error) {
+                        pending = NO;
+                        if ([value isEqual:@"loading"]) return;
+                        if (!error && [value isEqual:@"ok"]) switchProbeChecked = YES;
+                        else finish([NSString stringWithFormat:@"FAIL switch probe: %@",error.localizedDescription ?: value],timer);
+                    }];
+                return;
+            }
             if (step == 2) {
                 pending = YES;
                 [web evaluateJavaScript:@"!document.getElementById('view-send').hidden" completionHandler:^(id result, NSError *error) {
                     pending = NO;
-                    if ([result isEqual:@YES]) finish(@"PASS paddle test heading and Send tab are below the native bar, both receive hits, and Send opens.",timer);
+                    if ([result isEqual:@YES]) finish(@"PASS switch probe starts and retains its stopped report; paddle test and Send tab receive hits.",timer);
                 }];
                 return;
             }

@@ -13,13 +13,24 @@ button:disabled{opacity:.38}.primary{background:#146f60;color:white;border-color
 .volts{font:inherit;width:5rem;padding:.2rem .4rem}
 </style></head><body>
 <h1>Paddle test</h1><p>Connect the paddle and converter to the USB‑C adapter. Leave both paddles up to start.</p>
-<button class="primary" type="button" id="start">Test iPhone speaker</button>
+<button class="primary" type="button" id="switch-start">Keep jack active with AirPods</button>
+<button type="button" id="start">Test iPhone speaker</button>
 <button type="button" id="airpods">Test AirPods</button>
 <button type="button" id="system-start">Test system sounds</button>
 <button type="button" id="contacts">Test paddle contacts only</button>
 <button type="button" id="reference">Compare jack output</button>
 <button type="button" id="signal">Measure jack audio</button>
 <p id="state" aria-live="polite">Ready to start.</p>
+<section id="switch-test" hidden>
+<p id="switch-readout" class="routes"></p>
+<button type="button" id="switch-stop">Stop and keep report</button>
+<p>Use a comfortable AirPods volume. If you hear steady tones, tap Stop and mark them below.</p>
+<details><summary>Jack voltage (optional)</summary>
+<p>Measure AC volts across tip and sleeve of the free paddle plug before and after selecting AirPods. Use the same meter range and reconnect the paddle for the contact prompts.</p>
+<label>Before <input class="volts" id="switch-volts-before" inputmode="decimal"> V AC</label>
+<label>After <input class="volts" id="switch-volts-after" inputmode="decimal"> V AC</label></details>
+<label><input type="checkbox" id="heard-pilots"> I heard steady sensing tones in the AirPods.</label>
+</section>
 <section id="system-test" hidden>
 <p>Turn Silent Mode off. Release both paddles and play the reference beep, then listen for shorter, lower-pitched dits and dahs as you key.</p>
 <button id="speaker-reference" type="button" disabled>Play reference beep</button>
