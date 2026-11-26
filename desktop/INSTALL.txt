@@ -1,4 +1,4 @@
-Morse for Mac 1.1.3
+Morse for Mac 1.1.4
 
 Requires macOS 13 or later. Use the arm64 ZIP for Apple Silicon or the x64 ZIP
 for Intel. Unzip the download and move Morse.app to Applications.
