@@ -1,5 +1,6 @@
 #include "Wasapi.h"
 #include <audioclient.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
 #include <filesystem>
 #include <fstream>
@@ -200,7 +201,9 @@ public:
         std::ifstream stream(file,std::ios::binary);
         if (stream) {
             std::ostringstream data; data<<stream.rdbuf();
-            if (!Json::TryParse(winrt::to_hstring(data.str()),prefs)) throw std::runtime_error("Invalid audio preferences");
+            Json recovered;
+            if (Json::TryParse(winrt::to_hstring(data.str()),recovered)) prefs=recovered;
+            else saveIssue=L"Audio preferences could not be read. Select the converter devices again.";
         }
         pilot=prefs.GetNamedString(L"pilot",L""); mic=prefs.GetNamedString(L"mic",L"");
         output=prefs.GetNamedString(L"output",L"auto"); settings.reverse=prefs.GetNamedBoolean(L"reverse",false);

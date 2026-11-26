@@ -26,9 +26,9 @@ jobs:
       - run: npm ci
       - name: Exercise the converter with simulated microphone returns
         run: npm run test:native
-      - run: npm test
       - name: Package the x64 application and WASAPI helper
         run: npm run package:windows
+      - run: npm test
       - name: Extract the ZIP and exercise the installed app across restarts
         shell: pwsh
         run: |

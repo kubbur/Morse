@@ -29,6 +29,6 @@ Using the passive 3.5 mm paddle converter
 VBand USB uses left and right Control in the focused trainer. Choose an
 audible sidetone output for VBand.
 
-Hardware validation: the automated test feeds synthetic left/right pilot
-returns into the production detector. Jack wiring, microphone processing
-and acoustic latency need a test with a physical Windows PC and adapter.
+The automated test feeds synthetic left/right pilot returns into the
+production detector. Jack wiring, microphone processing and acoustic latency
+need a test with a physical Windows PC and adapter.

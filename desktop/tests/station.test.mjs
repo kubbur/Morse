@@ -305,9 +305,14 @@ test('all legacy learners migrate once and completed result plus outbox survive 
    const raw=JSON.parse(legacy);raw.profiles[0].stats.xp=20;const id=randomUUID();raw.delivery={version:1,learners:{[raw.activeId]:{scores:[{id,kind:'listen',xp:20}],generation:1}}};
    db.close();db=null;
    const module=new URL('../src/learner-db.mjs',import.meta.url).href;
-   const code=`import { LearnerDB } from ${JSON.stringify(module)}; const db=new LearnerDB(process.argv[1]); db.save(process.argv[2],1); process.kill(process.pid,'SIGKILL');`;
-   const child=spawnSync(process.execPath,['--input-type=module','-e',code,path,JSON.stringify(raw)]);
-   assert.equal(child.signal,'SIGKILL');db=new LearnerDB(path);
+   const code=`import { readFileSync,writeSync } from 'node:fs'; import { LearnerDB } from ${JSON.stringify(module)};
+     const db=new LearnerDB(process.argv[1]); db.save(readFileSync(0,'utf8'),1);
+     writeSync(1,'committed'); process.kill(process.pid,'SIGKILL');`;
+   const child=spawnSync(process.execPath,['--input-type=module','-e',code,path],{input:JSON.stringify(raw),encoding:'utf8'});
+   assert.ifError(child.error); assert.equal(child.stdout,'committed',child.stderr);
+   if (process.platform==='win32') assert.ok(Number.isInteger(child.status) && child.status!==0);
+   else assert.equal(child.signal,'SIGKILL');
+   db=new LearnerDB(path);
    const saved=JSON.parse(db.load(legacy).raw);
    assert.equal(saved.profiles[1].stats.xp,91);assert.equal(saved.profiles[0].stats.xp,20);
    assert.equal(saved.delivery.learners[saved.activeId].scores[0].id,id);
@@ -614,12 +619,13 @@ test('old websites receive no lifetime data and pending offline visibility survi
 });
 test('a SQLite backup restores a hidden listing, its owner and the acknowledged score',async t=>{
   const directory=await mkdtemp(join(tmpdir(),'morse-visibility-restore-'));
-  t.after(()=>rm(directory,{recursive:true,force:true}));
-  const path=join(directory,'local.sqlite'), e=new Exchange(path);
+  let e,restored;
+  t.after(async()=>{e?.close(); restored?.close(); await rm(directory,{recursive:true,force:true});});
+  const path=join(directory,'local.sqlite'); e=new Exchange(path);
   const f=fixture(e); f.earn(20); chooseVisibility(f,true); await f.station.flushScores();
   chooseVisibility(f,false); await f.station.flushScores();
-  const backup=await snapshot(path,join(directory,'snapshots')); e.close();
-  const restored=new Exchange(await restore(backup,join(directory,'restored'))); t.after(()=>restored.close());
+  const backup=await snapshot(path,join(directory,'snapshots')); e.close(); e=null;
+  restored=new Exchange(await restore(backup,join(directory,'restored')));
   assert.deepEqual(ranks(restored),[]);
   const status=restored.scores.request('listing',f.cookies.scores,null,{callsign:'TEST1'});
   assert.equal(status.visible,false); assert.equal(status.xp,20);

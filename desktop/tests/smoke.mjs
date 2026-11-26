@@ -126,6 +126,10 @@ try {
   await page.locator('#send-source').selectOption('vband');
   assert.match(await page.locator('#send-connection').innerText(),/Left Control sends dit.*Right Control sends dah/);
   assert.equal(await page.locator('#native-start').isVisible(),false);
+  if (process.platform==='win32') {
+    const prefs=await page.evaluate(async()=>[await morseMac.paddle('word-spaces',true),await morseMac.paddle('output','silent')]);
+    assert.deepEqual(prefs,[{},{}]);
+  }
   await stop(); page=await launch();
   await page.locator('.main-nav [data-view="lab"]').click();
   assert.equal(await page.locator('#send-source').inputValue(),'vband');
@@ -134,11 +138,12 @@ try {
   if (process.platform==='win32') {
     await page.locator('#converter-pilot option[value="none"]').waitFor({state:'attached'});
     assert.equal(await page.locator('#converter-mic').inputValue(),'none');
-    assert.equal(await page.locator('#native-output').inputValue(),'auto');
+    await page.waitForFunction(()=>document.querySelector('#native-output')?.value==='silent' && document.querySelector('#native-words')?.checked);
+    await page.locator('#native-output').selectOption('auto');
     assert.equal(await page.locator('#mac-updates').count(),0);
     const response=await page.evaluate(()=>morseMac.paddle('sample',false));
     assert.match(response.error,/converter/i);
-    checked('packaged Windows helper reports missing converter endpoints and exposes all three audio selectors');
+    checked('packaged Windows helper restores local audio preferences and reports missing converter endpoints');
   }
   checked('adapter selection survives quit and relaunch, and calibration is available for the audio converter');
   await page.locator('#send-source').selectOption('keyboard');
