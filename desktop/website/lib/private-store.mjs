@@ -84,7 +84,93 @@ export class PrivateStore extends SyncStore {
     this.run('INSERT OR IGNORE INTO revoked_publishers SELECT key FROM publisher_devices WHERE device=?',deviceId);
     this.run('DELETE FROM devices WHERE id=?',deviceId);
   }
-  request(action, token, body) {
+  associatePublisher(privateToken, publisherToken) {
+    const device = this.device(privateToken), key = publisherToken && digest(publisherToken);
+    if (!device || !key || !this.get('SELECT 1 FROM publishers WHERE key=?',key) ||
+        this.get('SELECT 1 FROM revoked_publishers WHERE key=?',key)) return;
+    const linked = this.get('SELECT save_id FROM publisher_devices JOIN devices ON devices.id=publisher_devices.device WHERE key=?',key);
+    if (linked && linked.save_id !== device.save_id) return;
+    if (this.get('SELECT 1 FROM publisher_devices WHERE key=? AND device=?',key,device.id) &&
+        !this.get('SELECT 1 FROM stations WHERE creator=? AND owner IS NULL',key)) return;
+    this.transaction(() => {
+      this.run('INSERT OR IGNORE INTO publisher_devices VALUES(?,?)',key,device.id);
+      this.run('UPDATE stations SET owner=? WHERE creator=? AND owner IS NULL',device.save_id,key);
+    });
+  }
+  erase(token, publisherToken, body, legacyToken) {
+    return this.transaction(() => {
+      this.prune();
+      if (!token && body.legacyEpoch) {
+        const legacy = this.device(legacyToken);
+        if (legacy && this.save(legacy).epoch === body.legacyEpoch) token = legacyToken;
+        else if (legacyToken && this.get('SELECT 1 FROM erasures WHERE token=?',digest(legacyToken))) token = legacyToken;
+      }
+      const device = this.device(token);
+      const erased = token && this.get('SELECT 1 FROM erasures WHERE token=?',digest(token));
+      if (body.requirePrivate && !device && !erased)
+        throw new SyncError(403,'Restore access to the private backup on a linked device before deleting it.');
+      const owner = device?.save_id ?? null;
+      const publisher = publisherToken ? digest(publisherToken) : null;
+      const priorPublisherErase = publisher && this.get('SELECT 1 FROM erasures WHERE token=?',publisher);
+      const publisherOwner = publisher && (this.get('SELECT save_id AS owner FROM publisher_devices JOIN devices ON devices.id=publisher_devices.device WHERE key=?',publisher) ||
+        this.get('SELECT owner FROM stations WHERE creator=? AND owner IS NOT NULL',publisher))?.owner;
+      if (publisherOwner && publisherOwner !== owner && !erased)
+        throw new SyncError(403,'Use a device linked to this private backup to delete it.');
+      if (body.requirePublisher && !owner && !erased && !priorPublisherErase &&
+          (!publisher || !this.get('SELECT 1 FROM publishers WHERE key=?',publisher) || this.get('SELECT 1 FROM revoked_publishers WHERE key=?',publisher)))
+        throw new SyncError(403,'Use the device that shared this leaderboard entry to delete it.');
+      const keys = new Set();
+      if (publisher && !this.get('SELECT 1 FROM revoked_publishers WHERE key=?',publisher)) keys.add(publisher);
+      if (owner) {
+        for (const row of this.all('SELECT key FROM publisher_devices JOIN devices ON devices.id=publisher_devices.device WHERE save_id=?',owner)) keys.add(row.key);
+      }
+      const calls = new Set(this.all('SELECT call FROM stations WHERE owner=?',owner).map(row=>row.call));
+      for (const key of keys) {
+        for (const row of this.all('SELECT call FROM stations WHERE creator=? AND owner IS NULL',key)) calls.add(row.call);
+      }
+      for (const call of calls) {
+        const {creator} = this.get('SELECT creator FROM stations WHERE call=?',call);
+        if (!creator.startsWith('legacy:')) keys.add(creator);
+        for (const row of this.all('SELECT key FROM publishers WHERE call=? AND enabled=1',call)) keys.add(row.key);
+        for (const table of ['score_results','score_listings','score_counters','historical_receipts','original_days','legacy_score_grants','visibility_receipts'])
+          this.run('DELETE FROM ' + table + ' WHERE call=?',call);
+        this.run('DELETE FROM stations WHERE call=?',call);
+      }
+      for (const key of keys) {
+        this.run('INSERT OR IGNORE INTO revoked_publishers VALUES(?)',key);
+        this.run('INSERT OR REPLACE INTO erasures VALUES(?,?)',key,this.now()+366*86400000);
+        this.run('DELETE FROM publishers WHERE key=?',key);
+        this.run('DELETE FROM publisher_devices WHERE key=?',key);
+        this.run('DELETE FROM visibility_receipts WHERE publisher=?',key);
+        this.run('DELETE FROM legacy_score_grants WHERE publisher=?',key);
+      }
+      if (owner) {
+        // Older pairings archived the joining save under its original ID. In the
+        // same transaction its removal follows the paired snapshot, with at most
+        // the owner's update in between. Never infer ownership from a callsign.
+        const archives = this.all(`WITH RECURSIVE family(id) AS (
+          SELECT ? UNION SELECT r.save_id FROM family
+          JOIN revisions p ON p.save_id=family.id AND p.reason='paired-joining'
+          JOIN revisions r ON r.reason='removed' AND r.raw=p.raw AND
+            (r.id=p.id+1 OR (r.id=p.id+2 AND EXISTS
+              (SELECT 1 FROM revisions u WHERE u.id=p.id+1 AND u.save_id=p.save_id AND u.reason='update')))
+        ) SELECT id FROM family`,owner);
+        this.run('INSERT OR REPLACE INTO erasures SELECT token,? FROM devices WHERE save_id=?',this.now()+366*86400000,owner);
+        this.run('DELETE FROM devices WHERE save_id=?',owner);
+        this.run('DELETE FROM saves WHERE id=?',owner);
+        // The removal trigger also writes a backup. Clear revisions after it fires.
+        for (const {id} of archives) {
+          this.run('DELETE FROM revisions WHERE save_id=?',id);
+          this.run('DELETE FROM foundations WHERE save_id=?',id);
+        }
+      }
+      return {connected:false, erased:true};
+    });
+  }
+  request(action, token, body, publisherToken) {
+    if (action==='erase') return this.erase(token,publisherToken,body);
+    if (token && this.get('SELECT 1 FROM erasures WHERE token=? AND expires>?',digest(token),this.now()))
+      return {connected:false, erased:true};
     if (action==='push') return this.push(token,body);
     if (action==='disconnect') return this.transaction(()=>{
       const me=this.device(token);
@@ -116,7 +202,7 @@ export class PrivateStore extends SyncStore {
       this.run('INSERT INTO devices VALUES(?,?,?,?,0,?)',randomUUID(),record.save_id,digest(next),'Recovered device',this.now());
       return { ...this.snapshot(this.device(next)), setToken: next };
     });
-    if (action==='identity' || action==='leaderboard' || action==='erase') throw new SyncError(404,'This action is separate from private sync.');
+    if (action==='identity' || action==='leaderboard') throw new SyncError(404,'This action is separate from private sync.');
     // Joining replaces the unpaired device's current save with its submitted
     // snapshot. Stable can only submit the portion it received.
     if (action === 'join' && body.profileVersion !== 2 && body.profile?.settings) {

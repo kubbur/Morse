@@ -1,7 +1,7 @@
 import { MorseAudio } from './audio.mjs';
 import { timing, timeline, rampGain } from './morse.mjs';
 import { SENDING_LEVELS, SENDING_CHAPTERS, sendingStage, sendingExercise, sendingTokens } from './sending-course.mjs';
-import { DEFAULT_SENDING_SETTINGS, decodeSending, gradeSending, matchesSendingTarget, sendingMastery, recordSending, advanceSending, sanitizeSendingSettings } from './sending.mjs';
+import { DEFAULT_SENDING_SETTINGS, decodeSending, gradeSending, letterGapWindow, matchesSendingTarget, sendingMastery, recordSending, advanceSending, sanitizeSendingSettings } from './sending.mjs';
 import { BuiltInPaddle, NativeSidetone } from './native-paddle.mjs';
 import { VBandKeys, loadInput, saveInput } from './vband.mjs';
 import { keyLabel, loadKeyboardPaddles, paddleCharacter, saveKeyboardPaddles } from './keyboard-paddles.mjs';
@@ -163,8 +163,17 @@ export class SendingUI {
       if (this.native && event.target.id === 'send-reverse') void this.native.paddle('reverse', s.settings.reverse);
       this.persist(); this.render();
     });
+    const savedNotice = $('paddle-keys-saved');
+    let savedTimer;
+    const clearSaved = () => {
+      clearTimeout(savedTimer);
+      savedNotice.textContent = '';
+    };
+    $('input-settings').addEventListener('input', clearSaved);
+    $('shack-input-dialog').addEventListener('close', clearSaved);
     $('paddle-bindings').addEventListener('submit', e => {
       e.preventDefault();
+      clearSaved();
       const read = id => {
         const value = $(id).value;
         return value.toLowerCase() === 'space' ? ' ' : paddleCharacter(value);
@@ -179,7 +188,12 @@ export class SendingUI {
       const saved = saveKeyboardPaddles(this.keyboardPaddles);
       this.bindingLabels = null;
       this.renderInput();
-      $('paddle-key-message').textContent = saved ? 'Paddle keys saved.' : 'Keys set for this session. Device storage is unavailable.';
+      if (saved) {
+        savedNotice.textContent = 'Saved';
+        savedTimer = setTimeout(clearSaved, 2000);
+      } else {
+        $('paddle-key-message').textContent = 'Keys set for this session. Device storage is unavailable.';
+      }
     });
     for (const id of ['paddle-dot-key', 'paddle-dash-key']) $(id).addEventListener('focus', () => $(id).select());
     $('show-paddle-buttons').addEventListener('change', () => {
@@ -365,7 +379,9 @@ export class SendingUI {
     const meter = $('send-progress-meter');
     meter.setAttribute('aria-valuemax', mastery.required); meter.setAttribute('aria-valuenow', mastery.good);
     meter.firstElementChild.style.width = `${100 * mastery.good / mastery.required}%`;
-    $('send-progress-rule').textContent = `${stage.required} clean transmissions in the last ${stage.window} attempts${stage.distinct > 1 ? `, covering ${stage.distinct} different exercises` : ''}${stage.focusCopies ? `; at least ${stage.focusCopies} clean singles of ${stage.focus}` : ''}. ${this.source === 'straight' ? 'Timing' : 'Spacing'} score ${stage.qualityGoal}% or higher; at least 80% of ${this.source === 'straight' ? 'marks and gaps' : 'letter and word gaps'} within ±${Math.round(stage.tolerance * 100)}%. No response deadline.`;
+    const letters = letterGapWindow(timing(wpm,farnsworth),stage.tolerance);
+    const lastLetterMs = Math.min(Math.floor(letters.max + 1e-6), Math.ceil(letters.wordBoundary - 1e-6) - 1);
+    $('send-progress-rule').textContent = `${stage.required} clean transmissions in the last ${stage.window} attempts${stage.distinct > 1 ? `, covering ${stage.distinct} different exercises` : ''}${stage.focusCopies ? `, including ${stage.focusCopies} clean singles of ${stage.focus}` : ''}. ${this.source === 'straight' ? 'Timing' : 'Spacing'} score ${stage.qualityGoal}% or higher with at least 80% in range. Aim for ${Math.round(letters.target)} ms between letters. Gaps of ${Math.ceil(letters.min-1e-6)}–${lastLetterMs} ms count as clean letter spacing. ${this.source === 'straight' ? 'Other marks and gaps' : 'Word gaps'} allow ±${Math.round(stage.tolerance * 100)}%. No response deadline.`;
     this.renderExercise(); this.renderInput(); this.renderJourney(); this.updateActivity();
   }
 
@@ -654,8 +670,10 @@ export class SendingUI {
     if (this.patternComplete) return 500;
     const { wpm, farnsworth } = this.settings;
     const time = timing(wpm, farnsworth), target = this.item.target;
-    const gap = target.includes(' ') ? time.wordGap : sendingTokens(target).length > 1 ? time.letterGap : time.elementGap;
-    return Math.max(500, gap * 1000 * (1 + this.stage.tolerance) + 180);
+    const tolerance = this.stage.tolerance;
+    const allowed = target.includes(' ') ? time.wordGap * 1000 * (1 + tolerance) : sendingTokens(target).length > 1 ?
+      letterGapWindow(time,tolerance).max : time.elementGap * 1000 * (1 + tolerance);
+    return Math.max(500, allowed + 180);
   }
   idleDelay() {
     const { continueMode, pauseSeconds } = this.settings;
@@ -850,7 +868,7 @@ export class SendingUI {
     if (grade.correct) $('send-decoded').textContent = this.item.target;
     $('send-feedback').textContent = grade.passed ? this.assisted ? 'Correct. Assisted practice; try the next exercise without the pattern.' : `Correct · ${grade.keyerTimed ? grade.assessed.length ? `spacing ${grade.quality}%` : 'keyer timed' : `timing ${grade.quality}%`} · +${award.xp} XP` : grade.issue;
     $('send-metrics').hidden = false;
-    const score = type => { const rows = grade.parts?.filter(p => type === 'marks' ? !p.type.includes('gap') : p.type.includes('gap')) || []; return rows.length ? `${Math.round(100 * rows.reduce((sum, p) => sum + Math.max(0, 1 - p.error), 0) / rows.length)}%` : '—'; };
+    const score = type => { const rows = grade.parts?.filter(p => type === 'marks' ? !p.type.includes('gap') : p.type.includes('gap') && (!grade.keyerTimed || p.type !== 'element gap')) || []; return rows.length ? `${Math.round(100 * rows.reduce((sum, p) => sum + p.score, 0) / rows.length)}%` : '—'; };
     $('send-metrics').replaceChildren(make('span', '', `Marks ${score('marks')}${this.source === 'straight' ? '' : ' · keyer timed'}`), make('span', '', `Spacing ${score('gaps')}`));
     if (award.levelUp || award.badges.length) {
       const milestone = award.levelUp && sendingBadges(s).find(c => c.end === this.stage.level);

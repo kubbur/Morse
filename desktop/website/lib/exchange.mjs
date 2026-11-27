@@ -8,8 +8,8 @@ import { ShackBand } from './shack-band.mjs';
 
 export const actions = new Set([
   ...['open','poll','feed','probe','edges','send','sign','signatures','leave'].map(a=>'shack/'+a),
-  ...['status','start','join','approve','cancel','push','disconnect','recovery-code','recover','adopt'].map(a=>'private/'+a),
-  ...['session','listing','visibility','total','station','consent','prepare','submit','leaderboard','history','history-preview'].map(a=>'scores/'+a),
+  ...['status','start','join','approve','cancel','push','disconnect','recovery-code','recover','adopt','erase'].map(a=>'private/'+a),
+  ...['session','listing','visibility','total','station','achievements','consent','prepare','submit','leaderboard','history','history-preview'].map(a=>'scores/'+a),
 ]);
 export function cookieNames(scope) {
   if (typeof scope !== 'string' || !/^[\w-]{1,80}$/.test(scope)) throw new SyncError(400,'Invalid learner.');
@@ -71,7 +71,10 @@ export class Exchange {
       if (count>(budget==='pairing'?180:2400)) throw new SyncError(429,'Please retry in a minute.');
       const result=route==='scores/session' ? { ready:true,...(!token ? {setToken:randomBytes(32).toString('base64url')} : {}) }
         : route==='private/adopt' ? this.private.adopt(token,legacy)
+        : route==='private/erase' ? this.private.erase(token,cookie(names.scores),body,legacy)
         : kind==='scores' ? this.scores.request(action,token,owner || legacy,body) : this.private.request(action,token,body);
+      if (kind==='private' && result.connected && !result.waiting && ['start','adopt','recover','approve','status'].includes(action))
+        this.private.associatePublisher(result.setToken || token,cookie(names.scores));
       // Stable compares its entire saved profile with this acknowledgement.
       // Return the fields it understands while keeping the full save in the database.
       if (kind === 'private' && result.profile && body.profileVersion !== 2) {

@@ -1,8 +1,20 @@
 import test from 'node:test';
+import { gradeSending } from '../website/public/js/sending.mjs';
+import { sendingStage } from '../website/public/js/sending-course.mjs';
+
 import assert from 'node:assert/strict';
 import { sendingTrace, timingFeedback, markFeedback } from '../website/public/js/send-trace.mjs';
 import { NativeElements } from '../website/public/js/native-paddle.mjs';
 import { timeline } from '../website/public/js/morse.mjs';
+
+test('the visual trace and Send grade agree at both edges of the slow letter window',()=>{
+  const settings={wpm:10,farnsworth:10},stage=sendingStage(43);
+  for(const [gap,accepted] of [[239,false],[240,true],[495,true],[564,true],[565,false],[600,false]]) {
+    const input=[0,120,120+gap,240+gap].map((at,i)=>({down:i%2===0,at}));
+    assert.equal(markFeedback(sendingTrace('EE',settings,input,{keyerTimed:true,tolerance:stage.tolerance})).at(-1).matched,accepted,String(gap));
+    assert.equal(gradeSending(input,'EE',settings,stage,{keyerTimed:true}).passed,accepted,String(gap));
+  }
+});
 
 const speed = {wpm:30, farnsworth:30};
 const edges = times => times.map((at,i)=>({down:i%2===0, at}));

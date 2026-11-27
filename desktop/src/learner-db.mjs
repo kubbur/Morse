@@ -1,6 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { parseProgressJson } from '../website/public/js/import-validation.mjs';
 import { sanitizeState } from '../website/public/js/progress.mjs';
+import { removeLearnerFromBackup } from '../website/public/js/practice-storage.mjs';
+import { cookieNames } from '../website/lib/exchange.mjs';
 
 const validate = raw => {
   const data = parseProgressJson(raw, { maxBytes: 64000000, maxNodes: 6000000 });
@@ -40,6 +42,23 @@ export class LearnerDB {
       : this.db.prepare('UPDATE learner SET revision=revision+1,raw=? WHERE id=1 AND revision=?').run(raw, revision);
     if (changed.changes !== 1) throw new Error('A newer save already exists. Reopen Morse before editing.');
     return revision + 1;
+  }
+  eraseLearner(id, raw, revision, credentialPrefix) {
+    const names = cookieNames(id);
+    const next = validate(raw);
+    if (next.profiles.some(p => p.id === id) || next.delivery?.learners?.[id]) throw Error('Learner is still present.');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const nextRevision = this.save(raw,revision);
+      for (const original of this.db.prepare('SELECT id,raw FROM originals').all()) {
+        const kept = removeLearnerFromBackup(original.raw,id);
+        if (!kept) this.db.prepare('DELETE FROM originals WHERE id=?').run(original.id);
+        else if (kept !== original.raw) this.db.prepare('UPDATE originals SET raw=? WHERE id=?').run(kept,original.id);
+      }
+      this.db.prepare('DELETE FROM credentials WHERE id IN (?,?)').run(credentialPrefix+names.private,credentialPrefix+names.scores);
+      this.db.exec('COMMIT');
+      return nextRevision;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   close() { this.db.close(); }
 }

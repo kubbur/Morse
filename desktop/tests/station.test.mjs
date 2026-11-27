@@ -13,7 +13,7 @@ import { PracticeStorage } from '../website/public/js/practice-storage.mjs';
 import { Station } from '../website/public/js/station.mjs';
 import { pairedProgress } from '../website/public/js/initial-merge.mjs';
 import { syncProfile } from '../website/public/js/sync-data.mjs';
-import { Exchange } from '../website/lib/exchange.mjs';
+import { Exchange, cookieNames } from '../website/lib/exchange.mjs';
 import { snapshot,restore } from '../scripts/backup.mjs';
 import { LearnerDB } from '../src/learner-db.mjs';
 import { recordSending } from '../website/public/js/sending.mjs';
@@ -29,7 +29,7 @@ function fixture(exchange, injected) {
   const transport=async(action,{body})=>{
     const [kind,op]=action.split('/');
     if(action==='scores/session') {cookies.scores ||= randomBytes(32).toString('base64url'); return {ready:true};}
-    const result=kind==='scores' ? exchange.scores.request(op,cookies.scores,cookies.private,body) : exchange.private.request(op,cookies.private,body);
+    const result=kind==='scores' ? exchange.scores.request(op,cookies.scores,cookies.private,body) : exchange.private.request(op,cookies.private,body,cookies.scores);
     if(Object.hasOwn(result,'setToken')) {cookies.private=result.setToken;delete result.setToken;}
     return result;
   };
@@ -588,6 +588,109 @@ function chooseVisibility(f, visible, call = 'TEST1') {
   });
 }
 const ranks = e => e.scores.request('leaderboard',null,null,{}).entries;
+test('QSL XP adds to a higher public practice balance and stays idempotent across retries and consent changes',async t=>{
+  const exchange=new Exchange(':memory:'); t.after(()=>exchange.close());
+  let lose=false;
+  const posted=[];
+  const f=fixture(exchange,async(action,p,next)=>{
+    if(action==='scores/achievements') posted.push(structuredClone(p.body));
+    const receipt=await next(action,p);
+    if(lose && action==='scores/achievements') {lose=false;throw Error('response lost');}
+    return receipt;
+  });
+  f.earn(20); chooseVisibility(f,true); await f.station.flushScores();
+  // This publisher has already earned more practice XP on another installation.
+  exchange.private.run('UPDATE score_listings SET best=500 WHERE call=?','TEST1');
+  await f.station.observeListing();
+  const card={from:'OTHER',f:7026,at:10};
+  f.p.shack=sanitizeShack({cards:{first:card,beacon:{...card,from:'RVK',beacon:true}}});
+  assert.equal(f.storage.scoreTotal(f.p),700);
+  lose=true;await f.station.flushScores();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,700);
+  assert.equal(ranks(exchange)[0].achievements.qsls,2);
+  assert.ok(posted.every(body=>!JSON.stringify(body).includes('OTHER') && !JSON.stringify(body).includes('beacon')));
+  chooseVisibility(f,false);await f.station.flushScores();assert.deepEqual(ranks(exchange),[]);
+  chooseVisibility(f,true);await f.station.flushScores();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,700);
+  assert.equal(f.storage.scoreTotal(f.p),700);
+  f.earn();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,720);
+  // An older imported log overlaps one published card but also contains a new one.
+  f.p.shack=sanitizeShack({cards:{first:card,newCard:{...card,from:'NEW'}}});
+  await f.station.flushScores();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,820);assert.equal(f.storage.scoreTotal(f.p),820);
+  assert.equal(exchange.private.get('SELECT count(*) n FROM qsl_receipts').n,3);
+  assert.equal(exchange.private.get('SELECT count(*) n FROM saves').n,0);
+});
+
+test('erasure removes a paired save, pre-pairing revisions and public profile across restart; unrelated saves survive',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'morse-erase-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const path=join(dir,'fixture.sqlite');
+  let exchange=new Exchange(path); t.after(()=>exchange.close());
+  const a=fixture(exchange), b=fixture(exchange), other=fixture(exchange);
+  a.earn(); const offer=await a.station.start('Owner');
+  b.earn(); await b.station.start('Partner',{invite:false});
+  const joiningId=exchange.private.device(b.cookies.private).save_id;
+  b.earn();await b.station.flush();
+  await b.station.join(offer.invitation,'Partner');
+  await a.station.approve((await a.station.request('status')).invite.claim);
+  await b.station.flush();await a.station.flush();
+  chooseVisibility(a,true);await a.station.flushScores();a.earn();await a.station.flush();await a.station.flushScores();
+  const code=(await a.station.request('recovery-code')).code;
+  const id=exchange.private.device(a.cookies.private).save_id;
+  other.earn();await other.station.start('Independent',{invite:false}); chooseVisibility(other,true,'OTHER');await other.station.flushScores();
+  const unrelatedId=exchange.private.device(other.cookies.private).save_id;
+  assert.ok(exchange.private.get('SELECT 1 FROM revisions WHERE save_id=?',joiningId));
+  assert.throws(()=>exchange.private.erase(null,null,{requirePrivate:true}),/Restore access/);
+  assert.throws(()=>exchange.private.erase(null,a.cookies.scores,{requirePrivate:true}),/Restore access/);
+  assert.ok(exchange.private.device(a.cookies.private));
+  b.earn();
+  await a.station.erase({requirePrivate:true,requirePublisher:true});
+  await b.station.flush();
+  assert.equal(b.station.status.connected,false);
+  assert.equal(exchange.private.erase(a.cookies.private,a.cookies.scores,{requirePrivate:true}).erased,true);
+  exchange.close();exchange=new Exchange(path);
+  for (const table of ['saves','devices','foundations','revisions','recovery_codes','epochs']) {
+    const column=table==='saves'?'id':'save_id';
+    assert.equal(exchange.private.get('SELECT count(*) n FROM '+table+' WHERE '+column+' IN (?,?)',id,joiningId).n,0,table);
+  }
+  for (const table of ['stations','score_results','score_counters','score_listings','operator_achievements','shack_stations','qsl_receipts'])
+    assert.equal(exchange.private.get('SELECT count(*) n FROM '+table+' WHERE call=?','TEST1').n,0,table);
+  assert.throws(()=>exchange.private.request('recover',null,{code,label:'New'}),/Recovery code/);
+  assert.equal(exchange.private.request('status',b.cookies.private,{}).erased,true);
+  assert.throws(()=>exchange.scores.request('consent',a.cookies.scores,null,{generation:99,callsign:'TEST1',enabled:true}),/revoked/);
+  assert.equal(exchange.private.device(other.cookies.private).save_id,unrelatedId);
+  assert.deepEqual(ranks(exchange).map(x=>x.callsign),['OTHER']);
+});
+
+test('local erasure removes only the selected learner from browser backups and native originals and respects newer saves',()=>{
+  const state=newState(), id=state.activeId, other=newProfile('Other');
+  state.profiles.push(other);
+  const raw=JSON.stringify(state), next={...state,profiles:[other],activeId:other.id};
+  const backup=STORAGE_KEY+'.before-shared-sound';
+  const map=new Map([[STORAGE_KEY,raw],[backup,raw],['unrelated','retained']]);
+  const browser={get length(){return map.size;},key:i=>[...map.keys()][i],getItem:k=>map.get(k)??null,setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)};
+  const storage=new PracticeStorage(browser);
+  storage.setItem(STORAGE_KEY,raw);
+  storage.eraseLearner(id,next);
+  for(const key of [STORAGE_KEY,backup]) {
+    assert.deepEqual(JSON.parse(map.get(key)).profiles.map(p=>p.id),[other.id]);
+    assert.ok(!map.get(key).includes(id));
+  }
+  assert.equal(map.get('unrelated'),'retained');
+  const db=new LearnerDB(':memory:');
+  try {
+    const rev=db.load(raw).revision;
+    const cookie=cookieNames(id).private, keep=cookieNames(other.id).private;
+    for(const name of ['dev-website:'+cookie,'website:'+cookie,'dev-website:'+keep]) db.db.prepare('INSERT INTO credentials VALUES(?,?)').run(name,Buffer.from([1]));
+    assert.throws(()=>db.eraseLearner(id,JSON.stringify(next),rev+1,'dev-website:'),/newer save/);
+    assert.equal(db.db.prepare('SELECT raw FROM originals').get().raw,raw);
+    db.eraseLearner(id,JSON.stringify(next),rev,'dev-website:');
+    assert.equal(db.db.prepare('SELECT raw FROM originals').get().raw,JSON.stringify(next));
+    assert.deepEqual(db.db.prepare('SELECT id FROM credentials ORDER BY id').all().map(x=>x.id),['dev-website:'+keep,'website:'+cookie]);
+  } finally {db.close();}
+});
 test('visibility uses the higher total, keeps hidden work and survives retries without creating private saves', async t => {
   const exchange = new Exchange(':memory:'); t.after(()=>exchange.close());
   let lose = '', lastTotal;
@@ -836,7 +939,7 @@ test('checkout lowers the published rank and profiles show only equipped gear ac
   purchase(s,['0-0','1-0','2-0'],10,5500);equip(s,'1-0',1,11);
   await f.station.flushScores();await f.station.flushScores();
   const entry=ranks(exchange)[1];
-  assert.deepEqual(entry,{callsign:'TEST1',xp:500,lifetimeXP:5500,equipped:[null,'1-0',null],rank:2,streak:0});
+  assert.deepEqual(entry,{callsign:'TEST1',xp:500,lifetimeXP:5500,equipped:[null,'1-0',null],achievements:{listen:0,send:0,qsls:0,badges:[]},rank:2,streak:0});
   assert.equal(f.station.hasScores(f.storage.row()),false);
   const old=structuredClone(equipmentSnapshot(s));equip(s,'2-0',2,20);
   await f.station.flushScores();

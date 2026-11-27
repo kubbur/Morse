@@ -81,10 +81,18 @@ export class DeviceSync {
     meta.force = false;
     meta.remote = null;
     this.save(meta);
+    this.report({message:'Changes waiting to upload',error:false});
     this.schedule(0);
   }
   receive(result, meta) {
-    if (result.erased) { this.save(null); this.onErased(); this.report({ connected: false, devices: [], invite: null, waiting: null, message: 'Your data was deleted', error: false }); return null; }
+    if (result.erased) {
+      this.onErased();
+      if (!this.disposed) {
+        this.save(null);
+        this.report({connected:false, devices:[], invite:null, waiting:null, message:'Your data was deleted', error:false});
+      }
+      return null;
+    }
     if (meta && result.epoch === meta.epoch && result.revision < meta.revision) return meta;
     if (!result.connected) {
       this.save(null);
@@ -199,7 +207,7 @@ export class DeviceSync {
       else this.report({ error: true, message: navigator.onLine === false ? 'Offline · saved here, syncs when you reconnect' : error.message || 'Saved here · waiting to sync' });
     } finally {
       this.running = false;
-      if (this.meta() && !this.disposed) this.schedule(document.hidden ? 30000 : 5000);
+      if (!this.disposed && this.meta()) this.schedule(document.hidden ? 30000 : 5000);
     }
   }
   async start(label, { invite = true } = {}) {
@@ -209,6 +217,7 @@ export class DeviceSync {
       const before=syncProfile(this.getProfile());
       const result = await this.request('start', { profile: before, label, invite });
       let meta = this.meta();
+      if (result.erased) { this.receive(result, meta); return result; }
       if (!meta) {
         meta = { version: 1, base: before, epoch: result.epoch, seq: result.seq, revision: result.revision };
         rememberReceipt(meta, before, result.profile);
@@ -254,10 +263,11 @@ export class DeviceSync {
       return result;
     });
   }
-  async erase() {
+  async erase(options = {}) {
     return this.exclusive(async () => {
       // Do not discard the only local copy until shared erasure succeeds.
-      const result = await this.request('erase');
+      const result = await this.request('erase', options);
+      if (result.erased !== true) throw Error('The website did not confirm deletion. Your local data is still available.');
       this.receive(result, this.meta());
     });
   }

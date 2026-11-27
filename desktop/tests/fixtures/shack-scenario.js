@@ -31,10 +31,10 @@
   window.dispatchEvent(new Event('focus'));
   if (fixture.mode==='browser') {
     go('shack');
-    const pair=q('.instrument + .shack-paddles'), keys=q('#send-key-controls #send-paddles');
-    check(pair && !pair.hidden && pair.children.length===2 && keys,'Returning keyboard operator lost the radio paddles');
-    const radio=q('.instrument').getBoundingClientRect(), touch=pair.getBoundingClientRect(), band=q('.band').getBoundingClientRect();
-    check(touch.height>=44 && radio.bottom<=touch.top && touch.bottom<=band.top,'Phone paddles must sit below the radio and above Band activity');
+    check(q('.radio-empty') && !q('.instrument, .radio-layout .shack-paddles, [data-dial]') && !testBandMembers.size,'Empty station showed a radio');
+    click('.radio-empty [data-act="shop-radios"]');
+    check(q('.shelf [data-id="1-0"]'),'Empty station did not open the radio shop');
+    tab('air');
     const label=q('.profile-call small');
     label.scrollIntoView({block:'center'});
     const rect=label.getBoundingClientRect(), hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
@@ -56,12 +56,14 @@
   check(q('.wallet strong').textContent===(8333).toLocaleString()+' XP','Checkout did not debit 5,000 XP');
   click('[data-act="progress"]');check(q('.shack-xp strong').textContent===(8333).toLocaleString()+' XP','Progress balance');
   click('#my-operator-profile');check(q('#operator-profile-dialog').open && q('.operator-xp').textContent.includes((13333).toLocaleString()),'Lifetime XP on My profile');
+  check(q('.operator-milestones').textContent.includes('QSL cards') && q('.operator-awards h3').textContent.includes('earned'),'Missing operator achievements');
   click('[data-close="operator-profile-dialog"]');click('#progress-return');
   const learner=()=>testState().profiles[0], startCount=learner().sending.attempts;
   check(learner().stats.xp===13333,'Checkout changed lifetime XP');
-  tab('bench');check(qa('[data-inventory] [data-gear]').length===3 && !q('[data-act="buy"]'),'Purchased gear did not enter inventory');
+  tab('air');check(q('.radio-empty') && !q('.instrument'),'Buying a radio equipped it automatically');
+  click('.radio-empty [data-id="bench"]');check(qa('[data-inventory] [data-gear]').length===3 && !q('[data-act="buy"]'),'Purchased gear did not enter inventory');
   drag('0-0','.mount[data-slot="0"]');drag('1-0','.mount[data-slot="1"]');click('[data-act="equip"][data-id="2-0"]');
-  tab('shop');click('[data-act="buy"][data-id="0-1"]');tab('bench');drag('0-1','.mount[data-slot="0"]');
+  tab('shop');click('[data-act="category"][data-slot="0"]');click('[data-act="buy"][data-id="0-1"]');tab('bench');drag('0-1','.mount[data-slot="0"]');
   check(q('[data-inventory] [data-gear="0-0"]'),'Swapped key was lost');
   drag('0-1','[data-inventory]');check(!q('.mount[data-slot="0"] [data-gear]'),'Unequip did not empty the mount');
   tab('air');
@@ -85,7 +87,7 @@
   for (const f of [7024,7025,7027,7028,7026]) {
     dialTo(f);
     check([7024,7025,7027,7028].every(n=>!q('.band [data-f="'+n+'"]')) && q('.band [data-f="7026"]'),'Band activity exposed an open slow channel or hid the calling channel');
-    check(q('[data-act="open-check"]').hidden && q('[data-face="pace"]').textContent.includes('8–12') &&
+    check(q('[data-face="pace"]').textContent.includes('8–12') &&
       q('[data-face="room"]').textContent===(f===7026?'Slow CW calling frequency':'Slow CW open channel'),'Starter slow channel '+f);
   }
   const pitchBefore=learner().settings.tone, toneKnob=q('.pitch-knob');
@@ -157,8 +159,21 @@
     };
     click('[data-act="settings"]');setSource('keyboard');
     if (!q('#show-paddle-buttons').checked) q('#show-paddle-buttons').click();
+    const saveKeys=q('#shack-input-dialog #paddle-bindings button');
+    const savedNotice=q('#paddle-keys-saved');
+    const saveWidth=saveKeys.getBoundingClientRect().width;
+    saveKeys.click();
+    check(savedNotice.textContent==='Saved' && getComputedStyle(saveKeys.firstElementChild).opacity==='0' &&
+      saveKeys.getBoundingClientRect().width===saveWidth,'Save confirmation did not replace the label in place');
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    saveKeys.click();
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    check(savedNotice.textContent==='Saved','A second save did not restart the confirmation');
+    await wait(()=>!savedNotice.textContent && getComputedStyle(saveKeys.firstElementChild).opacity==='1','Save keys label did not return');
     await closeInputs();
     const dit=q('.instrument + .shack-paddles [data-shack-paddle="dit"]'),dah=q('.instrument + .shack-paddles [data-shack-paddle="dah"]');
+    const radio=q('.instrument').getBoundingClientRect(), touchRect=dit.parentElement.getBoundingClientRect(), band=q('.band').getBoundingClientRect();
+    check(touchRect.height>=44 && radio.bottom<=touchRect.top && touchRect.bottom<=band.top,'Phone paddles must sit below the equipped radio and above Band activity');
     for (const button of [dit,dah]) {
       const rect=button?.getBoundingClientRect();
       check(rect && rect.width>=44 && rect.height>=44 && rect.left>=0 && rect.right<=390,'Touch paddles do not fit the phone');
@@ -261,22 +276,10 @@
   tab('bench');
   for(const slot of [0,1,2])click('[data-act="equip"][data-id="'+slot+'-1"]');
   tab('air');check(q('.instrument').dataset.rig==='1' && q('.facehead').textContent.includes('Club transceiver'),'Equipped radio face');
-  check(!q('#shack-station .check') && !q('#shack-check-dialog').open,'Training prompt should wait for a TX attempt');
-  if(mac){await wait(()=>testPaddleMuted()===false,'Qualification trigger mute');testPaddleElement(0,1200);testPaddleElement(1,1300);testPaddleElement(2,1360);}
-  else {key('keydown','Space',' ');key('keyup','Space',' ');}
-  check(q('#shack-check-dialog').open,'Key on a training-locked frequency must open the check');
-  click('#shack-check-dialog [data-act="check"]');
-  check(q('#shack-check-dialog .challenge-char').textContent==='E','Only the missing character');
-  const unit=Math.round(1200/learner().sending.settings.wpm);
-  if(mac) {await wait(()=>testPaddleMuted()===false,'Check paddle mute');testPaddleElement(0,1600);testPaddleElement(1,1700);testPaddleElement(2,1700+unit);}
-  else {
-    for(const [type,at] of [['keydown',1800],['keyup',1800+unit]]) {
-      const event=new KeyboardEvent(type,{code:'Space',key:' ',bubbles:true,cancelable:true});
-      Object.defineProperty(event,'timeStamp',{value:at});document.activeElement.dispatchEvent(event);
-    }
-  }
-  await wait(()=>!q('#shack-check-dialog').open,'Completing the qualification popup');
-  check(q('[data-act="open-check"]').hidden && learner().stats.xp===13633,'Qualification completion and one-time award');
+  if(mac){await wait(()=>testPaddleMuted()===false,'Club station paddle mute');testPaddleElement(0,1200);testPaddleElement(1,1300);}
+  else key('keydown','Space',' ');
+  check(q('[data-face="mode"]').textContent==='TX' && !q('#shack-check-dialog'),'Club station required a separate qualification');
+  if(mac)testPaddleElement(2,1360);else key('keyup','Space',' ');
   const closeSpeed=async()=>{
     click('[data-close="shack-input-dialog"]');
     await wait(()=>q('#view-lab #send-source')===choice,'Shack speed control did not return home');

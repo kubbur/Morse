@@ -44,6 +44,7 @@ function exchange(action,body) {
       return {...listing};
     }
     if (action==='scores/total') return {...listing,acknowledged:body.results.map(r=>r.id)};
+    if (action==='scores/achievements') return {achievements:body.achievements};
   }
   if (action==='scores/leaderboard') return {entries:[{rank:1,callsign:'TEST1',xp:30,streak:1}],me:null};
   if (action==='private/adopt') return {status:403,error:'No earlier browser credential.'};

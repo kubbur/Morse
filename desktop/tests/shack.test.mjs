@@ -5,24 +5,52 @@ import { configuration, createApp } from '../website/server.mjs';
 import { Exchange } from '../website/lib/exchange.mjs';
 import { newProfile, sanitizeState } from '../website/public/js/progress.mjs';
 import { mergeProgress, syncProfile, hasLocalChanges } from '../website/public/js/sync-data.mjs';
-import { sanitizeShack, mergeShack, purchase, equip, wallet, balances, sellBadge, installed, receiving, assembled, invested, canTransmit, certify, alphabet, qualificationCredit, shackUnlocked, tiers, equipmentSnapshot } from '../website/public/js/shack-model.mjs';
+import { sanitizeShack, mergeShack, purchase, equip, wallet, balances, sellBadge, installed, receiving, assembled, invested, canTransmit, certify, alphabet, qualificationCredit, shackUnlocked, tiers, equipmentSnapshot, qslCount, QSL_XP, localLifetimeXP } from '../website/public/js/shack-model.mjs';
 import { ShackUI } from '../website/public/js/shack-ui.mjs';
 import { decodeSending } from '../website/public/js/sending.mjs';
 import { SendingUI } from '../website/public/js/send-ui.mjs';
 import { NativeElements } from '../website/public/js/native-paddle.mjs';
 import { bench, shop, air, logbook, activity } from '../website/public/js/shack-views.mjs';
 import { readFile } from 'node:fs/promises';
+import { operatorAchievements, validAchievements } from '../website/public/js/operator-achievements.mjs';
+import { practiceKey, courseStage } from '../website/public/js/lessons.mjs';
 
-test('the on-air check uses listening speed for copy and keyer speed for a sending example', async () => {
-  const p = newProfile(), heard = [];
-  const ui = Object.assign(Object.create(ShackUI.prototype), {
-    profile:() => p, sender:{settings:p.sending.settings}, challenge:{ch:'E',dir:'copied'},
-    receiver:{audio:{play:(_ch, settings) => heard.push(settings.wpm)}},
-  });
-  await ui.prompt();
-  ui.challenge.dir = 'sent';
-  await ui.prompt();
-  assert.deepEqual(heard, [30, 15]);
+test('existing, live and beacon QSLs pay once and keep their XP after the recording ages out',()=>{
+  const card={at:1,from:'TEST1',f:7031};
+  const p=newProfile(), base=syncProfile(p);
+  const a=structuredClone(base), b=structuredClone(base);
+  a.shack=sanitizeShack({cards:{shared:card,'RVK-2026-11-27':{...card,beacon:true}}});
+  b.shack=sanitizeShack({cards:{shared:{...card,mine:[[90,0]]},other:{...card,from:'TEST2'}}});
+  const merged=mergeProgress(base,a,b);
+  assert.equal(qslCount(merged.shack),3);
+  assert.equal(localLifetimeXP(merged),3*QSL_XP);
+  assert.equal(localLifetimeXP(mergeProgress(base,a,merged)),300);
+  assert.equal(localLifetimeXP(syncProfile(merged)),300);
+  const many=Object.fromEntries(Array.from({length:83},(_,i)=>['qsl-'+i,{...card,at:i+1}]));
+  const full=sanitizeShack({cards:many});
+  assert.equal(Object.keys(full.cards).length,80);
+  assert.equal(qslCount(full),83);
+  assert.equal(qslCount(mergeShack(full,{cards:{'qsl-0':card}})),83);
+  assert.equal(qslCount(sanitizeShack({cards:{bad:{...card,at:0}}})),0);
+});
+
+test('operator milestones count cleared course levels once across copy modes and show earned badges',()=>{
+  const p=newProfile();
+  p.settings.courseLevel=187;
+  p.sending.level=96;
+  assert.deepEqual(operatorAchievements(p),{listen:0,send:0,qsls:0,badges:[]});
+  for (const [n,copyMode,mastered] of [[1,'flexible',true],[1,'head',true],[2,'head',true],[3,'flexible',false]]) {
+    const stage=courseStage(n);
+    const key=practiceKey({...p.settings,courseLevel:n,copyMode,courseCount:stage.letterCount,level:stage.maxLength});
+    p.stats.mastery[key]={mastered};
+  }
+  p.sending.records={1:{mastered:true},2:{mastered:false}};
+  p.sending.clean=1;
+  const summary=operatorAchievements(p);
+  assert.equal(summary.listen,2);assert.equal(summary.send,1);
+  assert.ok(summary.badges.includes('send-first'));assert.ok(validAchievements(summary));
+  assert.equal(validAchievements({...summary,callsign:'TEST1'}),false);
+  assert.equal(validAchievements({...summary,badges:['unknown']}),false);
 });
 
 test('shop receipts, equipped windows, upgrades and independent XP survive saves',()=>{
@@ -67,13 +95,12 @@ test('established training and an experienced operator check award qualification
   const merged=mergeProgress(base,a,b);
   assert.equal(merged.credits[qualificationCredit],300);assert.equal(merged.stats.xp,300);
 });
-test('calling and open channels in a speed group require the same equipped station and qualification',()=>{
+test('calling and open channels in a speed group require the same equipped station',()=>{
   for (let f=7020;f<=7050;f++) {
     const starter=f>=7024 && f<=7028;
     const price=starter ? 5000 : f>=7029 && f<=7038 ? 13333 : 25000;
-    assert.equal(canTransmit(f,price-1,true),false,'under-equipped at '+f);
-    assert.equal(canTransmit(f,price,false),starter,'unqualified at '+f);
-    assert.equal(canTransmit(f,price,true),true,'qualified at '+f);
+    assert.equal(canTransmit(f,price-1),false,'under-equipped at '+f);
+    assert.equal(canTransmit(f,price),true,'equipped at '+f);
   }
 });
 test('band activity lists the three calling frequencies and keeps occupied working channels off the list',()=>{
@@ -186,7 +213,7 @@ test('receiver needs radio and antenna, the transmitter also needs the equipped 
   const exchange=new Exchange(':memory:'), band=exchange.band;
   try {
     const gear=['0-0','1-0','2-0'], f=7025;
-    const open=(equipped,frequency=f)=>band.request('open',{call:'TEST1',f:frequency,qualified:true,lifetimeXP:5000,equipped});
+    const open=(equipped,frequency=f)=>band.request('open',{call:'TEST1',f:frequency,lifetimeXP:5000,equipped});
     const send=(r,frequency=f)=>band.request('send',{token:r.token,f:frequency,seq:1,stream:'pulse',offset:0,audio:[[90,0]]});
     assert.throws(()=>open([gear[0],null,gear[2]]),/radio and antenna/);
     assert.throws(()=>open([gear[0],gear[1],null]),/radio and antenna/);
@@ -195,6 +222,7 @@ test('receiver needs radio and antenna, the transmitter also needs the equipped 
     assert.equal(band.request('poll',{token:rx.token,f,cursor:rx.cursor}).events.length,1);
     assert.throws(()=>send(rx),/Receive only/);
     assert.throws(()=>send(open(gear,7030),7030),/Receive only/);
+    for (const freq of [7031,7036]) assert.equal(send(open(['0-1','1-1','2-1'],freq),freq).ack,1);
     const s=sanitizeShack({converted:25000});
     purchase(s,gear,1);purchase(s,['0-2','1-2','2-2'],2);
     for(const [i,id] of gear.entries()) equip(s,id,i,3);

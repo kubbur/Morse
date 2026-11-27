@@ -11,7 +11,9 @@ import { availableUpdate } from '../src/updates.mjs';
 import { validCommand } from '../src/paddle-service.mjs';
 
 test('sandbox exposes only bundled documents and explicitly needed permissions',()=>{
-  assert.ok(appDocument(APP_ORIGIN+'/#send')); assert.ok(progressExport('blob:'+APP_ORIGIN+'/progress'));
+  assert.ok(appDocument(APP_ORIGIN+'/#send')); assert.ok(progressExport('blob:'+APP_ORIGIN+'/progress','morse-progress-2026-11-27.json'));
+  assert.ok(progressExport('blob:'+APP_ORIGIN+'/code','Morse-Dev-recovery-TF3KBR-P-2026-11-27T20-30-06Z.txt'));
+  assert.equal(progressExport('blob:'+APP_ORIGIN+'/code','arbitrary.txt'),false);
   for(const url of ['file:///tmp/x','http://127.0.0.1:17373/events','http://127.0.0.1:38764/api/v2/','https://morse.kubbur.digital/','https://morse-dev.kubbur.digital/','https://github.com/']) assert.equal(allowedRequest(url),false);
   assert.ok(allowedRequest(APP_ORIGIN+'/js/app.mjs'));
   assert.equal(allowedRequest(APP_ORIGIN+'/api/sync/start','POST'),false);

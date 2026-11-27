@@ -119,10 +119,23 @@ export function sanitizeSending(input) {
   return result;
 }
 
+const gapEpsilonMs = 1e-6;
+const wordBoundaryMs = time => (time.letterGap + time.wordGap) * 500;
 export function sendingGapType(milliseconds, time) {
-  if (milliseconds >= (time.letterGap * 1000 + time.wordGap * 1000) / 2) return 'word';
-  return milliseconds >= 2 * time.dit * 1000 ? 'letter' : 'element';
+  if (milliseconds + gapEpsilonMs >= wordBoundaryMs(time)) return 'word';
+  return milliseconds + gapEpsilonMs >= 2 * time.dit * 1000 ? 'letter' : 'element';
 }
+
+export function letterGapWindow(time, tolerance) {
+  const target = time.letterGap * 1000;
+  // Give slow hands extra time in milliseconds. Farnsworth already stretches the target.
+  const extra = Math.max(0, (time.dit - 1.2 / 20) * 1000);
+  const allowance = target * tolerance + extra;
+  const wordBoundary = wordBoundaryMs(time);
+  return {target, min:Math.max(time.dit * 2000,target - allowance),
+    max:Math.min(target + allowance,wordBoundary), wordBoundary};
+}
+export const fitsLetterGap = (ms,window) => ms >= window.min - gapEpsilonMs && ms <= window.max + gapEpsilonMs && ms + gapEpsilonMs < window.wordBoundary;
 
 function capture(edges, settings) {
   if (!Array.isArray(edges) || !edges.length || edges.length > 4096) throw new Error('No complete key presses.');
@@ -203,12 +216,20 @@ export function gradeSending(edges, target, settings = DEFAULT_SENDING_SETTINGS,
   // learner's letter/word spacing on its own, without automatic marks inflating
   // the score. A single joined character has no manual spacing to assess yet.
   const assessed = keyerTimed ? parts.filter(p => ['letter gap', 'word gap'].includes(p.type)) : parts;
-  const quality = assessed.length ? Math.round(100 * assessed.reduce((sum, p) => sum + Math.max(0, 1 - p.error), 0) / assessed.length) : 100;
-  const inRange = assessed.length ? assessed.filter(p => p.error <= stage.tolerance + 1e-6).length / assessed.length : 1;
+  const letters = letterGapWindow(result.time,stage.tolerance);
+  for (const part of parts) {
+    const letter = part.type === 'letter gap';
+    part.inRange = letter ? fitsLetterGap(part.actual,letters) : part.error <= stage.tolerance + 1e-6;
+    // A correctly separated letter inside the advertised window earns a passing spacing score.
+    part.score = Math.max(letter && part.inRange ? stage.qualityGoal / 100 : 0, 1 - part.error);
+  }
+  const quality = assessed.length ? Math.round(100 * assessed.reduce((sum,p)=>sum+p.score,0) / assessed.length) : 100;
+  const precision = assessed.length ? Math.round(100 * assessed.reduce((sum,p)=>sum+Math.max(0,1-p.error),0) / assessed.length) : 100;
+  const inRange = assessed.length ? assessed.filter(p => p.inRange).length / assessed.length : 1;
   const timingOK = quality >= stage.qualityGoal && inRange >= 0.8;
-  const worst = [...assessed].sort((a, b) => b.error - a.error)[0];
+  const worst = [...assessed].sort((a,b) => Number(a.inRange)-Number(b.inRange) || a.score-b.score || b.error-a.error)[0];
   const issue = !correct ? 'The decoded pattern differs. Compare it with the target and try again.' : !timingOK ? `${worst.type[0].toUpperCase() + worst.type.slice(1)} ${worst.actual < worst.expected ? 'too short' : 'too long'}: ${Math.round(worst.actual)} ms; aim for ${Math.round(worst.expected)} ms.` : 'Correct pattern and timing.';
-  return { ...result, correct, timingOK, passed: correct && timingOK, quality, parts, assessed, keyerTimed, issue, expected, soundResults: expected.map((t, i) => ({ sound: t.value, good: result.groups[i]?.pattern === t.pattern && result.groups[i]?.word === t.word })) };
+  return { ...result, correct, timingOK, passed: correct && timingOK, quality, precision, parts, assessed, keyerTimed, issue, expected, soundResults: expected.map((t, i) => ({ sound: t.value, good: result.groups[i]?.pattern === t.pattern && result.groups[i]?.word === t.word })) };
 }
 
 export function sendingMastery(sending, level = sending.level) {
@@ -242,7 +263,7 @@ export const validSendingXP = xp => sendAwards.has(xp);
 
 function cleanSendingXP(target, grade, characters) {
   const base = sendBaseXP(characters);
-  if (characters < 2 || !grade.assessed?.length || grade.quality < 90) return base;
+  if (characters < 2 || !grade.assessed?.length || (grade.precision ?? grade.quality) < 90) return base;
   // Compare complete transmissions, including the gaps the operator actually sent.
   const referenceWpm = 30;
   const referenceMs = timeline(target, {wpm:referenceWpm, farnsworth:referenceWpm}).duration * 1000;

@@ -8,7 +8,7 @@ import { bundledTrainer } from './bundled-trainer.mjs';
 import { PaddleService } from './paddle-service.mjs';
 import { ShackBackground } from './shack-background.mjs';
 import { LearnerDB } from './learner-db.mjs';
-import { websiteClient } from './website-client.mjs';
+import { websiteClient, websiteCredentialPrefix } from './website-client.mjs';
 import { serviceOrigin } from '../website/public/js/service-origin.mjs';
 import { checkUpdate, macIdentity } from './updates.mjs';
 import { channelPreference, macInstaller, UpdateManager } from './update-manager.mjs';
@@ -66,6 +66,7 @@ function registerIPC() {
   for (const [name, fn] of Object.entries({
     'learner-load': legacy=>db.load(legacy,syncMode === 'website'),
     'learner-save': (raw,rev)=>({revision:db.save(raw,rev)}),
+    'learner-erase': (id,raw,rev)=>({revision:db.eraseLearner(id,raw,rev,websiteCredentialPrefix(syncMode,buildChannel))}),
   })) ipcMain.on(name,(event,...args)=>{
     try { if (!trusted(event)) throw Error(); event.returnValue=fn(...args); }
     catch { event.returnValue={error:'The learner save could not be opened or updated. The original was retained.'}; }
@@ -163,7 +164,7 @@ function installSessionPolicy() {
   browserSession.setPermissionRequestHandler((contents, permission, callback, details) => callback(allowedPermission(permission, details.requestingUrl || contents.getURL(), contents.getURL())));
   browserSession.setDevicePermissionHandler(() => false);
   browserSession.on('will-download', (event, item, contents) => {
-    if (!appDocument(contents?.getURL()) || !progressExport(item.getURL()) || !/^morse-progress-[\d-]+\.json$/.test(item.getFilename())) event.preventDefault();
+    if (!appDocument(contents?.getURL()) || !progressExport(item.getURL(),item.getFilename())) event.preventDefault();
   });
 }
 

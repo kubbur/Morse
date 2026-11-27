@@ -42,11 +42,24 @@
   check(el('keyboard-paddle-options').hidden, 'USB offered keyboard assignments');
   change('send-source', 'keyboard');
   check(!el('keyboard-paddle-options').hidden && el('paddle-dot-key').value === 'Z' && el('paddle-dash-key').value === 'X', 'Default keys');
+  const savedNotice = el('paddle-keys-saved');
   el('paddle-dot-key').value = 'X';
   el('paddle-bindings').requestSubmit();
-  check(el('paddle-key-message').textContent.includes('different') && loadKeyboardPaddles().dit === 'z', 'Duplicate keys saved');
+  check(!savedNotice.textContent && el('paddle-key-message').textContent.includes('different') && loadKeyboardPaddles().dit === 'z', 'Duplicate keys saved');
   el('paddle-dot-key').value = 'Ö'; el('paddle-dash-key').value = 'E';
+  const setItem = Storage.prototype.setItem;
+  try {
+    Storage.prototype.setItem = function(key, value) {
+      if (key === 'morse.keyboard-paddles.v1') throw new Error('Storage unavailable');
+      return setItem.call(this, key, value);
+    };
+    el('paddle-bindings').requestSubmit();
+    check(!savedNotice.textContent && el('paddle-key-message').textContent.includes('for this session'), 'Storage failure showed a successful save');
+  } finally { Storage.prototype.setItem = setItem; }
   el('paddle-bindings').requestSubmit();
+  check(savedNotice.textContent === 'Saved' && !el('paddle-key-message').textContent, 'Successful save did not replace the error');
+  change('paddle-dot-key', 'Ö');
+  check(!savedNotice.textContent, 'Editing a binding kept the previous save confirmation');
   el('show-paddle-buttons').click();
   check(!loadKeyboardPaddles().showButtons && loadKeyboardPaddles().dit === 'ö', 'Character or visibility lost');
   el('send-reverse').click();

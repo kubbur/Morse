@@ -1,4 +1,5 @@
 import { equipment } from '../website/public/js/shack-model.mjs';
+import { validAchievements } from '../website/public/js/operator-achievements.mjs';
 import { ShackFeed } from '../website/public/js/shack-feed.mjs';
 import { devOrigin, serviceOrigin } from '../website/public/js/service-origin.mjs';
 import { actions, cookieNames } from '../website/lib/exchange.mjs';
@@ -8,20 +9,21 @@ export { stableOrigin as siteOrigin, stagingOrigin as testOrigin } from '../webs
 function publicRankings(data) {
   const validCount = n => Number.isSafeInteger(n) && n >= 0;
   if (!Array.isArray(data?.entries) || data.entries.length > 50) throw Error('Invalid leaderboard response.');
-  const entries = data.entries.map(({rank,callsign,xp,streak,lifetimeXP,equipped})=>{
+  const entries = data.entries.map(({rank,callsign,xp,streak,lifetimeXP,equipped,achievements})=>{
     if (!validCount(rank) || rank < 1 || typeof callsign !== 'string' || !/^[A-Z0-9/]{2,16}$/.test(callsign) ||
         !validCount(xp) || !validCount(streak)) throw Error('Invalid leaderboard entry.');
     const profile=Array.isArray(equipped) && equipped.length===3 && equipped.every((id,i)=>id===null || equipment(id)?.slot===i) && validCount(lifetimeXP) && lifetimeXP>=xp;
-    return {rank,callsign,xp,streak,...(profile ? {lifetimeXP,equipped} : {})};
+    return {rank,callsign,xp,streak,...(profile ? {lifetimeXP,equipped} : {}),...(validAchievements(achievements) ? {achievements} : {})};
   });
   return {status:200,entries,me:null};
 }
 
+export const websiteCredentialPrefix = (mode,channel) => mode === 'staging' ? '' : serviceOrigin(mode,channel) === devOrigin ? 'dev-website:' : 'website:';
 export function websiteClient(db, safeStorage, mode, fetcher = fetch, channel = 'stable') {
   if (!['staging','offline','website'].includes(mode)) throw Error('Unknown Morse website mode.');
   const origin = serviceOrigin(mode, channel);
   // Preserve historical Stable and loopback IDs. Each host has its own device credentials.
-  const credentialPrefix = mode === 'staging' ? '' : origin === devOrigin ? 'dev-website:' : 'website:';
+  const credentialPrefix = websiteCredentialPrefix(mode,channel);
   const bandFeed=new ShackFeed(fetcher,origin);
   let cached, pending;
   async function capabilities() {
@@ -82,7 +84,9 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch, channel = 
     const keyFor = name => credentialPrefix + name;
     if (!await safeStorage.isAsyncEncryptionAvailable()) return { status:503,error:'Private credential storage is unavailable.' };
     const cookies=[];
-    const required = ['scores/consent','scores/listing','scores/visibility','scores/total','scores/station'].includes(action) ? [names.scores,names.private] : [names[kind]];
+    const needsBoth = ['scores/consent','scores/listing','scores/visibility','scores/total','scores/station','scores/achievements',
+      'private/erase','private/start','private/approve','private/recover','private/status'].includes(action);
+    const required = needsBoth ? [names.scores,names.private] : [names[kind]];
     for (const name of required) {
       const row=db.prepare('SELECT encrypted FROM credentials WHERE id=?').get(keyFor(name));
       if (row) { const {result}=await safeStorage.decryptStringAsync(Buffer.from(row.encrypted)); cookies.push(name+'='+result); }

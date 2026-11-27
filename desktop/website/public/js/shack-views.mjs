@@ -1,4 +1,7 @@
-import { alphabet, slots, tiers, items, equipment, assembled, receiving, stationTier, balances, cost, coverage, frequency, badgePrice, SLOW_CW_CALLING_KHZ, speedGroups, speedGroup, paceLabel } from './shack-model.mjs';
+import { slots, tiers, items, equipment, assembled, receiving, stationTier, balances, cost, frequency, badgePrice, SLOW_CW_CALLING_KHZ, speedGroups, speedGroup, paceLabel, qslCount, QSL_XP } from './shack-model.mjs';
+import { operatorBadges, validAchievements } from './operator-achievements.mjs';
+import { COURSE_LEVELS } from './lessons.mjs';
+import { SENDING_LEVELS } from './sending-course.mjs';
 export const esc = v => String(v).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => n.toLocaleString();
 export const button = (label, action, attrs='', type='quiet') => `<button type="button" class="${type}" data-act="${action}" ${attrs}>${esc(label)}</button>`;
@@ -32,10 +35,15 @@ function activity(ui) {
     <span class="count" aria-label="${ui.band.state==='live' ? (ui.band.activity[f] || 0)+' operators' : 'Occupancy unavailable'}">${ui.band.state==='live' ? (ui.band.activity[f] || 0) : '—'}</span></button>`).join('');
 }
 export { activity };
-export function air(ui) {
+function radioConsole(ui) {
   const rig=equipment(ui.s.equipped[1]?.id);
-  return `<div class="radio-layout"><div class="radio-console"><section class="instrument" data-rig="${rig?.level ?? 'none'}" aria-label="CW transceiver">
-    <div class="facehead"><span class="label">∿ &nbsp; ${rig?.name || 'Radio slot empty'}</span><span class="tiny">1 kHz / step</span></div>
+  if (!rig) {
+    const owned=items.some(item=>item.slot===1 && ui.s.orders[item.id]);
+    return `<section class="empty radio-empty"><h2>No radio equipped</h2><p>${owned ? 'Equip a radio from your inventory to go on air.' : 'Buy a radio in the Shop, then equip it in the Workbench.'}</p>
+      ${owned ? button('Open Workbench','tab','data-id="bench"','quiet') : button('Shop radios','shop-radios','','quiet')}</section>`;
+  }
+  return `<div class="radio-console"><section class="instrument" data-rig="${rig.level}" aria-label="CW transceiver">
+    <div class="facehead"><span class="label">∿ &nbsp; ${rig.name}</span><span class="tiny">1 kHz / step</span></div>
     <div class="face"><div class="lcd"><div class="lcd-top"><span class="lcd-state" data-face="mode">RX</span><span data-face="pace"></span></div>
     <div class="freqline"><strong class="frequency" data-face="frequency"></strong><span class="mhz">MHz</span></div>
     <div class="lcd-foot"><span data-face="room"></span><span class="relay-delay" title="Round-trip time to the live CW relay"><span data-face="delay"></span><span class="meter" aria-hidden="true">${'<i></i>'.repeat(11)}</span></span></div></div>
@@ -46,8 +54,11 @@ export function air(ui) {
     <div class="pitch-control"><div><span class="label">CW pitch</span><output data-face="pitch"></output></div>
     <div class="knob pitch-knob" role="slider" tabindex="0" aria-label="Receive and send tone" aria-valuemin="200" aria-valuemax="2000"></div>
     <div class="tuneops">${button('−','pitch-step','data-step="-50" aria-label="Lower CW pitch by 50 Hz"','mini')}${button('+','pitch-step','data-step="50" aria-label="Raise CW pitch by 50 Hz"','mini')}</div></div>
-    <div class="transmit">${receiving(ui.s)?'':button(Object.keys(ui.s.orders).length?'Equip your station':'Get starter equipment','tab',`data-id="${Object.keys(ui.s.orders).length?'bench':'shop'}"`,'btn')}${button('Input settings','settings','aria-haspopup="dialog"','textbtn')}${button('Radio hiss','hiss',`aria-pressed="${ui.hiss === true}"`,'hiss-toggle')}${button('On-air check','open-check','aria-haspopup="dialog" hidden','textbtn')}</div>
-    <p class="radio-note" data-face="note" role="status"></p></section>${paddleControls}</div>
+    <div class="transmit">${receiving(ui.s)?'':button(Object.keys(ui.s.orders).length?'Equip your station':'Get starter equipment','tab',`data-id="${Object.keys(ui.s.orders).length?'bench':'shop'}"`,'btn')}${button('Input settings','settings','aria-haspopup="dialog"','textbtn')}${button('Radio hiss','hiss',`aria-pressed="${ui.hiss === true}"`,'hiss-toggle')}</div>
+    <p class="radio-note" data-face="note" role="status"></p></section>${paddleControls}</div>`;
+}
+export function air(ui) {
+  return `<div class="radio-layout">${radioConsole(ui)}
     <aside class="card band"><div class="head"><h2>Band activity</h2><small class="tiny">Operators</small></div><div data-band>${activity(ui)}</div></aside></div>
     <div class="secondary-grid"><section class="card beacon-card"><span class="label">Beacon hunt</span><h2>Find Reykjavík</h2>
     <p class="panel-copy">Tune between 7.040–7.049 MHz. Copy RVK’s three-digit code to earn its QSL.</p>${button('Open hunt','hunt','','textbtn')}</section>
@@ -98,7 +109,8 @@ export function shop(ui) {
 }
 export function logbook(ui) {
   const cards=Object.entries(ui.s.cards).sort((a,b)=>b[1].at-a[1].at);
-  return `<div class="head"><h2>Contact log &amp; QSL wall</h2><span class="tiny">${cards.length} collected</span></div>
+  const count=qslCount(ui.s);
+  return `<div class="head"><h2>Contact log &amp; QSL wall</h2><span class="tiny">${fmt(count)} collected · ${count ? fmt(count*QSL_XP)+' XP earned' : QSL_XP+' XP per card'}</span></div>
     ${cards.length ? `<div class="record-grid">${cards.map(([id,c])=>{
       const stamp=new Date(c.at).toISOString();
       return `<article class="card"><div class="ticket ticket-full ${c.beacon?'':'remote'}"><span class="ticket-header">${c.beacon?'BEACON QSL':'TWO-WAY CW'}</span><b>${esc(c.from)}</b><span class="ticket-foot">${frequency(c.f)} MHz · ${c.beacon?'Reykjavík':'To '+esc(ui.call)}</span></div>
@@ -106,23 +118,22 @@ export function logbook(ui) {
         ${button('Play card','play',`data-id="${id}" ${c.audio?'':'disabled'}`,'mini')}${c.beacon?'':c.mine?button('Play my signature','mine',`data-id="${id}"`,'mini'):button('Sign return QSL','sign',`data-id="${id}"`,'mini')}</div></div></article>`;
     }).join('')}</div>` : `<section class="empty"><strong>Your wall is ready for its first card.</strong><p class="panel-copy">Make a two-way contact or copy the Reykjavík beacon.</p>${button('Tune Slow CW','tune',`data-f="${SLOW_CW_CALLING_KHZ}"`)}</section>`}`;
 }
-export function checkPanel(ui) {
-  const done=coverage(ui.p), missing=ui.missing(), next=ui.challenge;
-  return `<section class="card check"><div class="head"><h2 id="shack-check-title">On-air check</h2><span class="tiny">A–Z and 0–9</span></div>
-    <p class="panel-copy">Finish the remaining letters and numbers in practice, or demonstrate them here to transmit on this frequency.</p>
-    <div class="coverage">${['copied','sent'].map(k=>`<label>${k==='copied'?'Copied':'Sent'} · ${done[k].length} / ${alphabet.length}<progress max="36" value="${done[k].length}"></progress></label>`).join('')}</div>
-    ${next ? next.dir==='copied' ? `<form data-check><label>What did you hear? <input name="copy" maxlength="1" autocomplete="off"></label>${button('Hear again','prompt','','mini')}<button class="btn" type="submit">Check</button></form>` :
-      `<p>Send <strong class="challenge-char">${next.ch}</strong> with your practice key.</p>${paddleControls}` : ''}
-    <div class="actions">${next ? button('Pause check','cancel-check','','textbtn') : missing.length ? button('Take on-air check','check','','quiet') : '<strong>Qualified for all station tiers</strong>'}
-    ${button('Practise listening','listen-tab','','textbtn')}${button('Practise sending','send-tab','','textbtn')}</div></section>`;
-}
-
-export function operatorProfile({callsign,xp,lifetimeXP,equipped}) {
+export function operatorProfile({callsign,xp,lifetimeXP,equipped,achievements}) {
+  const trophies = validAchievements(achievements);
   return `<p class="operator-call">${esc(callsign)}</p>
     <div class="operator-xp"><div><span>Current XP</span><strong>${fmt(xp)}</strong></div>
     <div><span>All-time earned XP</span><strong>${fmt(lifetimeXP)}</strong></div></div>
+    ${trophies ? `<dl class="operator-milestones">
+      <div><dt>Listen levels cleared</dt><dd>${achievements.listen}<small> / ${COURSE_LEVELS}</small></dd></div>
+      <div><dt>Send levels cleared</dt><dd>${achievements.send}<small> / ${SENDING_LEVELS}</small></dd></div>
+      <div><dt>QSL cards</dt><dd>${fmt(achievements.qsls)}<small> · ${fmt(achievements.qsls*QSL_XP)} XP</small></dd></div></dl>` : ''}
     <h3>Equipped station</h3><div class="operator-gear">${slots.map((slot,index)=>{
       const item=equipment(equipped?.[index]);
       return `<div><span>${slot}</span>${item ? portrait(item) : ''}<strong>${item ? esc(item.name) : 'Empty slot'}</strong></div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>
+    ${trophies ? `<section class="operator-awards"><h3>Badge cabinet <small>${achievements.badges.length} earned</small></h3>
+      ${achievements.badges.length ? `<ul>${achievements.badges.map(id=>{
+        const badge=operatorBadges.get(id);
+        return `<li><span class="badge-symbol"><svg class="icon" aria-hidden="true"><use href="#i-${badge.icon}"/></svg></span><div><strong>${esc(badge.title)}</strong><small>${esc(badge.description)}</small></div></li>`;
+      }).join('')}</ul>` : '<p class="muted small-copy">Earn badges by practising Listen and Send.</p>'}</section>` : ''}`;
 }

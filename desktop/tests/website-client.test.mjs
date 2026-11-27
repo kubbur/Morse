@@ -91,6 +91,15 @@ test('Stable and Dev isolate the same callsign, private credentials and CW frequ
   assert.equal(station.activity[7025], 1);
   assert.equal((await stable('shack/open', radio)).activity[7025], 1);
   assert.ok((await stable('shack/poll', {token:station.token, f:7025})).status >= 400);
+  const achievements={listen:7,send:2,qsls:2,badges:['send-first']};
+  assert.equal((await dev('scores/achievements',{callsign:'TEST1',generation:1,revision:1,achievements})).status,200);
+  const entry=(await dev('scores/leaderboard')).entries[0];
+  assert.equal(entry.xp,2900);assert.deepEqual(entry.achievements,achievements);
+  assert.equal((await stable('scores/leaderboard')).entries[0].xp,350);
+  assert.equal((await dev('private/erase',{requirePublisher:true})).erased,true);
+  assert.deepEqual((await dev('scores/leaderboard')).entries,[]);
+  assert.equal((await stable('scores/leaderboard')).entries[0].xp,350);
+  assert.equal((await stable('private/status')).connected,true);
 });
 
 test('pairing links and the live feed stay on the installed service during a Dev outage', async () => {

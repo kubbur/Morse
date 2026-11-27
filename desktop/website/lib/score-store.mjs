@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { sanitizeCallsign, dayStreak } from '../public/js/progress.mjs';
 import { validSendingXP } from '../public/js/sending.mjs';
-import { balances, equipmentSnapshot, mergeShack, sanitizeShack } from '../public/js/shack-model.mjs';
+import { balances, equipmentSnapshot, mergeShack, sanitizeShack, QSL_XP } from '../public/js/shack-model.mjs';
 import { SyncError } from './sync-store.mjs';
+import { validAchievements } from '../public/js/operator-achievements.mjs';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => { throw new SyncError(status, message); };
@@ -23,6 +24,8 @@ export class ScoreStore {
     this.store = privateStore;
     privateStore.db.exec(`CREATE TABLE IF NOT EXISTS stations(call TEXT PRIMARY KEY, creator TEXT NOT NULL, owner TEXT, historical INTEGER NOT NULL DEFAULT 0, import_id TEXT);
       CREATE TABLE IF NOT EXISTS shack_stations(call TEXT PRIMARY KEY REFERENCES stations(call) ON DELETE CASCADE, receipts TEXT NOT NULL, spent INTEGER NOT NULL, equipped TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS operator_achievements(call TEXT PRIMARY KEY REFERENCES stations(call) ON DELETE CASCADE, summary TEXT NOT NULL, qsl_cards INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS qsl_receipts(call TEXT NOT NULL REFERENCES stations(call) ON DELETE CASCADE, receipt TEXT NOT NULL, PRIMARY KEY(call,receipt));
       CREATE TABLE IF NOT EXISTS historical_receipts(id TEXT PRIMARY KEY, call TEXT UNIQUE NOT NULL, xp INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS original_days(call TEXT PRIMARY KEY, days TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS publishers(key TEXT PRIMARY KEY, gen INTEGER NOT NULL, enabled INTEGER NOT NULL, call TEXT NOT NULL);
@@ -69,7 +72,8 @@ export class ScoreStore {
     const ledger = () => station ? s.get('SELECT historical + (SELECT coalesce(sum(xp),0) FROM score_results WHERE call=?) AS xp FROM stations WHERE call=?', call, call).xp : 0;
     const covered = () => Object.fromEntries(Object.keys(body.marks || {}).map(id =>
       [id,s.get('SELECT amount FROM score_counters WHERE call=? AND stream=?',call,id)?.amount || 0]));
-    const status = () => ({ revision, visible: listing ? !!listing.visible : null, xp: Math.max(listing?.best || 0, ledger()), ...(listing?.absolute_only ? {absoluteOnly:true} : {}) });
+    const cards = s.get('SELECT qsl_cards FROM operator_achievements WHERE call=?',call)?.qsl_cards || 0;
+    const status = () => ({ revision, visible: listing ? !!listing.visible : null, xp: Math.max(listing?.best || 0, ledger()), ...(cards ? {qslCards:cards} : {}), ...(listing?.absolute_only ? {absoluteOnly:true} : {}) });
     if (action === 'listing') {
       if (!exact(body,['callsign'])) fail(400, 'Invalid listing request.');
       const saved=s.get('SELECT receipts FROM shack_stations WHERE call=?',call);
@@ -155,7 +159,7 @@ export class ScoreStore {
       best = Math.min(1e9,Math.max(best + (absoluteOnly ? 0 : body.activity ? newPractice : Math.min(earned,newXP)), total, ledger()));
       s.run('UPDATE score_listings SET best=?,absolute_only=? WHERE call=?',best,+absoluteOnly,call);
     }
-    return { revision:nextRevision, visible, xp:Math.max(best,ledger()), ...(absoluteOnly ? {absoluteOnly:true} : {}), ...(visible ? {covered:covered()} : {}),
+    return { revision:nextRevision, visible, xp:Math.max(best,ledger()), ...(cards ? {qslCards:cards} : {}), ...(absoluteOnly ? {absoluteOnly:true} : {}), ...(visible ? {covered:covered()} : {}),
       ...(!toggle ? {acknowledged:body.results.map(r=>r.id)} : {}) };
   }
   request(action, token, privateToken, body) {
@@ -163,26 +167,25 @@ export class ScoreStore {
     return s.transaction(() => {
       const key = token && digest(token), publisher = key && s.get('SELECT * FROM publishers WHERE key=?', key);
       if (action === 'leaderboard') {
-        const rows = s.all(`SELECT scores.callsign, scores.earned, g.equipped,
+        const rows = s.all(`SELECT scores.callsign, scores.earned, g.equipped, scores.summary,
           max(0,scores.earned-coalesce(g.spent,0)) AS xp FROM (
-            SELECT s.call AS callsign, max(coalesce(l.best,0),s.historical+coalesce(sum(r.xp),0)) AS earned
+            SELECT s.call AS callsign, a.summary, min(1000000000,max(coalesce(l.best,0),s.historical+coalesce(sum(r.xp),0))+coalesce(a.qsl_cards,0)*${QSL_XP}) AS earned
             FROM stations s LEFT JOIN score_listings l ON l.call=s.call LEFT JOIN score_results r ON r.call=s.call
+            LEFT JOIN operator_achievements a ON a.call=s.call
             WHERE coalesce(l.visible,1)=1 GROUP BY s.call
           ) scores LEFT JOIN shack_stations g ON g.call=scores.callsign ORDER BY xp DESC,scores.callsign`);
-        const entries = rows.map(({callsign,xp,equipped,earned}, i) => {
+        const entries = rows.map(({callsign,xp,equipped,earned,summary}, i) => {
           const row={callsign,xp,...(equipped ? {lifetimeXP:earned,equipped:JSON.parse(equipped)} : {})};
           const days = Object.fromEntries(s.all('SELECT DISTINCT day FROM score_results WHERE call=? ORDER BY day DESC LIMIT 366', row.callsign).map(r => [r.day,1]));
           const legacy=s.get('SELECT days FROM original_days WHERE call=?',row.callsign);
-          return { ...row, rank: i + 1, streak: dayStreak({ days:{...(legacy?JSON.parse(legacy.days):{}),...days} }, new Date(s.now())) };
+          return { ...row, ...(summary ? {achievements:JSON.parse(summary)} : {}), rank: i + 1, streak: dayStreak({ days:{...(legacy?JSON.parse(legacy.days):{}),...days} }, new Date(s.now())) };
         });
         return { entries: entries.slice(0,50), me: entries.find(e => e.callsign === publisher?.call) || null };
       }
       if (!key) fail(401, 'Publisher credential required.');
       if (s.get('SELECT key FROM revoked_publishers WHERE key=?',key)) fail(403,'This device was revoked.');
-      if (action === 'station') {
-        const {callsign,generation,revision,station}=body;
-        if (!exact(body,['callsign','generation','revision','station']) || !station || !exact(station,['converted','orders','equipped','sold','soldAt']))
-          fail(400,'Invalid station equipment.');
+      if (action === 'station' || action === 'achievements') {
+        const {callsign,generation,revision,station,achievements}=body;
         const owner=s.get('SELECT creator,owner FROM stations WHERE call=?',callsign);
         if (!owner || (owner.creator!==key && (!owner.owner || s.device(privateToken)?.save_id!==owner.owner)))
           fail(403,'This publisher cannot update the station.');
@@ -190,6 +193,20 @@ export class ScoreStore {
         if (!publisher?.enabled || publisher.gen!==generation || publisher.call!==callsign ||
             revision!==(listing?.revision || 0) || listing && !listing.visible)
           fail(409,'Leaderboard visibility changed.');
+        if (action === 'achievements') {
+          if (!exact(body,['callsign','generation','revision','achievements','qslReceipts']) || !validAchievements(achievements))
+            fail(400,'Invalid operator achievements.');
+          const receipts = body.qslReceipts ?? [];
+          if (!Array.isArray(receipts) || receipts.length > Math.min(64,achievements.qsls) || new Set(receipts).size !== receipts.length ||
+              receipts.some(id=>typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))) fail(400,'Invalid QSL card receipts.');
+          for (const id of receipts) s.run('INSERT OR IGNORE INTO qsl_receipts VALUES(?,?)',callsign,id);
+          const collected = s.get('SELECT count(*) n FROM qsl_receipts WHERE call=?',callsign).n;
+          const cards = Math.max(achievements.qsls,collected,s.get('SELECT qsl_cards FROM operator_achievements WHERE call=?',callsign)?.qsl_cards || 0);
+          s.run('INSERT OR REPLACE INTO operator_achievements VALUES(?,?,?)',callsign,JSON.stringify({...achievements,qsls:cards}),cards);
+          return {achievements,qslCards:cards,...(receipts.length ? {qslReceipts:receipts} : {})};
+        }
+        if (!exact(body,['callsign','generation','revision','station']) || !station || !exact(station,['converted','orders','equipped','sold','soldAt']))
+          fail(400,'Invalid station equipment.');
         const incoming=equipmentSnapshot(sanitizeShack(station));
         if (!incoming) fail(400,'Missing equipment receipts.');
         const previous=s.get('SELECT receipts FROM shack_stations WHERE call=?',callsign);

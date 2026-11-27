@@ -11,6 +11,10 @@ const originalTiers = [
   ['Dream', [10000, 60000, 30000], ['Hand-finished paddle', 'Flagship transceiver', 'Tower-mounted array']],
 ];
 export const SHACK_UNLOCK_XP = 5000;
+export const QSL_XP = 100;
+const validCardId = id => typeof id === 'string' && /^[\w-]{1,80}$/.test(id) && !Object.hasOwn(Object.prototype,id);
+export const qslCount = shack => shack?.qslReceipts?.length ?? Object.keys(shack?.cards || {}).length;
+export const localLifetimeXP = p => Math.min(1e9,p.stats.xp + QSL_XP * qslCount(p.shack));
 export const shackUnlocked = lifetime => Number.isSafeInteger(lifetime) && lifetime >= SHACK_UNLOCK_XP && lifetime <= 1e9;
 const originalStarterPrice = originalTiers[0][1].reduce((sum, price) => sum + price, 0);
 export const tiers = originalTiers.map(([name, prices, labels]) => [
@@ -31,7 +35,6 @@ export const speedGroups = [
 export const speedGroup = f => Number.isInteger(f) ? speedGroups.find(group=>Math.abs(f-group.calling)<=2) : undefined;
 export const limitWpm = (group,wpm) => Math.min(group.max,Math.max(group.min,wpm));
 export const paceLabel = group => (group.max===80 ? group.min+'+' : group.min+'–'+group.max)+' WPM';
-export const needsQualification = f => speedGroup(f)?.tier !== 0;
 export const frequency = f => (f / 1000).toFixed(3);
 export const validFrequency = f => Number.isInteger(f) && f >= 7020 && f <= 7050;
 export const badgePrice = id => id === 'send-first' ? 35 : id === 'send-ten' ? 75 : 25;
@@ -82,7 +85,12 @@ export function sanitizeShack(raw = {}) {
     if (!time(selection?.at)) return null;
     return { id: state.orders[selection.id] && catalog.get(selection.id)?.slot === slot ? selection.id : '', at: selection.at };
   });
-  for (const [id, c] of entries(raw?.cards).filter(([id,c]) => /^[\w-]{1,80}$/.test(id) && c && time(c.at) && call(c.from) && validFrequency(c.f)).sort((a,b)=>b[1].at-a[1].at || a[0].localeCompare(b[0])).slice(0,80)) {
+  const cards = entries(raw?.cards).filter(([id,c]) => validCardId(id) && c && time(c.at) && call(c.from) && validFrequency(c.f));
+  // Keep one small receipt per card even after its recording rolls off the logbook.
+  const receipts = new Set(Array.isArray(raw?.qslReceipts) ? raw.qslReceipts.filter(validCardId) : []);
+  for (const [id] of cards) receipts.add(id);
+  if (receipts.size) state.qslReceipts = [...receipts].sort();
+  for (const [id, c] of cards.sort((a,b)=>b[1].at-a[1].at || a[0].localeCompare(b[0])).slice(0,80)) {
     state.cards[id] = { at:c.at, from:c.from, f:c.f, beacon:c.beacon === true,
       ...(validRhythm(c.audio) ? {audio:c.audio} : {}), ...(validRhythm(c.mine) ? {mine:c.mine} : {}) };
   }
@@ -102,7 +110,7 @@ export function mergeShack(a,b) {
   for (const id of right.sold) soldAt[id] = left.sold.includes(id)
     ? Math.min(left.soldAt[id] || 0,right.soldAt[id] || 0) : right.soldAt[id];
   return sanitizeShack({ converted:Math.max(left.converted,right.converted), sold:[...left.sold,...right.sold], soldAt, orders,equipped,cards,
-    copied:left.copied+right.copied, sent:left.sent+right.sent });
+    qslReceipts:[...(left.qslReceipts || []),...(right.qslReceipts || [])], copied:left.copied+right.copied, sent:left.sent+right.sent });
 }
 export function highestPrice(s,slot) {
   return Math.max(0,...items.filter(i => i.slot === slot && s.orders[i.id]).map(i => i.price));
@@ -161,8 +169,8 @@ export function certify(p) {
   p.stats.xp = Math.min(1e9, p.stats.xp + 300);
   return true;
 }
-export function canTransmit(f, value, passed) {
-  return validFrequency(f) && value>=minimumStation(f) && (passed || !needsQualification(f));
+export function canTransmit(f, value) {
+  return validFrequency(f) && value>=minimumStation(f);
 }
 export function hunt(date = new Date()) {
   const day = date.toISOString().slice(0,10), seed = Math.floor(Date.parse(day)/86400000);

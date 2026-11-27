@@ -1,3 +1,4 @@
+import { localLifetimeXP } from "../public/js/shack-model.mjs";
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { syncProfile, mergeProgress } from '../public/js/sync-data.mjs';
@@ -92,7 +93,7 @@ export class SyncStore {
     const incoming = this.get('SELECT code, expires FROM invites WHERE claimant = ?', device.id);
     if (outgoing) {
       const claim = outgoing.claimant ? this.get('SELECT * FROM devices WHERE id = ?', outgoing.claimant) : null;
-      result.invite = { expiresAt: outgoing.expires, ...(claim ? { claim: claim.id, label: claim.label, xp: JSON.parse(this.save(claim).profile).stats.xp, code: outgoing.code } : {}) };
+      result.invite = { expiresAt: outgoing.expires, ...(claim ? { claim: claim.id, label: claim.label, xp: localLifetimeXP(JSON.parse(this.save(claim).profile)), code: outgoing.code } : {}) };
     }
     if (incoming) result.waiting = { code: incoming.code, expiresAt: incoming.expires };
     return result;

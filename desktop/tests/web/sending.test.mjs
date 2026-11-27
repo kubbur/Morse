@@ -344,6 +344,37 @@ test('standard letter boundaries remain readable with a slower Farnsworth spacin
   assert.equal(grade.decoded, 'EE'); assert.match(grade.issue, /Letter gap too short/);
 });
 
+test('a readable 495 ms letter gap at 10 WPM counts as clean and still measures its actual precision',()=>{
+  const stage=sendingStage(43);
+  const send=(gap,wpm=10,keyerTimed=true,target='EE')=>{
+    const dit=1200/wpm;
+    const times=[0,dit,dit+gap,2*dit+gap];
+    return gradeSending(times.map((at,i)=>({down:i%2===0,at})),target,{wpm,farnsworth:wpm},stage,{keyerTimed});
+  };
+  const sample=send(495);
+  assert.equal(sample.decoded,'EE');assert.equal(sample.passed,true);assert.equal(sample.quality,70);
+  assert.equal(sample.precision,63);
+  for(const mode of [true,false]) for(const gap of [240,360,495,564]) assert.ok(send(gap,10,mode).passed);
+  assert.equal(send(239).correct,false);
+  assert.equal(send(565).passed,false);
+  assert.equal(send(600).decoded,'E E');
+  assert.equal(send(600).passed,false);
+  assert.equal(send(495,10,true,'E E').passed,false);
+  assert.equal(send(840,10,true,'E E').passed,true);
+  assert.equal(send(520,10,true,'E E').passed,false);
+  assert.equal(send(280,20).passed,false);
+  assert.equal(send(365,15).passed,false);
+  assert.equal(send(350,15).passed,true);
+  assert.equal(send(1100,5).passed,true);
+  const progress=emptySending();progress.level=43;
+  const slow={wpm:10,farnsworth:10};
+  const exercise=edgesFor('EL',slow).map((edge,i)=>({...edge,at:edge.at+(i>=2 ? 135 : 0)}));
+  const grade=gradeSending(exercise,'EL',slow,stage,{keyerTimed:true});
+  assert.ok(grade.passed);
+  recordSending(progress,'EL',grade);
+  assert.equal(progress.records[43].history.at(-1),true);
+});
+
 test('readable but mistimed marks receive specific feedback without passing mastery', () => {
   const grade = gradeSending([{ down: true, at: 0 }, { down: false, at: 190 }], 'T', settings, sendingStage(197));
   assert.equal(grade.correct, true); assert.equal(grade.passed, false); assert.match(grade.issue, /Dash too long/);

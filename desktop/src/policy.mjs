@@ -38,9 +38,11 @@ export function allowedPermission(permission, requestingOrigin, documentUrl) {
   return ['screen-wake-lock', 'persistent-storage'].includes(permission);
 }
 
-export function progressExport(value) {
+export function progressExport(value, filename) {
   try {
     const url = new URL(value);
-    return url.protocol === 'blob:' && url.origin === APP_ORIGIN;
+    return url.protocol === 'blob:' && url.origin === APP_ORIGIN &&
+      (/^morse-progress-[\d-]+\.json$/.test(filename) ||
+       /^Morse(?:-Dev)?-recovery-(?:[A-Z0-9-]{2,16}|no-callsign)-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ\.txt$/.test(filename));
   } catch { return false; }
 }

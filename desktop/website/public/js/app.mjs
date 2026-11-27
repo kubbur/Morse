@@ -1,8 +1,9 @@
 import { pairedProgress } from './initial-merge.mjs';
 import { devOrigin, invitationFromLink, serviceOrigin } from './service-origin.mjs';
 import { ShackUI } from './shack-ui.mjs';
-import { balances, certify, SHACK_UNLOCK_XP, shackUnlocked } from './shack-model.mjs';
+import { balances, certify, localLifetimeXP, SHACK_UNLOCK_XP, shackUnlocked } from './shack-model.mjs';
 import { operatorProfile } from './shack-views.mjs';
+import { operatorAchievements } from './operator-achievements.mjs';
 import { drawGear } from './shack-gear.mjs';
 import { syncProfile, mergeProgress } from './sync-data.mjs';
 import { MORSE, PROSIGNS, patternFor, LETTERS, DIGITS, PUNCTUATION, KOCH, envelopeAt, gradeAnswer, normalizeText, supportedCharacters } from './morse.mjs';
@@ -105,6 +106,8 @@ let pairingInvitation = /^#pair=([A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1] |
 let pairingOffer = null;
 let pairingDevicesKey = '';
 let recoveryBusy = false, recoveryGeneration = 0;
+let recoveryPrompt = false, issuedRecovery = null;
+let leavingErasedLearner = false;
 let identityDirty = false;
 let leaderboardLoading = false;
 let leaderboardRefreshDue = false;
@@ -414,14 +417,17 @@ function completeListening(p, options) {
 }
 
 function persist() {
+  if (leavingErasedLearner) return false;
+  const before = storage.committed;
   const success = saveState(storage, state, cookie => { document.cookie = cookie; }, location.protocol === 'https:');
   updateShackTab();
   if (!success) {
     $('saved-status').textContent = 'Not saved — export to keep your progress';
     $('storage-warning').textContent = 'Local storage is unavailable or full. Export your progress from Saved progress before leaving.';
     $('storage-warning').hidden = false;
+    if (deviceSync) renderSyncIndicator(deviceSync.status);
   }
-  if (success) deviceSync?.changed();
+  if (success) deviceSync?.changed(before !== storage.committed);
   return success;
 }
 
@@ -1192,7 +1198,7 @@ function showOperator(entry) {
   const own=!entry, p=profile();
   $('operator-profile-title').textContent=own ? 'My profile' : 'Operator profile';
   const details=entry || {callsign:p.callsign || shack.call,xp:governingXP(p),lifetimeXP:storage.scoreTotal(p),
-    equipped:p.shack?.equipped.map(slot=>slot?.id || null)};
+    equipped:p.shack?.equipped.map(slot=>slot?.id || null),achievements:{...operatorAchievements(p),qsls:storage.qslCards(p)}};
   $('operator-profile-body').innerHTML=operatorProfile({...details,lifetimeXP:details.lifetimeXP ?? details.xp});
   $('operator-profile-body').querySelectorAll('[data-portrait]').forEach(drawGear);
   openDialog('operator-profile-dialog');
@@ -1250,7 +1256,7 @@ function renderSavedProgress() {
   $('earlier-saves').hidden = !older.length;
   $('earlier-exports').replaceChildren(...older.map(saved => {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'text-button';
-    button.textContent = `Export ${saved.callsign || saved.name} · ${saved.stats.xp.toLocaleString()} XP`;
+    button.textContent = `Export ${saved.callsign || saved.name} · ${localLifetimeXP(saved).toLocaleString()} XP`;
     button.onclick = () => exportLearner(saved); return button;
   }));
   $('storage-note').textContent = window.morseMac ? 'Your progress is saved on this Mac. Export a copy to keep it elsewhere.' :
@@ -1258,9 +1264,9 @@ function renderSavedProgress() {
   const row = storage.row(p.id);
   const legacy = !!(p.callsign && p.leaderboard && !row.listings);
   $('use-total-xp').hidden = !legacy;
-  $('use-total-xp').textContent = 'Show my total of ' + p.stats.xp.toLocaleString() + ' XP';
+  $('use-total-xp').textContent = 'Show my total of ' + storage.scoreTotal(p).toLocaleString() + ' XP';
   $('callsign-help').textContent = legacy ? 'Your earlier choice shares new scores only. Choose below to include all earlier XP, or uncheck to hide your callsign.' :
-    'Showing your callsign includes earlier Listen and Send XP. Unchecking hides your station when connected.';
+    'Your shared profile shows XP, equipped gear, badges, QSL card count and levels cleared. Unchecking hides it when connected.';
   renderListingStatus();
   const held = row.listings ? [] : row.previousScores || [];
   $('previous-results').hidden = !held.length;
@@ -1325,36 +1331,37 @@ async function refreshLeaderboard(force = false) {
   }
 }
 
-function clearMorseData() {
+function clearMorseData(id) {
+  const active = state.activeId === id;
+  const others = state.profiles.filter(p => p.id !== id);
+  const next = active ? newState() : {...state,profiles:[]};
+  next.profiles.push(...others);
+  storage.eraseLearner(id, next);
+  learnerStations.get(id)?.dispose();
+  learnerStations.delete(id);
+  state = next;
+  if (!active) { renderSavedProgress(); return; }
+  leavingErasedLearner = true;
+  try { storage.setItem(CALLSIGN_INTRO_KEY,'pending'); } catch { /* The fresh learner can still open. */ }
+  document.cookie = `morse_learner=${next.activeId}; Path=/; Max-Age=31536000; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`;
   if (shack?.active) shack.leave();
-  stopPlayback({ save: false });
-  sender?.connection.disconnect();
-  sender?.pause();
-  audio.release();
-  cancelImport(); cancelProgressReset(); cancelAnswerFocus();
-  guidanceContext = null;
-  restorePracticeWorkspace();
-  $$('dialog').filter(d => d.open).forEach(closeNativeDialog);
-  const keys = Array.from({ length: storage.length }, (_, i) => storage.key(i)).filter(k => k?.startsWith('morse.'));
-  for (const key of keys) storage.removeItem(key);
-  document.cookie = `morse_learner=; Path=/; Max-Age=0; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`;
-  state = newState();
-  identityDirty = false; pairingInvitation = null; pairingOffer = null;
-  callsignIntroPending = true; callsignIntroBusy = false;
-  rememberCallsignIntro();
-  $('intro-callsign').value = ''; $('intro-callsign-message').textContent = '';
-  $('intro-callsign').removeAttribute('aria-invalid');
-  $('learner-callsign').value = ''; $('list-on-leaderboard').checked = false;
-  $('pair-offer').hidden = true; $('pair-qr').replaceChildren(); $('pair-link').value = '';
-  publicOperators.clear(); $('leaderboard-rows').replaceChildren(); $('leaderboard-me').textContent = ''; leaderboardUpdated = 0;
-  $('delete-data-confirmation').hidden = true;
-  composing = false;
-  view = 'practice'; history.replaceState(null, '', '#practice');
-  render(); persist();
-  showLessonGuidance();
+  history.replaceState(null, '', '#practice');
+  location.reload();
+}
+
+function renderSyncIndicator(status) {
+  const button = $('open-progress');
+  const linked = status.connected || !!storage.row().private;
+  const synced = linked && service.privateSync && navigator.onLine !== false && !storage.failed && status.synced && !status.error && !status.waiting;
+  if (linked) button.dataset.sync = synced ? 'synced' : 'pending';
+  else delete button.dataset.sync;
+  const label = linked ? 'Saved progress · ' + (synced ? 'Private progress synced' : 'Private progress not synced') : 'Saved progress';
+  button.setAttribute('aria-label',label);
+  button.title = label;
 }
 
 function renderDeviceSync(status) {
+  renderSyncIndicator(status);
   const available = service.privateSync;
   const linkUnavailable = !available && (status.connected || !!deviceSync?.meta());
   $('private-sync').hidden = !available && !linkUnavailable;
@@ -1364,9 +1371,12 @@ function renderDeviceSync(status) {
   $('station-recovery').disabled = !linked || recoveryBusy;
   $('pair-entry').hidden = !available;
   $('pair-devices').textContent = linked ? 'Pair another device' : 'Enable private sync';
-  $('recovery-help').textContent = status.waiting ? 'Approve the pairing on your other device before generating a recovery code.' : linked ? 'Generate a code here and store it somewhere private. Generating a new code replaces the previous one.' :
-    'Choose Enable private sync on the device that holds your progress, then choose Generate recovery code.';
-  if (!linked) { $('recovery-issued').hidden = true; $('recovery-output').textContent = ''; }
+  const prompt = linked && recoveryPrompt;
+  $('recovery-settings').classList.toggle('is-prompt',prompt);
+  $('recovery-later').hidden = !prompt;
+  $('recovery-heading').textContent = prompt ? 'Save a recovery code' : 'Recovery code';
+  $('recovery-help').textContent = status.waiting ? 'Approve the pairing on your other device before generating a recovery code.' : prompt ? 'Private sync is enabled. Generate a code and save it somewhere private so you can restore your progress. A new code replaces any earlier one.' : linked ? 'Generating a new code replaces your previous one.' : 'Enable private sync to generate a recovery code.';
+  if (!linked) clearRecoveryCode();
   let description;
   if (linkUnavailable) description = 'Morse will check again when the website is available.';
   else if (linked && status.localPlaybackOnly) description = 'Your sending pause and “Wait for E” preference are currently saved on this device.';
@@ -1391,7 +1401,7 @@ function renderDeviceSync(status) {
   if (claim) {
     $('pair-request-title').textContent = `${status.invite.label} wants to connect`;
     $('pair-approval-code').textContent = status.invite.code;
-    const mine = profile().stats.xp, theirs = status.invite.xp;
+    const mine = localLifetimeXP(profile()), theirs = status.invite.xp;
     $('pair-score-choice').textContent = `This device has ${mine} XP. The other has ${theirs} XP. Both original profiles are retained. New work is combined. Old counters without result IDs can overlap.`;
   }
   if (pairingOffer && (!status.invite || status.invite.expiresAt <= Date.now())) {
@@ -2127,15 +2137,18 @@ $('export-progress').addEventListener('click', () => exportLearner(profile()));
 function exportLearner(learner) {
   persist();
   const blob = new Blob([JSON.stringify({ ...state, activeId: learner.id, profiles: [learner], exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+  downloadBlob(blob, `morse-progress-${localDay()}.json`);
+  $('progress-message').textContent = 'Progress exported. Keep the file to restore or move your progress.';
+}
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `morse-progress-${localDay()}.json`;
+  anchor.download = filename;
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  $('progress-message').textContent = 'Progress exported. Keep the file to restore or move your progress.';
 }
 $('import-progress').addEventListener('click', () => $('import-file').click());
 $('guidance-continue').addEventListener('click', continueLessonGuidance);
@@ -2168,7 +2181,7 @@ function previewImportedLearner() {
   const incoming = pendingImport.profiles.find(p => p.id === $('import-learner').value);
   if (!incoming) return;
   pendingImport.activeId = incoming.id;
-  $('import-summary').textContent = `Listening level ${levelNumber(incoming.settings)} · Sending level ${incoming.sending.level} · ${incoming.stats.xp.toLocaleString()} XP`;
+  $('import-summary').textContent = `Listening level ${levelNumber(incoming.settings)} · Sending level ${incoming.sending.level} · ${localLifetimeXP(incoming).toLocaleString()} XP`;
 }
 $('import-learner').addEventListener('change', previewImportedLearner);
 $('import-file').addEventListener('change', async event => {
@@ -2186,7 +2199,7 @@ $('import-file').addEventListener('change', async event => {
     if (generation !== importGeneration || controller.signal.aborted || !$('progress-dialog').open) return;
     pendingImport = imported;
     $('import-selection').hidden = imported.profiles.length < 2;
-    $('import-learner').replaceChildren(...imported.profiles.map(p => new Option(`${p.callsign || p.name} · ${p.stats.xp} XP`, p.id)));
+    $('import-learner').replaceChildren(...imported.profiles.map(p => new Option(`${p.callsign || p.name} · ${localLifetimeXP(p)} XP`, p.id)));
     $('import-learner').value = imported.activeId;
     previewImportedLearner();
     $('import-confirmation').hidden = false;
@@ -2306,7 +2319,7 @@ window.addEventListener('storage', event => {
     if (window.morseMac) return;
     const updated = importState(storage.external(event.newValue), { newSessionOwner: false });
     const current = profile(), incoming = updated.profiles.find(p => p.id === updated.activeId);
-    if (updated.activeId !== current.id) { location.reload(); return; }
+    if (updated.activeId !== current.id) { leavingErasedLearner = true; location.reload(); return; }
     if (incoming?.id === current.id) incoming.sessionId = incoming.stats.sessions.some(row => row.id === current.sessionId) ? current.sessionId : '';
     cancelImport();
     cancelProgressReset();
@@ -2317,6 +2330,7 @@ window.addEventListener('storage', event => {
     closeNativeDialog($('guidance-dialog'));
     state = updated;
     resumeStations();
+    deviceSync?.changed();
     render();
     showLessonGuidance();
     announce('Progress updated from another tab.');
@@ -2368,7 +2382,7 @@ shack = new ShackUI({root:$('shack-station'), profile, xp:p=>storage.scoreTotal(
   openInputs:showShackInputs, openProfile:()=>showOperator(),
   badges:p=>[...collectedBadges(p),...earnedSendBadges(p.sending)],
   exchange:(action,body)=>stationFor(profile().id).exchange('shack/'+action,body),
-  award:() => { if (certify(profile())) { persist(); announce('On-air check complete · 300 XP'); } }
+  award:() => { if (certify(profile())) { persist(); announce('A–Z and 0–9 copied and sent · 300 XP'); } }
 });
 render();
 function stationFor(id) {
@@ -2393,7 +2407,7 @@ function stationFor(id) {
       if (view === 'journey') { renderJourney(); void refreshLeaderboard(true); }
       if ($('progress-dialog').open) renderSavedProgress();
     },
-    onErased: () => { if (state.activeId === id) clearMorseData(); },
+    onErased: () => clearMorseData(id),
   });
   learnerStations.set(id,station);
   return station;
@@ -2470,23 +2484,42 @@ $('save-callsign').addEventListener('click', event => pairingAction(event.curren
 $('refresh-leaderboard').addEventListener('click', () => refreshLeaderboard(true));
 $('delete-all-data').addEventListener('click', () => {
   cancelImport(); cancelProgressReset();
+  $('delete-data-message').textContent = '';
   $('delete-data-confirmation').hidden = false;
   $('cancel-delete-data').focus({ preventScroll: true });
 });
 $('cancel-delete-data').addEventListener('click', () => { $('delete-data-confirmation').hidden = true; $('delete-all-data').focus({ preventScroll: true }); });
-$('confirm-delete-data').addEventListener('click', event => pairingAction(event.currentTarget, async () => {
-  try { await deviceSync.erase(); }
-  catch (error) { throw new Error(navigator.onLine === false ? 'Reconnect to delete the shared save from all devices. Your data has been kept.' : error.message); }
-}));
+$('confirm-delete-data').addEventListener('click', async event => {
+  const button = event.currentTarget, station = deviceSync;
+  button.disabled = true;
+  $('cancel-delete-data').disabled = true;
+  $('delete-data-message').textContent = 'Deleting your data…';
+  try {
+    const row = storage.row();
+    const legacy = !mac && storage.storage.getItem('morse.devices.v1');
+    let legacyEpoch;
+    if (legacy) { try { legacyEpoch = JSON.parse(legacy)?.epoch; } catch { /* A linked V2 device can still authorize erasure. */ } }
+    const requirePrivate = !!(row.private || row.hadPrivateBackup || legacy);
+    const requirePublisher = Object.values(row.listings || {}).some(listing=>listing.revision>0) || row.choiceSet && profile().leaderboard;
+    if (mac?.syncMode === 'offline' && !requirePrivate && !requirePublisher) clearMorseData(profile().id);
+    else await station.erase({requirePrivate,requirePublisher,...(legacyEpoch ? {legacyEpoch} : {})});
+  } catch (error) {
+    $('delete-data-message').textContent = navigator.onLine === false ? 'Reconnect to delete your online backups. Your local progress is still available.' : error.message || 'Deletion could not be confirmed. Try again.';
+  } finally { button.disabled = false; $('cancel-delete-data').disabled = false; }
+});
 $('pair-devices').addEventListener('click', event => pairingAction(event.currentTarget, async () => {
   const invite = deviceSync.status.connected;
-  if (!mac && !invite && await adoptWebsiteProfile()) return;
-  const result = await deviceSync.start(deviceLabel(), { invite });
+  const dialogGeneration = recoveryGeneration;
+  const adopted = !mac && !invite && await adoptWebsiteProfile();
+  const result = adopted ? await deviceSync.flush() : await deviceSync.start(deviceLabel(), { invite });
   if (!invite) {
+    if (dialogGeneration !== recoveryGeneration || !$('progress-dialog').open || !deviceSync.status.connected) return;
+    recoveryPrompt = true;
     renderDeviceSync(deviceSync.status);
-    $('station-recovery').focus();
+    $('recovery-heading').focus();
     return;
   }
+  if (!result?.invitation || !deviceSync.status.connected) return;
   pairingOffer = result.invitation;
   const link = `${websiteOrigin}/#pair=${pairingOffer}`;
   $('pair-link').value = link; showPairQr(link);
@@ -2567,18 +2600,41 @@ $('station-recovery').onclick=async e=>{
   if (recoveryBusy || !deviceSync.status.connected || deviceSync.status.waiting || !service.privateSync) return;
   const generation = ++recoveryGeneration, id = profile().id;
   recoveryBusy = true; e.currentTarget.disabled = true;
-  $('pair-message').textContent = ''; $('recovery-issued').hidden = true; $('recovery-output').textContent = '';
+  $('pair-message').textContent = ''; clearRecoveryCode();
   try {
     const { code } = await deviceSync.request('recovery-code');
     if (generation === recoveryGeneration && profile().id === id && deviceSync.status.connected && !deviceSync.status.waiting && $('progress-dialog').open) {
+      if (!/^[A-Za-z0-9_-]{32}$/.test(code)) throw Error('The website did not return a recovery code. Try again.');
+      issuedRecovery = {code, callsign:profile().callsign, date:new Date()};
+      recoveryPrompt = false;
       $('recovery-output').textContent = code; $('recovery-issued').hidden = false;
+      $('download-recovery').focus();
     }
   } catch (error) { if (generation === recoveryGeneration) $('pair-message').textContent = error.message; }
   finally { recoveryBusy = false; renderDeviceSync(deviceSync.status); }
 };
+function clearRecoveryCode() {
+  issuedRecovery = null;
+  $('recovery-issued').hidden = true;
+  $('recovery-output').textContent = '';
+}
+$('recovery-later').onclick = () => {
+  recoveryPrompt = false;
+  renderDeviceSync(deviceSync.status);
+  $('station-recovery').focus();
+};
+$('download-recovery').onclick = () => {
+  if (!issuedRecovery) return;
+  const {code, callsign, date} = issuedRecovery;
+  const app = websiteOrigin === devOrigin || mac?.buildChannel === 'dev' ? 'Morse-Dev' : 'Morse';
+  const stamp = date.toISOString().split('.')[0].replaceAll(':','-') + 'Z';
+  const filename = `${app}-recovery-${callsign?.replaceAll('/','-') || 'no-callsign'}-${stamp}.txt`;
+  const contents = [app.replace('-', ' ')+' recovery code', 'Callsign: '+(callsign || 'No callsign'), 'Created: '+date.toISOString(), 'Website: '+websiteOrigin, '', code, '', 'Open Saved progress on a new device and enter this code to restore your private progress.', 'Keep this file private.', ''].join('\n');
+  downloadBlob(new Blob([contents],{type:'text/plain;charset=utf-8'}),filename);
+};
 $('progress-dialog').addEventListener('close',()=>{
-  recoveryGeneration++; pendingRecovery=null; $('recovery-replacement').hidden=true;
-  $('recovery-issued').hidden=true; $('recovery-output').textContent=''; $('station-code').value=''; $('publish-history').hidden=true;
+  recoveryGeneration++; recoveryPrompt=false; pendingRecovery=null; $('recovery-replacement').hidden=true;
+  clearRecoveryCode(); $('station-code').value=''; $('publish-history').hidden=true;
 });
 for (const [button,publish] of [['share-previous-results',true],['keep-previous-results',false]]) {
   $(button).onclick = () => { storage.decidePreviousScores(profile(),publish); deviceSync.changed(); renderSavedProgress(); };
@@ -2599,6 +2655,10 @@ $('publish-history').onclick=()=>{
   deviceSync.changed(); renderSavedProgress();
 };
 $('keep-history').onclick=()=>{storage.atomic(()=>{storage.row().history.decision='private';}); renderSavedProgress();};
+window.addEventListener('offline', () => {
+  if (deviceSync?.status.connected) deviceSync.report({message:'Waiting for connection',error:true});
+  else if (deviceSync) renderSyncIndicator(deviceSync.status);
+});
 window.addEventListener('online', () => { void refreshService(); resumeStations(); });
 window.addEventListener('focus', refreshService);
 window.addEventListener('focus', () => { if (deviceSync.meta()) deviceSync.schedule(0); });

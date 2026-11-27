@@ -148,7 +148,7 @@ export class ShackBand {
         fail(400,'Invalid station.');
       if (this.sessions.size >= 120) fail(503,'The band is full. Try again shortly.');
       const token = randomBytes(32).toString('base64url'), id = randomUUID();
-      const s = { id, call:body.call, f:body.f, value, keyed, live:body.live===true, keySeq:0, passed:body.qualified === true, seen:now, seq:0, last:null, window:now, count:0 };
+      const s = { id, call:body.call, f:body.f, value, keyed, live:body.live===true, keySeq:0, seen:now, seq:0, last:null, window:now, count:0 };
       s.group=speedGroup(s.f); s.token=token;
       s.probes=s.live && body.probes===true;
       this.sessions.set(token,s);
@@ -169,7 +169,7 @@ export class ShackBand {
       }
       return {};
     }
-    if (s.keyed===false || !canTransmit(s.f,s.value,s.passed)) fail(403,'Receive only on this frequency.');
+    if (s.keyed===false || !canTransmit(s.f,s.value)) fail(403,'Receive only on this frequency.');
     if (action === 'edges') return this.edges(s,body,now);
     if (action !== 'send' || !Number.isSafeInteger(body.seq) || body.seq < 1 || !validRhythm(body.audio) || body.audio.length>32 ||
         !Number.isSafeInteger(body.offset) || body.offset < 0 || body.offset>120000 || !/^[\w-]{1,50}$/.test(body.stream || '')) fail(400,'Invalid key timing.');

@@ -19,6 +19,7 @@ if (process.isMainFrame) {
     update: (action, value) => ipcRenderer.invoke('mac-update', action, value),
     loadSave: legacy => ipcRenderer.sendSync('learner-load', legacy),
     save: (raw, revision) => ipcRenderer.sendSync('learner-save', raw, revision),
+    eraseLearner: (id, raw, revision) => ipcRenderer.sendSync('learner-erase', id, raw, revision),
     exchange: (action, body) => ipcRenderer.invoke('learner-exchange', action, body),
   });
 }
