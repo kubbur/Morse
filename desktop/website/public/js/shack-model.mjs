@@ -23,11 +23,15 @@ export const items = tiers.flatMap(([tier, prices, names], level) =>
 const catalog = new Map(items.map(item => [item.id, item]));
 export const equipment = id => catalog.get(id);
 export const SLOW_CW_CALLING_KHZ = 7026;
-const slowCWRooms = new Map([-2,-1,0,1,2].map(offset => [
-  SLOW_CW_CALLING_KHZ + offset, offset === 0 ? 'Slow CW calling frequency' : 'Slow CW open channel',
-]));
-export const isSlowCW = f => slowCWRooms.has(f);
-export const rooms = new Map([...slowCWRooms,[7030,'Calling frequency'],[7032,'Club room'],[7035,'Ragchew'],[7038,'Open frequency']]);
+export const speedGroups = [
+  {name:'Slow CW', calling:SLOW_CW_CALLING_KHZ, min:8, max:12, tier:0, preference:'morse.shack.slowWpm'},
+  {name:'Medium CW', calling:7031, min:12, max:25, tier:1, preference:'morse.shack.mediumWpm'},
+  {name:'Fast CW', calling:7036, min:25, max:80, tier:1, preference:'morse.shack.fastWpm'},
+];
+export const speedGroup = f => Number.isInteger(f) ? speedGroups.find(group=>Math.abs(f-group.calling)<=2) : undefined;
+export const limitWpm = (group,wpm) => Math.min(group.max,Math.max(group.min,wpm));
+export const paceLabel = group => (group.max===80 ? group.min+'+' : group.min+'–'+group.max)+' WPM';
+export const needsQualification = f => speedGroup(f)?.tier !== 0;
 export const frequency = f => (f / 1000).toFixed(3);
 export const validFrequency = f => Number.isInteger(f) && f >= 7020 && f <= 7050;
 export const badgePrice = id => id === 'send-first' ? 35 : id === 'send-ten' ? 75 : 25;
@@ -143,7 +147,7 @@ export function equip(s, id, slot, at = Date.now()) {
   return true;
 }
 export const assembled = s => slots.every((_,slot)=>!!s.equipped[slot]?.id);
-export const minimumStation = f => stationPrices[isSlowCW(f) ? 0 : [7030,7032,7035].includes(f) ? 1 : 2];
+export const minimumStation = f => stationPrices[speedGroup(f)?.tier ?? 2];
 export function coverage(p) {
   const s = p.shack || {};
   return { copied:symbols((s.copied || '') + [...alphabet].filter(c=>p.stats.characters[c]?.correct > 0).join('')),
@@ -158,7 +162,7 @@ export function certify(p) {
   return true;
 }
 export function canTransmit(f, value, passed) {
-  return validFrequency(f) && value>=minimumStation(f) && (isSlowCW(f) || passed);
+  return validFrequency(f) && value>=minimumStation(f) && (passed || !needsQualification(f));
 }
 export function hunt(date = new Date()) {
   const day = date.toISOString().slice(0,10), seed = Math.floor(Date.parse(day)/86400000);

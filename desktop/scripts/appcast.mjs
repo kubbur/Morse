@@ -4,6 +4,7 @@ import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { root } from './stage.mjs';
+import { macIdentity } from '../src/updates.mjs';
 
 export function sparklePublicKey(key) {
   const exported = (key.type === 'public' ? key : createPublicKey(key)).export({format:'jwk'});
@@ -18,9 +19,14 @@ export function signedItem(archive, key, {version, build=version, url}) {
 function verifiedItem(archive, publicKey, signature, {version, build, url}) {
   const escape = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]));
   if (!verify(null, archive, publicKey, signature)) throw Error('Update signature failed verification.');
+  // Through dev.30 both channels shipped as Morse.app. Offer those hosts a separate download.
+  const devItem = version.includes('-dev.') ? `
+<sparkle:channel>dev</sparkle:channel>
+<link>${escape(url)}</link>
+<sparkle:informationalUpdate><sparkle:belowVersion>1.1.6b31</sparkle:belowVersion></sparkle:informationalUpdate>` : '';
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel>
-<title>Morse for Mac</title><item><title>Morse ${escape(version)}</title>${/^\d+\.\d+\.\d+-dev\.[1-9]\d*$/.test(version) ? '\n<sparkle:channel>dev</sparkle:channel>' : ''}
+<title>Morse for Mac</title><item><title>${macIdentity(version).name} ${escape(version)}</title>${devItem}
 <sparkle:version>${escape(build)}</sparkle:version><sparkle:shortVersionString>${escape(version)}</sparkle:shortVersionString>
 <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
 <enclosure url="${escape(url)}" length="${archive.length}" type="application/octet-stream" sparkle:edSignature="${signature.toString('base64')}"/>
@@ -60,9 +66,10 @@ if (process.argv[1] && await realpath(process.argv[1]).catch(() => null) === fil
     const url='https://github.com/kubbur/Morse/releases/download/morse-v'+version+'/'+name;
     const zip=join(dist,name);
     // Read the Info.plist from the shipped ZIP, not a separate build directory.
-    const info=execFileSync('/usr/bin/unzip',['-p',zip,'Morse.app/Contents/Info.plist']);
+    const identity=macIdentity(version);
+    const info=execFileSync('/usr/bin/unzip',['-p',zip,identity.name+'.app/Contents/Info.plist']);
     const get=k=>execFileSync('/usr/bin/plutil',['-extract',k,'raw','-o','-','-'],{input:info,encoding:'utf8'}).trim();
-    if (get('SUPublicEDKey')!==pub || get('CFBundleIdentifier')!=='digital.kubbur.morse' || get('CFBundleShortVersionString')!==version ||
+    if (get('SUPublicEDKey')!==pub || get('CFBundleIdentifier')!==identity.id || get('CFBundleShortVersionString')!==version ||
         get('CFBundleVersion')!==version.replace(/-dev\.(\d+)$/, 'b$1') ||
         get('SUFeedURL')!=='https://github.com/kubbur/Morse/releases/latest/download/appcast-mac-'+arch+'.xml')
       throw Error('The archived '+arch+' app has a different key, feed, identifier or version.');

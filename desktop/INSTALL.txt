@@ -1,7 +1,10 @@
 Morse for Mac 1.1.5
 
 Requires macOS 13 or later. Use the arm64 ZIP for Apple Silicon or the x64 ZIP
-for Intel. Unzip the download and move Morse.app to Applications.
+for Intel. Unzip the download and move Morse.app (Stable) or Morse Dev.app
+(Dev) to Applications. You can install both. If your previous Dev build was
+named Morse.app, install Morse Dev.app from its ZIP once. It opens your
+existing Dev profile. Each app installs updates for its own channel.
 
 When upgrading, export a copy of your progress from the previous version and
 quit Morse and Morse Paddle. The release opens the existing Morse profile on

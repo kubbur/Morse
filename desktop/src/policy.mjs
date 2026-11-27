@@ -3,6 +3,7 @@ import { devOrigin } from '../website/public/js/service-origin.mjs';
 
 export const APP_PORT = 37473;
 export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
+export const PADDLE_GUIDE_URL = 'https://github.com/kubbur/Morse/tree/main/docs/assembly';
 
 export function channelForBuild(version, packaged) {
   return !packaged || version.includes('-dev.') ? 'dev' : 'stable';

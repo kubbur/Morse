@@ -444,6 +444,21 @@ test('paddle keyer repeats held dots and dashes at the selected speed', () => {
   }
 });
 
+test('a one-finger slide remembers each crossing during a dah and releases cleanly in both iambic modes', () => {
+  for (const mode of ['a','b']) {
+    const marks=[];
+    const keyer=new PaddleKeyer({wpm:12,mode,onEdge:(edge,duration)=>{ if (edge.down) marks.push([edge.at,duration]); }});
+    keyer.contacts(false,true,0,true);
+    keyer.contacts(true,false,40,true);
+    keyer.contacts(false,true,70,true);
+    keyer.contacts(true,false,90,true);
+    keyer.contacts(false,false,95);
+    keyer.advance(2500);
+    assert.deepEqual(marks,[[0,300],[400,100],[600,300],[1000,100]]);
+    assert.equal(keyer.busy,false);
+  }
+});
+
 test('squeeze alternates and iambic B adds the opposite element after release while A stops', () => {
   const defaults = [], defaultKeyer = new PaddleKeyer({ onEdge: e => defaults.push(e) });
   defaultKeyer.contacts(true, true, 1000); defaultKeyer.contacts(false, false, 1020); defaultKeyer.advance(1400);

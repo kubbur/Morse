@@ -2,23 +2,34 @@ import { app, BrowserWindow, Menu, dialog, session, shell, ipcMain, powerMonitor
 import { fileURLToPath } from 'node:url';
 import { join, isAbsolute, resolve } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
-import { APP_ORIGIN, appDocument, allowedRequest, allowedPermission, channelForBuild, websiteProfileDirectory, progressExport } from './policy.mjs';
+import { APP_ORIGIN, PADDLE_GUIDE_URL, appDocument, allowedRequest, allowedPermission, channelForBuild, websiteProfileDirectory, progressExport } from './policy.mjs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { bundledTrainer } from './bundled-trainer.mjs';
 import { PaddleService } from './paddle-service.mjs';
+import { ShackBackground } from './shack-background.mjs';
 import { LearnerDB } from './learner-db.mjs';
 import { websiteClient } from './website-client.mjs';
 import { serviceOrigin } from '../website/public/js/service-origin.mjs';
-import { checkUpdate } from './updates.mjs';
+import { checkUpdate, macIdentity } from './updates.mjs';
 import { channelPreference, macInstaller, UpdateManager } from './update-manager.mjs';
 
-app.setName('Morse');
 process.umask(0o077);
 const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url));
 let window, db, paddle, updates, updateTimer, exchange, closing = false, stopping = false;
+const shackBackground=new ShackBackground({
+  command:(op,value)=>paddle?.command(op,value) ?? Promise.resolve({error:'Mac paddle input is unavailable.'}),
+  notify:row=>publish('shack-contacts',row),
+  throttle:allowed=>{
+    const wc=window?.webContents;
+    if (wc && !wc.isDestroyed() && wc.getBackgroundThrottling()!==allowed) wc.setBackgroundThrottling(allowed);
+  },
+});
 const isolated = app.commandLine.hasSwitch('morse-isolated');
 const staged = app.commandLine.hasSwitch('morse-staging');
 const version = app.getVersion();
+const appName = process.platform === 'darwin' ? macIdentity(version).name : 'Morse';
+// Electron uses this name for its macOS encryption key. Existing Dev logins use "Morse".
+app.setName('Morse');
 const buildChannel = channelForBuild(version, app.isPackaged);
 const syncMode = staged ? 'staging' : isolated && !app.commandLine.hasSwitch('morse-website') ? 'offline' : 'website';
 let profileDirectory;
@@ -57,9 +68,12 @@ function registerIPC() {
     catch { event.returnValue={error:'The learner save could not be opened or updated. The original was retained.'}; }
   });
   ipcMain.handle('paddle-command',(e,op,v)=>{
-    if (!trusted(e) || (op==='arm' || (op==='vband' && v?.mask)) && !window.isFocused()) return {error:'Morse must be focused.'};
+    if (!trusted(e) || ['shack-keys','shack-key-access'].includes(op) || (op==='arm' || (op==='vband' && v?.mask)) && !window.isFocused()) return {error:'Morse must be focused.'};
     return paddle?.command(op,v) || {error:'Paddle unavailable.'};
   });
+  ipcMain.on('shack-radio',(e,state)=>{ if (trusted(e) && !stopping) shackBackground.configure(state); });
+  ipcMain.handle('shack-key-access',e=>trusted(e) && window.isFocused() && paddle
+    ? paddle.command('shack-key-access') : {error:'Open Input settings in the Morse window.'});
   ipcMain.handle('learner-exchange',(e,action,payload)=>trusted(e) ? exchange(action,payload).catch(()=>({status:503,error:'Saved locally. Waiting to reconnect.'})) : {status:403});
   ipcMain.handle('mac-update', async (event, action, value) => {
     if (!trusted(event)) return;
@@ -99,7 +113,7 @@ function showWindow() {
 
 function createWindow() {
   window = new BrowserWindow({
-    title: 'Morse', width: 1200, height: 900, minWidth: 440, minHeight: 620,
+    title: appName, width: 1200, height: 900, minWidth: 440, minHeight: 620,
     backgroundColor: '#0d1713', show: false, icon,
     webPreferences: {
       preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), partition: 'persist:morse', sandbox: true, contextIsolation: true,
@@ -108,17 +122,26 @@ function createWindow() {
     },
   });
   const contents = window.webContents;
+  if (appName==='Morse Dev') window.on('page-title-updated', event => event.preventDefault());
   const interruptSession = () => {
+    shackBackground.configure(null);
     paddle?.command('interrupt');
     exchange?.closeBand();
   };
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  contents.setWindowOpenHandler(({url}) => {
+    if (appDocument(contents.getURL()) && url === PADDLE_GUIDE_URL) void shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
   for (const name of ['will-navigate', 'will-redirect']) contents.on(name, (event, url) => { if (!appDocument(url)) event.preventDefault(); });
   contents.on('will-attach-webview', event => event.preventDefault());
   window.once('ready-to-show', () => window?.show());
   contents.on('did-finish-load',()=>{ if (paddle?.status) publish('paddle-event',paddle.status); });
   contents.on('did-start-navigation',(_e,_url,inPlace,main)=>{ if (main && !inPlace) interruptSession(); });
-  window.on('blur', () => { if (paddle?.input==='vband') void paddle.command('vband-release'); });
+  window.on('blur', () => {
+    if (paddle?.input==='vband') void paddle.command('vband-release');
+    shackBackground.focused=false; shackBackground.refresh();
+  });
+  window.on('focus', () => { shackBackground.focused=true; shackBackground.refresh(); });
   window.on('closed', () => { interruptSession(); window = null; });
   contents.on('render-process-gone', () => {
     interruptSession();
@@ -155,7 +178,7 @@ async function openPageControl(script) {
 function menu() {
   const openSaved = () => openPageControl("document.getElementById('open-progress').click()");
   const template = [
-    { label: 'Morse', submenu: [{ role: 'about' }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => openPageControl("document.querySelector('.main-nav [data-view=lab]').click()") }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
+    { label: appName, submenu: [{ role: 'about', label:'About '+appName }, { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => openPageControl("document.querySelector('.main-nav [data-view=lab]').click()") }, { type: 'separator' }, { role: 'hide', label:'Hide '+appName }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label:'Quit '+appName }] },
     { label: 'File', submenu: [{ label: 'Saved progress', accelerator: 'CmdOrCtrl+Shift+S', click: openSaved }, { type: 'separator' }, { role: 'close' }] },
     { role: 'editMenu' },
     { label: 'View', submenu: [{ label: 'Listen', click: () => openPageControl("document.querySelector('[data-view=practice]').click()") }, { label: 'Send', click: () => openPageControl("document.querySelector('[data-view=send]').click()") }, { type: 'separator' }, { role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
@@ -183,6 +206,7 @@ else {
       stopping = false; updates.saveFailed(); return;
     }
     clearInterval(updateTimer);
+    shackBackground.configure(null);
     try { await paddle?.stop(); } finally {
       closing = true;
       app.quit();
@@ -197,7 +221,7 @@ else {
     db=new LearnerDB(join(dir,'morse-learners-v2.sqlite'));
     const notes = await readFile(new URL('../assets/release-notes.json', import.meta.url), 'utf8').then(JSON.parse).catch(() => ({}));
     const updateEnabled = app.isPackaged && process.platform === 'darwin' && !isolated && !staged;
-    const preference = channelPreference(join(app.getPath('appData'), 'Morse'));
+    const preference = channelPreference(dir);
     updates = new UpdateManager({ version, installedNotes: notes?.[version] || '', enabled: updateEnabled,
       automatic: db.automaticUpdates, storeAutomatic: value => { db.automaticUpdates = value; },
       channel: updateEnabled ? preference.read(buildChannel) : buildChannel, storeChannel: value => preference.write(value),
@@ -208,10 +232,25 @@ else {
     browserSession.protocol.handle('http',await bundledTrainer(join(app.getAppPath(),'website/public')));
     installSessionPolicy(); registerIPC();
     if (process.platform==='darwin') {
+      app.setAboutPanelOptions({applicationName:appName});
       const helper=app.isPackaged ? join(process.resourcesPath,'../Helpers/MorseKeyer') : join(app.getAppPath(),'../native/MorseKeyer');
-      paddle=new PaddleService(helper,join(dir,'paddle'),row=>publish('paddle-event',row),isolated);
+      paddle=new PaddleService(helper,join(dir,'paddle'),row=>{
+        if (row.type==='shack-contact') shackBackground.contact(row);
+        else {
+          if (row.type==='status' && shackBackground.available!==!!row.session) {
+            shackBackground.available=!!row.session;
+            shackBackground.refresh();
+          }
+          publish('paddle-event',row);
+        }
+      },isolated);
       paddle.start();
-      for (const signal of ['suspend','resume','lock-screen']) powerMonitor.on(signal,()=>{ paddle.command('interrupt'); publish('paddle-event',{type:'reset'}); });
+      for (const [signal,key,value] of [['suspend','sleeping',true],['resume','sleeping',false],['lock-screen','locked',true],['unlock-screen','locked',false]]) {
+        powerMonitor.on(signal,()=>{
+          if (value || signal==='resume') { paddle.command('interrupt'); publish('paddle-event',{type:'reset'}); }
+          shackBackground[key]=value; shackBackground.refresh();
+        });
+      }
       app.dock?.setIcon(nativeImage.createFromPath(icon));
     }
     menu(); createWindow();

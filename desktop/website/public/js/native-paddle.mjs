@@ -40,7 +40,7 @@ export class BuiltInPaddle {
       interrupt: () => this.interrupt(),
       edge: (edge, duration) => {
         if (!this.active || !this.connected || !this.configured || this.status?.typing || this.ui.migrationPending) return;
-        const eligible = ui.usable() && document.hasFocus() && !ui.listenHeld;
+        const eligible = ui.usable() && (document.hasFocus() || ui.backgroundInput) && !ui.listenHeld;
         if (ui.keyTarget) {
           if (eligible) ui.edge(edge, false, duration);
           return;

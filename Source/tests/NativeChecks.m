@@ -7,6 +7,42 @@
 #include "ControlChecks.inc"
 #include "ForegroundTypingChecks.inc"
 #include "InputChecks.inc"
+#import <Carbon/Carbon.h>
+
+@interface ShackKeys (FixtureContacts)
+- (BOOL)mapKeys;
+- (void)key:(CGKeyCode)code down:(BOOL)down flags:(CGEventFlags)flags at:(double)at;
+@end
+@interface FixtureShackKeys : ShackKeys
+@end
+@implementation FixtureShackKeys
+- (BOOL)keyHeld:(CGKeyCode)code { return code==kVK_RightControl; }
+@end
+
+static BOOL checkShackContacts(void) {
+    NSMutableArray *contacts=[NSMutableArray array];
+    void (^contact)(unsigned,double)=^(unsigned mask,double at){ [contacts addObject:@[@(mask),@(at)]]; };
+    ShackKeys *keys=[[FixtureShackKeys alloc] initWithChoice:@{@"source":@"vband"} contact:contact interrupted:^{}];
+    if (![keys mapKeys]) return NO;
+    [keys key:kVK_RightControl down:YES flags:0 at:1]; // Already down when capture started.
+    [keys key:kVK_RightControl down:NO flags:0 at:2];
+    [keys key:kVK_ANSI_A down:YES flags:0 at:3];
+    [keys key:kVK_Control down:YES flags:0 at:4];
+    [keys key:kVK_Control down:YES flags:0 at:5];
+    [keys key:kVK_RightControl down:YES flags:0 at:6];
+    [keys key:kVK_Control down:NO flags:0 at:7];
+    [keys key:kVK_RightControl down:NO flags:0 at:8];
+    if (![contacts isEqual:@[@[@1,@4],@[@3,@6],@[@2,@7],@[@0,@8]]]) return NO;
+    [contacts removeAllObjects];
+    keys=[[FixtureShackKeys alloc] initWithChoice:@{@"source":@"straight"} contact:contact interrupted:^{}];
+    if (![keys mapKeys]) return NO;
+    [keys key:kVK_Space down:YES flags:kCGEventFlagMaskCommand at:1];
+    [keys key:kVK_Space down:YES flags:0 at:2];
+    [keys key:kVK_Space down:NO flags:0 at:3];
+    [keys key:kVK_Space down:YES flags:0 at:4];
+    [keys key:kVK_Space down:NO flags:0 at:5];
+    return [contacts isEqual:@[@[@1,@4],@[@0,@5]]];
+}
 
 // Keep the test process disconnected from devices and the external typing tap.
 @interface FixturePaddleService : PaddleService
@@ -109,6 +145,7 @@ int main(int argc, const char **argv) {
         NSArray *all=@[mac,pods,renamed];
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"Failed check at line %d\n",__LINE__); return 1; } } while (0)
         CHECK(checkForegroundTyping());
+        CHECK(checkShackContacts());
         CHECK(chooseOutput(all,@"auto",11,20,nil)==mac);
         CHECK(chooseOutput(all,@"auto",12,20,nil)==pods);
         CHECK(chooseOutput(all,@"auto",20,20,nil)==pods);

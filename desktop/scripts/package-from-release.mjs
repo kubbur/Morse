@@ -11,8 +11,11 @@ import plist from 'plist';
 import { stageApp, root } from './stage.mjs';
 import { buildNative } from './native.mjs';
 import { addSparkle, bundleVersion } from './sparkle.mjs';
+import { macIdentity } from '../src/updates.mjs';
 
 const pkg = JSON.parse(await readFile(join(root,'package.json'),'utf8'));
+const identity = macIdentity(pkg.version);
+const appFile = identity.name + '.app';
 if (process.platform !== 'darwin' || pkg.devDependencies.electron !== '45.4.1' || !process.argv[2])
   throw new Error('Use this on a Mac with Electron 45.4.1 and the original release ZIP directory.');
 if (!pkg.version.includes('-dev.') && !(/^\d+\.\d+\.\d+$/.test(pkg.version) && process.argv[3] === '--ad-hoc-release'))
@@ -41,15 +44,32 @@ for (const [arch,hash] of Object.entries(hashes)) {
   const original = join(originals,'Morse-1.0.0-mac-'+arch+'.zip');
   if (digest(await readFile(original)) !== hash) throw new Error('Original '+arch+' runtime checksum mismatch.');
   const directory = join(work,arch);
-  const bundle = join(directory,'Morse.app');
+  const bundle = join(directory,appFile);
   await mkdir(directory);
   run('ditto',['-x','-k',original,directory]);
+  if (identity.name !== 'Morse') {
+    await rename(join(directory,'Morse.app'),bundle);
+    const contents = join(bundle,'Contents');
+    await rename(join(contents,'MacOS/Morse'),join(contents,'MacOS',identity.name));
+    for (const suffix of ['', ' (Renderer)', ' (GPU)', ' (Plugin)']) {
+      const oldName = 'Morse Helper' + suffix, newName = identity.name + ' Helper' + suffix;
+      const path = join(contents,'Frameworks',newName+'.app','Contents');
+      await rename(join(contents,'Frameworks',oldName+'.app'),join(path,'..'));
+      await rename(join(path,'MacOS',oldName),join(path,'MacOS',newName));
+      const helperFile = join(path,'Info.plist'), helper = plist.parse(await readFile(helperFile,'utf8'));
+      helper.CFBundleName = helper.CFBundleName.replace(/^Morse/,identity.name);
+      helper.CFBundleIdentifier = identity.id + '.helper';
+      helper.CFBundleDisplayName = helper.CFBundleExecutable = newName;
+      await writeFile(helperFile,plist.build(helper));
+    }
+  }
   const asar = join(bundle,'Contents/Resources/app.asar');
   await createPackage(stage,asar);
   const integrity = {'Resources/app.asar':{algorithm:'SHA256',hash:digest(getRawHeader(asar).headerString)}};
   const infoPath = join(bundle,'Contents/Info.plist');
   const info = plist.parse(await readFile(infoPath,'utf8'));
   Object.assign(info,{
+    CFBundleIdentifier:identity.id, CFBundleName:identity.name, CFBundleDisplayName:identity.name, CFBundleExecutable:identity.name,
     CFBundleShortVersionString:pkg.version, CFBundleVersion:bundleVersion(pkg.version),
     NSMicrophoneUsageDescription:'Read the two paddle contacts through the wired headset adapter.',
     ElectronAsarIntegrity:integrity,
@@ -67,15 +87,15 @@ for (const [arch,hash] of Object.entries(hashes)) {
 
   // Archive only the new bundle and install note. Retain a copy at the path
   // used by the existing packaged smoke and release verification scripts.
-  const output = join(root,'build/packages','Morse-darwin-'+arch);
+  const output = join(root,'build/packages',identity.name+'-darwin-'+arch);
   await mkdir(output,{recursive:true});
   const standalone = join(work,'candidate-'+arch);
   await mkdir(standalone);
-  run('ditto',[bundle,join(standalone,'Morse.app')]);
+  run('ditto',[bundle,join(standalone,appFile)]);
   const name = 'Morse-'+pkg.version+'-mac-'+arch+'.zip';
   const archive = join(dist,name);
   run('python3',[join(root,'scripts/archive.py'),standalone,archive,join(root,'INSTALL.txt')]);
-  const installed=join(output,'Morse.app'), previous=join(work,'previous-'+arch+'.app');
+  const installed=join(output,appFile), previous=join(work,'previous-'+arch+'.app');
   // ditto merges directories and would leave a native updater from an earlier build.
   let retained=false;
   try { await rename(installed,previous); retained=true; } catch (error) { if (error.code!=='ENOENT') throw error; }
@@ -84,7 +104,7 @@ for (const [arch,hash] of Object.entries(hashes)) {
   builds.push({architecture:arch,file:name,sha256:digest(await readFile(archive)),signing:'ad-hoc'});
 }
 await writeFile(join(dist,'darwin-build.json'),JSON.stringify({
-  name:'Morse',version:pkg.version,electron:pkg.devDependencies.electron,platform:'darwin',
+  name:identity.name,version:pkg.version,electron:pkg.devDependencies.electron,platform:'darwin',
   method:'verified release runtime, rebuilt ASAR and helper',builds,
 },null,2)+'\n');
 await rm(work,{recursive:true});

@@ -23,10 +23,12 @@ export class PaddleKeyer {
   reset() {
     this.dit = this.dah = false;
     this.memory = { dit: false, dah: false };
+    this.slides = [];
     this.contactHistory = []; this.contactAt = -1;
     this.phase = 'idle'; this.due = Infinity; this.last = 'dah'; this.extra = ''; this.squeezed = false; this.clock = -1;
   }
   choose() {
+    if (this.slides.length) return this.slides.shift();
     const dit = this.dit || this.memory.dit, dah = this.dah || this.memory.dah;
     if (dit && dah) return this.last === 'dit' ? 'dah' : 'dit';
     if (dit || dah) return dit ? 'dit' : 'dah';
@@ -51,7 +53,7 @@ export class PaddleKeyer {
     }
     this.clock = to;
   }
-  contacts(dit, dah, at) {
+  contacts(dit, dah, at, slide = false) {
     if (typeof dit !== 'boolean' || typeof dah !== 'boolean' || !Number.isFinite(at) || at < (this.onReplay ? this.contactAt : this.clock)) return false;
     if (this.onReplay) {
       const previous = this.contactHistory.at(-1);
@@ -64,8 +66,15 @@ export class PaddleKeyer {
       if (at < this.clock) return true; // A late unchanged snapshot needs no correction.
     }
     this.advance(at);
-    if (dit && !this.dit) this.memory.dit = true;
-    if (dah && !this.dah) this.memory.dah = true;
+    if (slide) {
+      // A finger can cross several times during one dah. Play each crossing once in order.
+      if (this.slides.length >= 64) return false;
+      this.slides.push(dit ? 'dit' : 'dah');
+    } else {
+      if (dit && dah) this.slides.length = 0;
+      if (dit && !this.dit) this.memory.dit = true;
+      if (dah && !this.dah) this.memory.dah = true;
+    }
     this.dit = dit; this.dah = dah;
     if (dit && dah) this.squeezed = true;
     if (!dit && !dah && this.squeezed) {

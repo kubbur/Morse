@@ -5,16 +5,15 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { isChannel } from './updates.mjs';
 
-// The Stable and Dev learners have separate data directories. The channel
-// choice belongs to the installation and survives a switch in either direction.
+// Each installed app remembers which releases its operator was browsing.
 export function channelPreference(directory) {
-  const file = join(directory, 'update-channel');
+  const file = join(directory, 'download-channel');
   return {
     read(fallback) {
       try {
         const value = readFileSync(file, 'utf8').trim();
         return isChannel(value) ? value : fallback;
-      } catch (error) { return error.code === 'ENOENT' ? fallback : 'stable'; }
+      } catch { return fallback; }
     },
     write(value) {
       if (!isChannel(value)) throw Error('Unknown update channel');
@@ -35,6 +34,7 @@ export async function macInstaller(resources) {
 export class UpdateManager {
   constructor({version, installedNotes, enabled, automatic, storeAutomatic, channel = 'stable', storeChannel, lookup, installer, changed}) {
     Object.assign(this, {version, installedNotes, enabled, storeAutomatic, channel, storeChannel, lookup, installer, changed});
+    this.buildChannel = version.includes('-dev.') ? 'dev' : 'stable';
     this.generation = 0;
     this.release = null;
     this.phase = 'idle';
@@ -43,7 +43,7 @@ export class UpdateManager {
     this.installRequested = false;
     if (enabled && installer) {
       try {
-        installer.configure(!!automatic, channel, '');
+        this.configure(!!automatic);
         this.automatic = !!automatic;
       } catch {
         this.installer = null;
@@ -56,7 +56,7 @@ export class UpdateManager {
       automatic:this.automatic, automaticSupported:!!this.installer && this.enabled,
       available:this.release?.version || '', notes:this.release?.notes || '',
       manualSwitch:!!this.release?.manualSwitch,
-      installable:!!this.installer && !!this.release?.archive && !!this.release?.feedAvailable && !this.release.manualSwitch, phase:this.phase, message:this.message};
+      installable:!!this.installer && this.channel === this.buildChannel && !!this.release?.archive && !!this.release?.feedAvailable && !this.release.manualSwitch, phase:this.phase, message:this.message};
   }
   show(phase, message = '') {
     this.phase = phase;
@@ -68,9 +68,13 @@ export class UpdateManager {
     const request = ++this.generation;
     this.show('checking');
     try {
-      const release = await this.lookup(this.channel);
+      const channel = this.channel;
+      const [release, devUpdate] = await Promise.all([this.lookup(channel),
+        this.buildChannel === 'dev' && channel !== 'dev' ? this.lookup('dev').catch(() => this.ownRelease) : null]);
       if (request !== this.generation) return;
-      if (this.channel === 'dev' && release?.version !== this.release?.version) this.configure(this.automatic, this.channel, release);
+      const ownRelease = channel === this.buildChannel ? release : devUpdate;
+      if (this.buildChannel === 'dev' && ownRelease?.version !== this.ownRelease?.version) this.configure(this.automatic, ownRelease);
+      this.ownRelease = ownRelease;
       this.release = release;
       this.show('checked');
     } catch {
@@ -78,16 +82,13 @@ export class UpdateManager {
       this.show('error', 'Couldn’t reach GitHub. You can keep practising and check again later.');
     }
   }
-  configure(automatic, channel = this.channel, release = this.release) {
-    this.installer?.configure(automatic, channel, channel === 'dev' && release && !release.manualSwitch ? release.version : '');
+  configure(automatic, release = this.ownRelease) {
+    this.installer?.configure(automatic, this.buildChannel, this.buildChannel === 'dev' && release ? release.version : '');
   }
   async setChannel(value) {
     if (!this.enabled || !isChannel(value) || value === this.channel) return false;
-    try { this.configure(this.automatic, value, null); }
-    catch { this.show('error','Finish or cancel the current update before switching channels.'); return false; }
     try { this.storeChannel(value); }
     catch {
-      this.configure(this.automatic);
       this.show('error','Could not save the update channel on this Mac.');
       return false;
     }

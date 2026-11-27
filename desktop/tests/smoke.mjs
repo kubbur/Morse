@@ -3,13 +3,15 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APP_ORIGIN } from '../src/policy.mjs';
 import { root } from '../scripts/stage.mjs';
+import { macIdentity } from '../src/updates.mjs';
 
-const executable = process.env.MORSE_DESKTOP_EXECUTABLE || (process.platform === 'darwin' ? join(root, `build/packages/Morse-darwin-${process.arch}/Morse.app/Contents/MacOS/Morse`) : join(root, 'build/packages/Morse-linux-x64/Morse'));
+const {name} = macIdentity(JSON.parse(await readFile(join(root,'package.json'))).version);
+const executable = process.env.MORSE_DESKTOP_EXECUTABLE || (process.platform === 'darwin' ? join(root,'build/packages',name+'-darwin-'+process.arch,name+'.app/Contents/MacOS',name) : join(root, 'build/packages/Morse-linux-x64/Morse'));
 const temporary = await mkdtemp(join(tmpdir(), 'morse-desktop-smoke-'));
 const output = join(root, 'build/test-results'); await mkdir(output, { recursive: true });
 const checks = [], errors=[];

@@ -158,6 +158,12 @@ static void serve(int fd, NSURL *root, unsigned port) {
 }
 - (void)webView:(WKWebView *)view decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decision {
     NSURL *url=action.request.URL;
+    if (action.navigationType==WKNavigationTypeLinkActivated && action.sourceFrame.isMainFrame &&
+        [self local:action.sourceFrame.request.URL] && [url.absoluteString isEqual:@"https://github.com/kubbur/Morse/tree/main/docs/assembly"]) {
+        decision(WKNavigationActionPolicyCancel);
+        [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+        return;
+    }
     BOOL allowed=[self local:url] && action.targetFrame.isMainFrame;
     if (allowed && ![url.path isEqual:view.URL.path]) [_audio command:@"input" value:@"off"];
     decision(allowed?WKNavigationActionPolicyAllow:WKNavigationActionPolicyCancel);

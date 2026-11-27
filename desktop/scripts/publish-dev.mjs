@@ -65,7 +65,7 @@ try {
   if (existing.status) {
     if (!/release not found|HTTP 404/i.test(existing.stderr)) throw Error(existing.stderr || 'Could not inspect Dev release');
     gh('release','create',tag,'--repo',repo,'--draft','--prerelease','--latest=false','--target',sha,'--title','Morse ' + version,
-      '--notes','Dev build from ' + sha + '. Built and tested on Apple Silicon and Intel. https://github.com/' + repo + '/actions/runs/' + runId);
+      '--notes','Install Morse Dev.app alongside Morse.app. If your previous Dev build was named Morse.app, download the ZIP once to keep using your Dev profile.\n\nDev build from ' + sha + '. Built and tested on Apple Silicon and Intel. https://github.com/' + repo + '/actions/runs/' + runId);
   }
   const release = JSON.parse(gh(...view));
   assert.ok(release.isPrerelease && release.targetCommitish === sha, 'Release must be a Dev prerelease for this commit');

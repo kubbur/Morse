@@ -39,11 +39,12 @@ try {
     origin='http://127.0.0.1:'+server.address().port;
   }
   const hashes=[];
-  const locations=['installed','incoming'].map(n=>join(dir,n,'Morse.app'));
+  const name=devChannel?'Morse Dev':'Morse';
+  const locations=['installed','incoming'].map(n=>join(dir,n,name+'.app'));
   for(const [index,bundle] of locations.entries()) {
     const contents=join(bundle,'Contents'), plist=join(contents,'Info.plist');
     for(const sub of ['Resources','Frameworks','MacOS']) await mkdir(join(contents,sub),{recursive:true});
-    const version=index===1 ? incoming : '1';
+    const version=index===1 ? incoming : devChannel ? '1.1.6-dev.31' : '1';
     const info={CFBundleIdentifier:id,CFBundleName:'Morse update fixture',CFBundleExecutable:'Fixture',CFBundlePackageType:'APPL',
       CFBundleVersion:bundleVersion(version),CFBundleShortVersionString:version,MorseFixtureState:dir,LSUIElement:true,
       MorseFixtureIncoming:incoming,MorseFixtureDev:devChannel,
@@ -67,6 +68,12 @@ try {
     hashes.push(createHash('sha256').update(await readFile(binary)).digest('hex'));
   }
   assert.notEqual(hashes[0],hashes[1]);
+  const sibling=join(dir,'installed',devChannel?'Morse.app':'Morse Dev.app');
+  run('ditto',[locations[0],sibling]);
+  const siblingPlist=join(sibling,'Contents/Info.plist');
+  run('plutil',['-replace','CFBundleIdentifier','-string',id+'.sibling',siblingPlist]);
+  run('codesign',['--force','--sign','-','--timestamp=none',sibling]);
+  const siblingSignature=await readFile(join(sibling,'Contents/_CodeSignature/CodeResources'));
   const path=join(dir,'Morse.zip');
   run('ditto',['-c','-k','--keepParent',locations[1],path]);
   archive=await readFile(path);
@@ -91,6 +98,8 @@ try {
     run('codesign',['--verify','--deep','--strict',locations[0]]);
     console.log('Sparkle installed the second bundle in place and relaunched it with its saved 37 XP.');
   }
+  assert.deepEqual(await readFile(join(sibling,'Contents/_CodeSignature/CodeResources')),siblingSignature);
+  run('codesign',['--verify','--deep','--strict',sibling]);
 } finally {
   if (child && child.exitCode===null && !child.signalCode) child.kill();
   if (server?.listening) await new Promise(resolve=>server.close(resolve));

@@ -7,7 +7,7 @@ import { parseProgressJson } from '../public/js/import-validation.mjs';
 import { ShackBand } from './shack-band.mjs';
 
 export const actions = new Set([
-  ...['open','poll','feed','probe','edges','send','sign','leave'].map(a=>'shack/'+a),
+  ...['open','poll','feed','probe','edges','send','sign','signatures','leave'].map(a=>'shack/'+a),
   ...['status','start','join','approve','cancel','push','disconnect','recovery-code','recover','adopt'].map(a=>'private/'+a),
   ...['session','listing','visibility','total','station','consent','prepare','submit','leaderboard','history','history-preview'].map(a=>'scores/'+a),
 ]);

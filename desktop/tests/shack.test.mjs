@@ -10,7 +10,7 @@ import { ShackUI } from '../website/public/js/shack-ui.mjs';
 import { decodeSending } from '../website/public/js/sending.mjs';
 import { SendingUI } from '../website/public/js/send-ui.mjs';
 import { NativeElements } from '../website/public/js/native-paddle.mjs';
-import { bench, shop, air, logbook } from '../website/public/js/shack-views.mjs';
+import { bench, shop, air, logbook, activity } from '../website/public/js/shack-views.mjs';
 import { readFile } from 'node:fs/promises';
 
 test('the on-air check uses listening speed for copy and keyer speed for a sending example', async () => {
@@ -66,7 +66,21 @@ test('established training and an experienced operator check award qualification
   }
   const merged=mergeProgress(base,a,b);
   assert.equal(merged.credits[qualificationCredit],300);assert.equal(merged.stats.xp,300);
-  assert.deepEqual([canTransmit(7025,5000,false),canTransmit(7030,5000,true),canTransmit(7032,13333,true),canTransmit(7034,13333,true),canTransmit(7045,25000,false),canTransmit(7045,25000,true)],[true,false,true,false,false,true]);
+});
+test('calling and open channels in a speed group require the same equipped station and qualification',()=>{
+  for (let f=7020;f<=7050;f++) {
+    const starter=f>=7024 && f<=7028;
+    const price=starter ? 5000 : f>=7029 && f<=7038 ? 13333 : 25000;
+    assert.equal(canTransmit(f,price-1,true),false,'under-equipped at '+f);
+    assert.equal(canTransmit(f,price,false),starter,'unqualified at '+f);
+    assert.equal(canTransmit(f,price,true),true,'qualified at '+f);
+  }
+});
+test('band activity lists the three calling frequencies and keeps occupied working channels off the list',()=>{
+  const counts=Object.fromEntries(Array.from({length:17},(_,i)=>[7023+i,1]));
+  const html=activity({f:7033,band:{state:'live',activity:counts}});
+  assert.deepEqual([...html.matchAll(/data-f="(\d+)"/g)].map(match=>Number(match[1])),[7023,7026,7031,7036,7039]);
+  for (const pace of ['8–12 WPM','12–25 WPM','25+ WPM']) assert.ok(html.includes(pace));
 });
 test('two independent room sessions exchange actual timings, distinct frequencies and signed QSLs over the HTTP handler',async()=>{
   const exchange=new Exchange(':memory:'), origin='http://127.0.0.1:3000';
@@ -87,7 +101,7 @@ test('two independent room sessions exchange actual timings, distinct frequencie
     const first=[[95,90],[281,0]],second=[[120,0]],tx={token:a.token,f:7025,seq:1,stream:'aa',offset:0,audio:first};
     assert.equal((await request('send',tx)).ack,1);assert.equal((await request('send',tx)).ack,1);
     const heard=await request('poll',{token:b.token,f:7025,cursor:b.cursor});
-    assert.equal(heard.events.length,1);assert.deepEqual(heard.events[0].audio,first);
+    assert.equal(heard.events.length,1);assert.deepEqual(heard.events[0].audio,[[100,100],[300,0]]);
     assert.equal((await request('poll',{token:other.token,f:7035,cursor:0})).events.length,0);
     assert.equal((await request('send',{...tx,token:other.token,f:7035})).code,403);
     await request('send',{...tx,token:b.token,audio:second,replyTo:heard.events[0].peer});
@@ -97,6 +111,15 @@ test('two independent room sessions exchange actual timings, distinct frequencie
     const returned=await request('poll',{token:b.token,f:7025,cursor:heard.cursor});
     assert.deepEqual(returned.events.find(e=>e.type==='signature').audio,first);
     await request('leave',{token:a.token});assert.equal((await request('send',tx)).code,410);
+    await request('leave',{token:b.token});
+    const activity=await request('poll',{token:other.token,f:7035,cursor:returned.cursor});
+    assert.equal(activity.activity[7025] || 0,0);
+    assert.equal((await request('sign',{token:b.token,card:card.card,f:7025,audio:second})).code,200);
+    const signatures=token=>request('signatures',{cards:[{card:card.card,token}]});
+    assert.deepEqual((await signatures(a.token)).signatures,[{card:card.card,f:7025,audio:second}]);
+    assert.deepEqual((await signatures(b.token)).signatures,[{card:card.card,f:7025,audio:first}]);
+    assert.deepEqual((await signatures(other.token)).signatures,[]);
+    assert.equal((await request('sign',{token:other.token,card:card.card,f:7025,audio:first})).code,400);
   }finally{exchange.close();}
 });
 test('the native sample-clock feeds free keying before the first lesson prompt, without grading',()=>{

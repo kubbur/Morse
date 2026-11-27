@@ -45,13 +45,17 @@ with zipfile.ZipFile(archive_path) as archive:
         assert not any(stat.S_ISLNK(item.external_attr >> 16) for item in archive.infolist())
         result = {'kind': 'source', 'files': len(names), 'contents': 'source, tests, notices and build workflow only'}
     else:
-        assert {PurePosixPath(name).parts[0] for name in names} == {'Morse.app', 'INSTALL.txt'}
-        prefix = 'Morse.app/Contents/'
+        product = 'Morse Dev' if '-dev.' in version else 'Morse'
+        bundle = product + '.app'
+        bundle_id = 'digital.kubbur.morse.dev' if '-dev.' in version else 'digital.kubbur.morse'
+        assert {PurePosixPath(name).parts[0] for name in names} == {bundle, 'INSTALL.txt'}
+        prefix = bundle + '/Contents/'
         info = plistlib.loads(archive.read(prefix + 'Info.plist'))
-        assert info['CFBundleIdentifier'] == 'digital.kubbur.morse'
+        assert info['CFBundleIdentifier'] == bundle_id
+        assert info['CFBundleName'] == info['CFBundleDisplayName'] == product
         assert info['CFBundleShortVersionString'] == version
-        assert info['CFBundleExecutable'] == 'Morse'
-        binary_name = prefix + 'MacOS/Morse'
+        assert info['CFBundleExecutable'] == product
+        binary_name = prefix + 'MacOS/' + product
         assert archive.getinfo(binary_name).external_attr >> 16 & stat.S_IXUSR, 'Executable bit lost'
         binary = archive.read(binary_name)
         magic, cpu = struct.unpack_from('<II', binary)
@@ -103,7 +107,7 @@ with zipfile.ZipFile(archive_path) as archive:
             # Framework links often traverse Versions/Current, itself a link.
             for _ in range(40):
                 parts = PurePosixPath(destination).parts
-                assert parts[0] == 'Morse.app', 'Framework symlink escapes app'
+                assert parts[0] == bundle, 'Framework symlink escapes app'
                 for length in range(1, len(parts) + 1):
                     prefix_path = '/'.join(parts[:length])
                     if prefix_path in links:
@@ -114,7 +118,10 @@ with zipfile.ZipFile(archive_path) as archive:
             else: raise AssertionError('Cyclic framework symlink')
             assert destination in names or any(name.startswith(destination + '/') for name in names), 'Broken framework symlink'
         assert archive.read(prefix + 'Resources/' + info['CFBundleIconFile']).startswith(b'icns')
-        for helper in ['Morse Helper', 'Morse Helper (Renderer)', 'Morse Helper (GPU)', 'Morse Helper (Plugin)']:
+        for suffix in ['', ' (Renderer)', ' (GPU)', ' (Plugin)']:
+            helper = product + ' Helper' + suffix
+            helper_info = plistlib.loads(archive.read(prefix + f'Frameworks/{helper}.app/Contents/Info.plist'))
+            assert helper_info['CFBundleIdentifier'] == bundle_id + '.helper'
             helper_name = prefix + f'Frameworks/{helper}.app/Contents/MacOS/{helper}'
             assert archive.getinfo(helper_name).external_attr >> 16 & stat.S_IXUSR
             assert allows_jit(archive.read(helper_name)), 'Electron helper JIT entitlement missing'

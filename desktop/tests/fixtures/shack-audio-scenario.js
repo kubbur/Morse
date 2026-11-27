@@ -1,5 +1,6 @@
 (async()=>{
   const {Receiver}=await import('./js/shack-radio.mjs');
+  const {ShackUI}=await import('./js/shack-ui.mjs');
   async function check(wpm,manual) {
     const unit=1200/wpm, rate=48000, audio=new OfflineAudioContext(1,rate*4,rate);
     const rx=new Receiver(()=>({tone:650,volume:65,wpm:15}));
@@ -46,15 +47,25 @@
   const voice=rx.hissVoice;
   clock=.12;rx.setHiss(true);
   if(rx.hissVoice!==voice) throw Error('Refreshing the radio duplicated the noise source');
-  rx.key({peer:'test',stream:'pitch',edge:'down',offset:0,duration:100,wpm:30});
+  Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+  const listener=Object.assign(Object.create(ShackUI.prototype),{
+    active:true,monitor:true,tab:'air',f:7026,receiver:rx,profile:()=>({shack:{equipped:[null,{id:'1-0'},{id:'2-0'}]}}),
+  });
+  const mark={type:'key',f:7026,peer:'test',stream:'pitch',edge:'down',offset:0,duration:100,wpm:30};
+  listener.receive(mark);
   clock=.38;rx.setHiss(false);
+  clock=.5;
+  for (const tab of ['shop','bench','log']) {
+    listener.tab=tab;
+    listener.receive({...mark,stream:tab});
+  }
   const pcm=(await offline.startRendering()).getChannelData(0);
   const samples=(start,end)=>pcm.subarray(Math.round(start*rate),Math.round(end*rate));
   const rms=data=>Math.sqrt(data.reduce((sum,x)=>sum+x*x,0)/data.length);
   const hiss=rms(samples(.11,.21)), tone=samples(.25,.33);
   let crossings=0;
   for(let i=1;i<tone.length;i++) if(tone[i-1]<0 && tone[i]>=0) crossings++;
-  if(rms(samples(0,.04))!==0 || hiss<.0001 || hiss>rms(tone)/4 || rms(samples(.43,.55))!==0)
+  if(rms(samples(0,.04))!==0 || hiss<.0001 || hiss>rms(tone)/4 || rms(samples(.43,1))!==0)
     throw Error('Receiver hiss did not respect its level or mute state');
   if(Math.abs(crossings/.08-750)>25) throw Error('Received tone did not use the selected pitch');
   window.testComplete=true;

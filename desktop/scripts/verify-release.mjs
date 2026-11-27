@@ -7,6 +7,7 @@ import { listPackage, extractFile, statFile, getRawHeader } from '@electron/asar
 import { getCurrentFuseWire, FuseV1Options } from '@electron/fuses';
 import { root, stageApp } from './stage.mjs';
 import { macInstaller } from '../src/update-manager.mjs';
+import { macIdentity } from '../src/updates.mjs';
 
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const report = JSON.parse(await readFile(join(root, 'dist/darwin-build.json'), 'utf8'));
@@ -24,7 +25,8 @@ const hash = data => createHash('sha256').update(data).digest('hex');
 const validateArchive = (name, arch) => JSON.parse(execFileSync('python3', [join(root, 'scripts/verify-archive.py'), join(root, 'dist', name), arch, pkg.version], { encoding: 'utf8' }));
 for (const build of report.builds) {
   assert.ok(['ad-hoc', 'developer-id', 'developer-id-notarized'].includes(build.signing));
-  const bundle = join(root, `build/packages/Morse-darwin-${build.architecture}/Morse.app`);
+  const {name} = macIdentity(pkg.version);
+  const bundle = join(root, 'build/packages', name+'-darwin-'+build.architecture, name+'.app');
   const asar = join(bundle, 'Contents/Resources/app.asar');
   const entries = listPackage(asar).filter(path => !statFile(asar, path.replace(/^\//, '')).files).map(path => path.replace(/^\//, ''));
   assert.deepEqual(entries.sort(), [...sourceFiles.keys()].sort(), 'Packaged app includes only the intended files');

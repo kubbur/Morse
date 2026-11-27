@@ -1,4 +1,4 @@
-import { sanitizeShack, items, equipment, cost, equip, purchase, sellBadge, assembled, installed, receiving, minimumStation, qualified, canTransmit, alphabet, coverage, frequency, validFrequency, validRhythm, rooms, hunt, SHACK_UNLOCK_XP, SLOW_CW_CALLING_KHZ, isSlowCW } from './shack-model.mjs';
+import { sanitizeShack, items, equipment, cost, equip, purchase, sellBadge, assembled, installed, receiving, minimumStation, qualified, canTransmit, alphabet, coverage, frequency, validFrequency, validRhythm, hunt, SHACK_UNLOCK_XP, SLOW_CW_CALLING_KHZ, speedGroups, speedGroup, limitWpm, paceLabel, needsQualification } from './shack-model.mjs';
 import { timeline } from './morse.mjs';
 import { decodeSending } from './sending.mjs';
 import { BandRadio, Receiver } from './shack-radio.mjs';
@@ -21,8 +21,15 @@ export class ShackUI {
   constructor(options) {
     Object.assign(this,options);
     this.tab='air'; this.slot=0; this.f=SLOW_CW_CALLING_KHZ; this.edges=[]; this.monitor=false;
-    this.hiss=false;
-    try { this.hiss=localStorage.getItem(hissPreference)==='1'; } catch { /* Device storage is optional. */ }
+    this.hiss=false; this.qslVisit=0;
+    this.groupSpeeds=new Map();
+    try {
+      this.hiss=localStorage.getItem(hissPreference)==='1';
+      for (const group of speedGroups) {
+        const saved=Number(localStorage.getItem(group.preference));
+        if (Number.isInteger(saved) && saved===limitWpm(group,saved)) this.groupSpeeds.set(group,saved);
+      }
+    } catch { /* Device storage is optional. */ }
     this.root.tabIndex=-1;
     this.receiver=new Receiver(()=>this.sender.settings);
     this.band=new BandRadio(this.exchange,()=>this.updateReceiver(),event=>this.receive(event));
@@ -32,6 +39,7 @@ export class ShackUI {
     }]));
     this.sinks.check.dialog=this.checkDialog;
     this.sinks.air.live=true;
+    this.sinks.air.limitWpm=wpm=>this.onAirWpm(wpm);
     for (const surface of [this.root,this.checkDialog]) {
       surface.addEventListener('click',e=>{const el=e.target.closest('button[data-act]'); if(el) void this.act(el);});
       surface.addEventListener('submit',e=>{e.preventDefault();this.submit(e.target);});
@@ -44,11 +52,28 @@ export class ShackUI {
     this.root.addEventListener('input',e=>{if(e.target.matches('[data-dial]')) this.tune(Number(e.target.value));});
     this.bindDrag();
     this.bindKnob();
-    document.addEventListener('visibilitychange',()=>{if (document.hidden) this.receiver.stop(); else this.updateReceiver();});
+    // A deep link can open before Safari allows audio. Retry on the next station gesture.
+    this.root.addEventListener('click',()=>{if (this.monitor && this.receiver.audio.context?.state!=='running') this.unlockReceiver();},true);
+    document.addEventListener('visibilitychange',()=>{
+      this.updateReceiver();
+      if (!document.hidden && this.monitor && this.receiver.audio.context?.state!=='running') this.unlockReceiver();
+    });
     window.addEventListener('pagehide',()=>this.leave());
     window.addEventListener('pageshow',()=>{if (!this.root.closest('[hidden]')) this.render();});
   }
   get p() { return this.profile(); }
+  get group() { return speedGroup(this.f); }
+  onAirWpm(preferred) {
+    const group=this.group;
+    return group ? this.groupSpeeds.get(group) ?? limitWpm(group,preferred) : preferred;
+  }
+  setGroupSpeed(value) {
+    const group=this.group;
+    if (!group || !Number.isInteger(value)) return;
+    const wpm=limitWpm(group,value);
+    this.groupSpeeds.set(group,wpm);
+    try { localStorage.setItem(group.preference,String(wpm)); } catch { /* Session choice still applies. */ }
+  }
   get s() { return this.p.shack ||= sanitizeShack(); }
   get call() {
     if (this.p.callsign) return this.p.callsign;
@@ -58,9 +83,9 @@ export class ShackUI {
   }
   get capturing() { return this.start!=null || !!this.edges.length; }
   get transmit() { return assembled(this.s) && canTransmit(this.f,installed(this.s),qualified(this.p)); }
-  get needsCheck() { return !isSlowCW(this.f) && assembled(this.s) && installed(this.s)>=minimumStation(this.f) && !qualified(this.p); }
+  get needsCheck() { return needsQualification(this.f) && assembled(this.s) && installed(this.s)>=minimumStation(this.f) && !qualified(this.p); }
   connectBand() {
-    if (!receiving(this.s)) { this.monitor=false; this.receiver.audio.setListening(false); this.receiver.stop(); this.band.close(); return; }
+    if (!receiving(this.s)) { this.band.close(); return; }
     const equipped=this.s.equipped.map(slot=>slot?.id || null);
     const lifetimeXP = Math.min(this.xp(this.p), SHACK_UNLOCK_XP);
     void this.band.tune({f:this.f, call:this.call, invested:installed(this.s), qualified:qualified(this.p), equipped, lifetimeXP});
@@ -88,13 +113,15 @@ export class ShackUI {
     const lcd=this.root.querySelector('[data-face="mode"]'); if(lcd?.textContent==='TX') lcd.textContent='RX';
   }
   leave() {
-    this.active=false; if(this.checkDialog.open) this.checkDialog.close(); this.sender.setKeyTarget(null); this.clearCapture(); this.band.close();
-    this.receiver.stop(); this.receiver.audio.release(); clearTimeout(this.beaconTimer);
+    this.active=false; this.sender.setShackRadio(false); if(this.checkDialog.open) this.checkDialog.close(); this.sender.setKeyTarget(null); this.clearCapture(); this.band.close();
+    clearTimeout(this.qslTimer); this.qslVisit++;
+    this.receiver.stop(); this.receiver.audio.setListening(false); void this.receiver.audio.release(); clearTimeout(this.beaconTimer);
     this.monitor=false; this.challenge=null; this.signing=null; this.hunting=false; this.note='';
   }
   mount(tab) {
     if (!tabs.has(tab)) return;
     this.sender.setKeyTarget(null); this.clearCapture(); this.receiver.stop();
+    clearTimeout(this.qslTimer); this.qslVisit++;
     this.challenge=null; this.signing=null; this.hunting=false; this.note='';
     this.tab=tab; this.render(); this.focus();
   }
@@ -104,7 +131,7 @@ export class ShackUI {
     for (const key of panel.querySelectorAll('[data-shack-paddle]')) this.sender.bindPaddle(key,key.dataset.shackPaddle);
   }
   render() {
-    if (this.owner && this.owner!==this.p.id) {this.leave();this.f=SLOW_CW_CALLING_KHZ;this.tab='air';}
+    if (this.owner && this.owner!==this.p.id) {this.leave();this.band.returns.clear();this.f=SLOW_CW_CALLING_KHZ;this.tab='air';}
     this.pitchPreview=null;
     this.owner=this.p.id; this.active=true;
     this.award();
@@ -128,9 +155,14 @@ export class ShackUI {
     this.fillPanel(this.root,heading(this)+screen+detail+'<p class="shack-status" data-status role="status"></p>');
     this.root.querySelector('[data-status]').textContent=this.note || '';
     for(const canvas of this.root.querySelectorAll('canvas[data-portrait]')) drawGear(canvas);
-    if (this.tab==='air' || this.band.key || !receiving(this.s)) this.connectBand();
+    if (this.tab==='air') this.connectBand();
+    else if (this.band.key) this.band.close();
     this.updateReceiver();
     this.scheduleBeacon();
+    if (this.tab==='log' && this.lastQslVisit!==this.qslVisit) {
+      this.lastQslVisit=this.qslVisit;
+      void this.checkSignatures(this.qslVisit);
+    }
   }
   updateReceiver() {
     if (!this.active) return;
@@ -150,17 +182,25 @@ export class ShackUI {
       for (const key of paddles.children) key.disabled=!mode;
     }
     const built=receiving(this.s);
-    this.receiver.setHiss(this.hiss && this.monitor && built && this.tab==='air' && !document.hidden && !modal);
+    const listen=built && this.tab==='air' && !modal;
+    this.sender.setShackRadio(listen);
+    if (listen!==this.monitor) {
+      this.monitor=listen;
+      this.receiver.audio.setListening(listen);
+      if (listen) this.unlockReceiver();
+      else { this.receiver.stop(); void this.receiver.audio.release(); this.band.heard=null; }
+    }
+    this.receiver.setHiss(this.hiss && this.monitor && this.band.state==='live');
     if (this.tab!=='air') return;
     const q=s=>this.root.querySelector(s), face=n=>q('[data-face="'+n+'"]');
     if (!face('frequency')) return;
     face('frequency').textContent=frequency(this.f);
-    const h=hunt(), beacon=this.f===h.f;
+    const h=hunt(), beacon=this.f===h.f, group=this.group;
     const source={straight:'straight key (Space)',keyboard:'keyboard paddles ('+keyboardPaddles.dit+' / '+keyboardPaddles.dah+')',paddle:'paddle adapter',vband:'VBand adapter'}[input] || 'practice key';
     const needsConnection=(input==='paddle' || input==='vband' && this.sender.native) && !this.sender.connection.connected;
     face('mode').textContent=!built?'OFF':this.start!=null && mode==='air'?'TX':'RX';
-    face('pace').textContent=isSlowCW(this.f)?'8–12 WPM welcome':beacon?'Beacon signal':'Virtual 40 m';
-    face('room').textContent=rooms.get(this.f) || (beacon?'RVK beacon':'Open frequency');
+    face('pace').textContent=group ? paceLabel(group) : beacon?'Beacon signal':'Virtual 40 m';
+    face('room').textContent=group ? group.name+(this.f===group.calling?' calling frequency':' open channel') : beacon?'RVK beacon':'Open frequency';
     const reason=!built ? 'Equip a radio and an antenna in the Workbench to listen.' :
       !this.s.equipped[0]?.id ? 'Receive only · equip a Morse key to send.' :
       installed(this.s)<minimumStation(this.f) ? 'Receive only · this frequency needs a '+minimumStation(this.f).toLocaleString()+' XP station equipped.' :
@@ -174,16 +214,43 @@ export class ShackUI {
     knob.style.setProperty('--rotation',(-135+(this.f-7020)*9)+'deg');
     knob.setAttribute('aria-valuenow',String(this.f));knob.setAttribute('aria-valuetext',frequency(this.f)+' MHz');
     this.showPitch(this.pitchPreview ?? this.sender.settings.tone);
-    let i=0;const bars=built && (beacon || (this.band.activity[this.f] || 0)>1) ? 8 : 0;
+    const ms=this.band.state==='live' ? this.band.delayMs : null;
+    face('delay').textContent=ms==null ? '— ms' : ms+' ms';
+    face('delay').setAttribute('aria-label',ms==null?'Relay delay unavailable':'Relay round trip '+ms+' milliseconds');
+    let i=0;const bars=ms==null ? 0 : Math.max(1,11-Math.floor(ms/25));
     for(const bar of q('.meter').children){bar.style.height=(4+i)+'px';bar.classList.toggle('off',i++>=bars);}
-    const monitor=q('[data-act="monitor"]');monitor.textContent=built ? this.monitor?'Stop listening':'Listen' : Object.keys(this.s.orders).length?'Equip your station':'Get starter equipment';
-    monitor.setAttribute('aria-pressed',String(this.monitor));
     q('[data-act="hiss"]').setAttribute('aria-pressed',String(this.hiss));
     const list=q('[data-band]'), html=activity(this);
     if (html!==this.bandHTML || list!==this.bandNode) {this.bandHTML=html;this.bandNode=list;list.innerHTML=html;}
   }
+  unlockReceiver() {
+    void this.receiver.unlock().then(()=>{
+      if (this.monitor) this.receiver.setHiss(this.hiss && this.band.state==='live');
+    }).catch(()=>{if (this.monitor) this.message('Tap the radio to enable receiver audio.');});
+  }
+  async checkSignatures(visit) {
+    if (!this.active || this.tab!=='log' || this.qslVisit!==visit) return;
+    const cards=this.band.pendingReturns();
+    if (!cards.length) return;
+    try {
+      const {signatures}=await this.exchange('signatures',{cards});
+      if (!this.active || this.tab!=='log' || this.qslVisit!==visit) return;
+      let changed=false;
+      for (const {card,f,audio} of signatures || []) {
+        const receipt=this.band.returns.get(card);
+        if (receipt?.f!==f || this.s.cards[card]?.f!==f || !validRhythm(audio)) continue;
+        receipt.received=true;
+        this.s.cards[card].audio=audio;
+        changed=true;
+      }
+      if (changed) {this.persist(); if (!this.signing) this.render();}
+    } catch { /* A return card can be collected on the next check. */ }
+    if (this.active && this.tab==='log' && this.qslVisit===visit && this.band.pendingReturns().length)
+      this.qslTimer=setTimeout(()=>void this.checkSignatures(visit),10000);
+  }
   tune(f) {
     if (!validFrequency(f) || f===this.f) return;
+    this.sender.setShackRadio(false);
     this.sender.setKeyTarget(null);this.clearCapture();this.receiver.stop();this.band.close();
     this.f=f;this.note='';
     this.connectBand();
@@ -224,7 +291,7 @@ export class ShackUI {
     if (!this.active || event.f!==this.f) return;
     if (event.type==='silence') { this.receiver.live?.stop(); return; }
     if (event.type==='key' || event.type==='signal') {
-      if (this.monitor && !document.hidden && receiving(this.s) && this.tab==='air' && !document.querySelector('dialog[open]')) {
+      if (this.monitor && receiving(this.s) && this.tab==='air' && !document.querySelector('dialog[open]')) {
         if (event.type==='key') {
           this.receiver.key(event);
           if (event.edge==='up') this.band.heard=event.peer;
@@ -317,6 +384,7 @@ export class ShackUI {
     if (act==='settings' || act==='profile') {
       this.sender.setKeyTarget(null); this.receiver.stop(); clearTimeout(this.beaconTimer);
       if (act==='settings') this.openInputs(); else this.openProfile();
+      this.updateReceiver();
       return;
     }
     if (act==='open-check') {this.openCheck();return;}
@@ -335,18 +403,6 @@ export class ShackUI {
     if (act==='tune' || act==='step') {
       if (this.tab!=='air') this.mount('air');
       this.tune(act==='tune'?Number(el.dataset.f):this.f+Number(el.dataset.step));this.focus();return;
-    }
-    if(act==='monitor') {
-      if(!receiving(this.s)){this.mount(Object.keys(this.s.orders).length?'bench':'shop');return;}
-      if(!this.monitor) {
-        const owner=this.owner;
-        try{await this.receiver.unlock();}catch{this.message('Audio could not start. Check your audio output.');return;}
-        if(!this.active || this.tab!=='air' || owner!==this.owner) return;
-      }
-      this.monitor=!this.monitor;
-      this.receiver.audio.setListening(this.monitor);
-      if(!this.monitor)this.band.heard=null;
-      this.receiver.stop();this.scheduleBeacon();this.updateReceiver();this.focus();return;
     }
     if (act==='buy' || act==='bundle') {
       const batch=act==='buy'?[id]:items.filter(i=>i.level===Number(el.dataset.tier) && !this.s.orders[i.id] && cost(this.s,i)>0).map(i=>i.id);

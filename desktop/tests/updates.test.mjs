@@ -47,7 +47,7 @@ test('each channel selects its published architecture, orders Dev build numbers,
   assert.equal(availableUpdate(rows,'2.0.0-dev.10','arm64','dev'),null);
   assert.equal(availableUpdate(rows,'1.9.0','x64','dev'),null);
   assert.equal(availableUpdate(rows,'2.1.0-dev.5','arm64','stable').manualSwitch,true);
-  assert.equal(availableUpdate(rows,'2.0.0-dev.10','arm64','stable').manualSwitch,false);
+  assert.equal(availableUpdate(rows,'2.0.0-dev.10','arm64','stable').manualSwitch,true);
   assert.equal(availableUpdate(rows,'2.1.0','arm64','stable'),null);
   const urls=[];
   const fetcher=async url=>{
@@ -62,7 +62,7 @@ test('each channel selects its published architecture, orders Dev build numbers,
   await assert.rejects(checkUpdate('1.0.0','arm64',fetcher,'other'));
 });
 
-test('a channel switch fences an older check, survives reopening and installs only the selected build', async t => {
+test('the channel selector remembers downloads and keeps each installer on its own feed', async t => {
   const dir=await temporary(t), pref=channelPreference(dir), calls=[];
   assert.equal(pref.read('stable'),'stable');
   let resolveStable;
@@ -73,13 +73,19 @@ test('a channel switch fences an older check, survives reopening and installs on
   assert.ok(await client.setChannel('dev'));
   resolveStable(release); await previous;
   assert.equal(client.state().available,dev.version);
-  assert.deepEqual(calls.at(-1),[false,'dev',dev.version]);
-  await client.install(async()=>true); assert.equal(calls.at(-1),'install');
+  assert.deepEqual(calls.at(-1),[false,'stable','']);
+  assert.equal(client.state().installable,false);
+  await client.install(async()=>true); assert.ok(!calls.includes('install'));
   assert.equal(channelPreference(dir).read('stable'),'dev');
   assert.equal(await client.setChannel('bogus'),false);
-  const blocked=manager({channel:'dev',storeChannel:()=>{throw Error('read only');},installer:{configure:(...args)=>calls.push(args)},lookup:async()=>dev});
+  const blocked=manager({version:'2.0.0-dev.9',channel:'dev',storeChannel:()=>{throw Error('read only');},installer:{configure:(...args)=>calls.push(args)},lookup:async()=>({...dev,manualSwitch:false})});
   await blocked.check(); assert.equal(await blocked.setChannel('stable'),false);
   assert.equal(blocked.state().channel,'dev'); assert.deepEqual(calls.at(-1),[false,'dev',dev.version]);
+  assert.equal(blocked.state().installable,true);
+  const separate=manager({version:'2.0.0-dev.9',channel:'stable',automatic:true,installer:{configure:(...args)=>calls.push(args)},
+    lookup:async channel=>channel==='dev'?{...dev,manualSwitch:false}:{...release,manualSwitch:true}});
+  await separate.check();
+  assert.equal(separate.state().installable,false); assert.deepEqual(calls.at(-1),[true,'dev',dev.version]);
   const rollback=manager({channel:'dev',storeChannel:pref.write,installer:{configure(){},install:()=>assert.fail()},lookup:async()=>({...release,manualSwitch:true})});
   assert.ok(await rollback.setChannel('stable'));
   assert.equal(rollback.state().installable,false); await rollback.install(async()=>true);
@@ -143,19 +149,21 @@ for (const version of ['2.0.0','2.0.1-dev.10']) test('the publisher verifies bot
   const dir = await temporary(t);
   const {privateKey, publicKey} = generateKeyPairSync('ed25519');
   const pub = sparklePublicKey(publicKey), dist = join(dir,'dist');
-  for (const name of ['scripts','assets','dist','build','Morse.app/Contents']) await mkdir(join(dir,name),{recursive:true});
+  const dev = version.includes('-dev.'), app = dev ? 'Morse Dev.app' : 'Morse.app';
+  for (const name of ['scripts','src','assets','dist','build',app+'/Contents']) await mkdir(join(dir,name),{recursive:true});
   for (const name of ['appcast.mjs','stage.mjs']) await copyFile(join(root,'scripts',name),join(dir,'scripts',name));
+  await copyFile(join(root,'src/updates.mjs'),join(dir,'src/updates.mjs'));
   await writeFile(join(dir,'assets/sparkle-public-key.txt'),pub);
   await writeFile(join(dir,'package.json'),JSON.stringify({version:'2.0.0'}));
   const responses = {'public-key':pub};
   const archives = [];
   for (const arch of ['arm64','x64']) {
     const path = join(dist,`Morse-${version}-mac-${arch}.zip`);
-    const info = {CFBundleIdentifier:'digital.kubbur.morse',CFBundleVersion:bundleVersion(version),CFBundleShortVersionString:version,
+    const info = {CFBundleIdentifier:dev?'digital.kubbur.morse.dev':'digital.kubbur.morse',CFBundleVersion:bundleVersion(version),CFBundleShortVersionString:version,
       SUPublicEDKey:pub,SUFeedURL:`https://github.com/kubbur/Morse/releases/latest/download/appcast-mac-${arch}.xml`};
     const plist = execFileSync('/usr/bin/plutil',['-convert','xml1','-o','-','-'],{input:JSON.stringify(info)});
-    await writeFile(join(dir,'Morse.app/Contents/Info.plist'),plist);
-    execFileSync('/usr/bin/ditto',['-c','-k','--keepParent',join(dir,'Morse.app'),path]);
+    await writeFile(join(dir,app,'Contents/Info.plist'),plist);
+    execFileSync('/usr/bin/ditto',['-c','-k','--keepParent',join(dir,app),path]);
     responses[basename(path)] = sign(null, await readFile(path), privateKey).toString('base64');
     archives.push({path,feed:join(dist,`appcast-mac-${arch}.xml`)});
   }
@@ -172,6 +180,8 @@ for (const version of ['2.0.0','2.0.1-dev.10']) test('the publisher verifies bot
   for (const {path,feed} of archives) {
     const xml = await readFile(feed,'utf8');
     assert.equal(xml.includes('<sparkle:channel>dev</sparkle:channel>'),version.includes('-dev.'));
+    assert.equal(xml.includes('<sparkle:belowVersion>1.1.6b31</sparkle:belowVersion>'),dev);
+    if (dev) assert.ok(xml.includes('<link>https://github.com/kubbur/Morse/releases/download/morse-v'+version+'/'+basename(path)+'</link>'));
     assert.ok(xml.includes('/download/morse-v'+version+'/'));
     const signature = Buffer.from(/sparkle:edSignature="([^"]+)"/.exec(xml)[1],'base64');
     assert.ok(verify(null,await readFile(path),publicKey,signature));

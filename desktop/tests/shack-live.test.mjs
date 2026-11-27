@@ -125,7 +125,7 @@ test('a lost legacy release is silent; cancel and retune clear pending and sched
 });
 
 test('one sender dah is buffered once, including slow and fast keyers and speed changes',async()=>{
-  const band=new ShackBand(), a=open(band,'KEY1'), b=open(band,'KEY2');
+  const f=7039, gear=['0-2','1-2','2-2'], band=new ShackBand(), a=open(band,'KEY1',f,true,gear), b=open(band,'KEY2',f);
   const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), settings={tone:600,volume:50,wpm:12};
   let cursor=b.cursor;
   const tx=new LiveKeySender(async packet=>{
@@ -251,13 +251,13 @@ test('the relay rejects incomplete or inconsistent timed pairs without advancing
   assert.deepEqual(edges([down,key('up',40)]),{ack:2});
   assert.deepEqual(edges([down,key('up',40)]),{ack:2});
   const events=room=>band.request('poll',{token:room.token,f,cursor:0}).events;
-  assert.deepEqual(events(b).map(e=>[e.edge,e.offset,e.duration]),[['down',0,40],['up',40,undefined]]);
-  assert.deepEqual(events(old).map(e=>e.audio),[[[40,0]]]);
+  assert.deepEqual(events(b).map(e=>[e.edge,e.offset,e.duration]),[['down',0,100],['up',100,undefined]]);
+  assert.deepEqual(events(old).map(e=>e.audio),[[[100,0]]]);
 });
 
 test('a long over keeps the same audio clock when sender offsets roll over on the wire',async()=>{
   let now=0;
-  const band=new ShackBand(()=>now), a=open(band,'KEY1'), b=open(band,'KEY2');
+  const f=7039, gear=['0-2','1-2','2-2'], band=new ShackBand(()=>now), a=open(band,'KEY1',f,true,gear), b=open(band,'KEY2',f);
   const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), down=[];
   let cursor=b.cursor;
   const tx=new LiveKeySender(async packet=>{
@@ -283,6 +283,87 @@ test('a long over keeps the same audio clock when sender offsets roll over on th
     assert.equal(down.at(-1).gap,undefined);
     assert.equal(Math.round(marks.at(-1).start*1000),130150);
   } finally {tx.close();}
+});
+
+for (const [calling,min,max] of [[7026,8,12],[7031,12,25],[7036,25,80]]) {
+  test('the relay enforces '+min+'–'+max+' WPM on all five channels around '+calling+' kHz',()=>{
+    for (let f=calling-2;f<=calling+2;f++) {
+      for (const wpm of [5,8,10,12,20,25,30,80]) {
+        const band=new ShackBand(), tx=open(band,'TX1',f,true,['0-1','1-1','2-1']), rx=open(band,'RX1',f);
+        const limited=Math.max(min,Math.min(max,wpm)), unit=1200/wpm, out=1200/limited, edges=[];
+        // Element, letter and word spacing, plus a one-second operator pause.
+        for (const [start,length,extra] of [[0,3,0],[4,1,0],[8,3,0],[18,1,1000]]) {
+          const offset=start*unit+extra;
+          edges.push({...downMark(offset,length*unit,wpm),sent:offset},key('up',offset+length*unit));
+        }
+        const packet={f,token:tx.token,first:1,edges};
+        assert.equal(band.request('edges',packet).ack,8);
+        assert.equal(band.request('edges',packet).ack,8);
+        const events=band.request('poll',{f,token:rx.token,cursor:rx.cursor}).events;
+        assert.deepEqual(events.map(e=>e.offset),[0,3,4,5,8,11,18,19].map((n,i)=>n*out+(i>=6?1000:0)));
+        assert.deepEqual(events.filter(e=>e.edge==='down').map(e=>[e.wpm,e.duration]),[3,1,3,1].map(n=>[limited,n*out]));
+      }
+    }
+  });
+}
+test('older key-down and release packets stay inside the slow channel limits',()=>{
+  const band=new ShackBand(), f=7028, tx=open(band,'HAND',f), rx=open(band,'COPY',f);
+  const packet=(first,edges)=>band.request('edges',{f,token:tx.token,first,edges});
+  packet(1,[key('down',0)]); packet(2,[key('up',25),key('down',30),key('up',1500)]);
+  const events=band.request('poll',{f,token:rx.token,cursor:0}).events;
+  assert.deepEqual(events.map(e=>e.offset),[0,100,200,650]);
+});
+test('a straight key retains legal hand-sent marks even when its configured speed is at the other end of the group',()=>{
+  for (const [f,wpm,duration] of [[7031,25,100],[7036,25,50]]) {
+    const band=new ShackBand(), tx=open(band,'HAND',f,true,['0-1','1-1','2-1']), rx=open(band,'RX',f);
+    const mark={...downMark(0,duration,wpm),sent:0,measured:true};
+    band.request('edges',{f,token:tx.token,first:1,edges:[mark,key('up',duration)]});
+    const [down,up]=band.request('poll',{f,token:rx.token,cursor:rx.cursor}).events;
+    assert.equal(down.duration,duration);
+    assert.equal(up.offset,duration);
+  }
+});
+test('legacy recordings and split key edges preserve valid durations and clamp the extremes in each group',()=>{
+  for (const [f,minDit,maxDah,dit,dah] of [[7027,100,450,120,360],[7032,48,300,80,240],[7035,15,144,20,50]]) {
+    const band=new ShackBand(), gear=['0-1','1-1','2-1'];
+    const tx=open(band,'OLD',f,false,gear), hand=open(band,'HAND',f,true,gear), rx=open(band,'RX',f);
+    const audio=[[8,0],[dit,dit],[dah,1500],[1000,0]];
+    const expected=[[minDit,minDit],[dit,dit],[dah,1500],[maxDah,0]];
+    band.request('send',{token:tx.token,f,stream:'tape',seq:1,offset:0,audio});
+    const signal=band.request('poll',{token:rx.token,f,cursor:rx.cursor});
+    assert.deepEqual(signal.events[0].audio,expected);
+    let offset=0,first=1;
+    for (const [mark,gap] of audio) {
+      band.request('edges',{token:hand.token,f,first:first++,edges:[key('down',offset)]});
+      band.request('edges',{token:hand.token,f,first:first++,edges:[key('up',offset+mark)]});
+      offset+=mark+gap;
+    }
+    const events=band.request('poll',{token:rx.token,f,cursor:signal.cursor}).events;
+    offset=0;
+    for (const [i,[mark,gap]] of expected.entries()) {
+      assert.deepEqual(events.slice(i*2,i*2+2).map(e=>e.offset),[offset,offset+mark]);
+      offset+=mark+gap;
+    }
+  }
+});
+
+test('relay delay measures a request round trip and excludes time waiting on the live feed',async t=>{
+  let now=1000, next;
+  t.mock.timers.enable({apis:['setTimeout']});
+  t.mock.method(performance,'now',()=>now);
+  const radio=new BandRadio(async(action)=>{
+    if (action==='open') { now+=42; return {token:'rx',id:'one',live:true,probes:true,cursor:0,activity:{[f]:1}}; }
+    if (action==='poll') return new Promise(resolve=>{next=resolve;});
+    if (action==='probe') now+=17;
+    return {};
+  },()=>{},()=>{});
+  try {
+    await radio.tune({f}); assert.equal(radio.delayMs,42);
+    now+=5000; next({cursor:0,activity:{[f]:1},events:[]}); await turn();
+    assert.equal(radio.state,'live'); assert.equal(radio.delayMs,42);
+    await radio.probe(radio.room); assert.equal(radio.delayMs,17);
+  } finally { radio.close(); next({}); }
+  assert.equal(radio.delayMs,null);
 });
 
 test('a legacy sender’s recorded R preserves both gaps across two polls',()=>{

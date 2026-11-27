@@ -1,4 +1,4 @@
-import { alphabet, slots, tiers, items, equipment, assembled, receiving, stationTier, balances, cost, coverage, rooms, frequency, badgePrice, SLOW_CW_CALLING_KHZ } from './shack-model.mjs';
+import { alphabet, slots, tiers, items, equipment, assembled, receiving, stationTier, balances, cost, coverage, frequency, badgePrice, SLOW_CW_CALLING_KHZ, speedGroups, speedGroup, paceLabel } from './shack-model.mjs';
 export const esc = v => String(v).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => n.toLocaleString();
 export const button = (label, action, attrs='', type='quiet') => `<button type="button" class="${type}" data-act="${action}" ${attrs}>${esc(label)}</button>`;
@@ -23,9 +23,12 @@ export function heading(ui) {
     ${button('← Progress','progress','','textbtn')}</div>`;
 }
 function activity(ui) {
-  const keys=[...new Set([...rooms.keys(),...Object.keys(ui.band.activity || {}).map(Number),ui.f])].sort((a,b)=>a-b);
-  return keys.map(f=>`<button type="button" class="activity ${f===ui.f?'selected':''}" data-act="tune" data-f="${f}">
-    <span><span class="activityfreq">${frequency(f)} MHz</span><small>${rooms.get(f) || 'Open frequency'}</small></span>
+  const rows=new Map(speedGroups.map(group=>[group.calling,group.name+' calling · '+paceLabel(group)]));
+  for (const f of [...Object.keys(ui.band.activity || {}).map(Number),ui.f]) {
+    if (!speedGroup(f)) rows.set(f,'Open frequency');
+  }
+  return [...rows].sort(([a],[b])=>a-b).map(([f,label])=>`<button type="button" class="activity ${f===ui.f?'selected':''}" data-act="tune" data-f="${f}">
+    <span><span class="activityfreq">${frequency(f)} MHz</span><small>${label}</small></span>
     <span class="count" aria-label="${ui.band.state==='live' ? (ui.band.activity[f] || 0)+' operators' : 'Occupancy unavailable'}">${ui.band.state==='live' ? (ui.band.activity[f] || 0) : '—'}</span></button>`).join('');
 }
 export { activity };
@@ -35,15 +38,15 @@ export function air(ui) {
     <div class="facehead"><span class="label">∿ &nbsp; ${rig?.name || 'Radio slot empty'}</span><span class="tiny">1 kHz / step</span></div>
     <div class="face"><div class="lcd"><div class="lcd-top"><span class="lcd-state" data-face="mode">RX</span><span data-face="pace"></span></div>
     <div class="freqline"><strong class="frequency" data-face="frequency"></strong><span class="mhz">MHz</span></div>
-    <div class="lcd-foot"><span data-face="room"></span><span class="meter" aria-hidden="true">${'<i></i>'.repeat(11)}</span></div></div>
+    <div class="lcd-foot"><span data-face="room"></span><span class="relay-delay" title="Round-trip time to the live CW relay"><span data-face="delay"></span><span class="meter" aria-hidden="true">${'<i></i>'.repeat(11)}</span></span></div></div>
     <div class="knobgroup"><div class="knob" role="slider" tabindex="0" aria-label="Tuning knob in kilohertz" aria-valuemin="7020" aria-valuemax="7050"></div>
     <div class="tuneops">${button('−','step','data-step="-1" aria-label="Tune down 1 kHz"','mini')}${button('+','step','data-step="1" aria-label="Tune up 1 kHz"','mini')}</div></div></div>
     <div class="scale"><input type="range" data-dial aria-label="Tune frequency in kilohertz" min="7020" max="7050" step="1" value="${ui.f}">
     <div class="scale-labels">${[7020,7025,7030,7035,7040,7045,7050].map(f=>`<span>${frequency(f)}</span>`).join('')}</div></div>
-    <div class="pitch-control"><div class="knob pitch-knob" role="slider" tabindex="0" aria-label="Receive and send tone" aria-valuemin="200" aria-valuemax="2000"></div>
-    <div><span class="label">CW pitch</span><output data-face="pitch"></output></div>
+    <div class="pitch-control"><div><span class="label">CW pitch</span><output data-face="pitch"></output></div>
+    <div class="knob pitch-knob" role="slider" tabindex="0" aria-label="Receive and send tone" aria-valuemin="200" aria-valuemax="2000"></div>
     <div class="tuneops">${button('−','pitch-step','data-step="-50" aria-label="Lower CW pitch by 50 Hz"','mini')}${button('+','pitch-step','data-step="50" aria-label="Raise CW pitch by 50 Hz"','mini')}</div></div>
-    <div class="transmit">${button('Listen','monitor','','btn')}${button('Input settings','settings','aria-haspopup="dialog"','textbtn')}${button('Radio hiss','hiss',`aria-pressed="${ui.hiss === true}"`,'hiss-toggle')}${button('On-air check','open-check','aria-haspopup="dialog" hidden','textbtn')}</div>
+    <div class="transmit">${receiving(ui.s)?'':button(Object.keys(ui.s.orders).length?'Equip your station':'Get starter equipment','tab',`data-id="${Object.keys(ui.s.orders).length?'bench':'shop'}"`,'btn')}${button('Input settings','settings','aria-haspopup="dialog"','textbtn')}${button('Radio hiss','hiss',`aria-pressed="${ui.hiss === true}"`,'hiss-toggle')}${button('On-air check','open-check','aria-haspopup="dialog" hidden','textbtn')}</div>
     <p class="radio-note" data-face="note" role="status"></p></section>${paddleControls}</div>
     <aside class="card band"><div class="head"><h2>Band activity</h2><small class="tiny">Operators</small></div><div data-band>${activity(ui)}</div></aside></div>
     <div class="secondary-grid"><section class="card beacon-card"><span class="label">Beacon hunt</span><h2>Find Reykjavík</h2>

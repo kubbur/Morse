@@ -52,7 +52,7 @@ jobs:
       - name: Package an ad-hoc test build
         run: node scripts/package.mjs darwin ${{ matrix.architecture }}
       - name: Check the Mac code signature
-        run: codesign --verify --deep --strict --verbose=2 build/packages/Morse-darwin-${{ matrix.architecture }}/Morse.app
+        run: codesign --verify --deep --strict --verbose=2 build/packages/*-darwin-${{ matrix.architecture }}/*.app
       - name: Test the packaged app
         run: npm run test:smoke
       - name: Create the source download

@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { validShackKeys } from './shack-background.mjs';
 
 const integer = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
 export function validCommand(op, v) {
   switch (op) {
     case 'status': case 'capture-position': case 'arm': case 'disarm': case 'interrupt':
-    case 'vband-release': case 'calibrate': case 'cancelCalibration': case 'automatic': return v == null;
+    case 'vband-release': case 'shack-key-access': case 'calibrate': case 'cancelCalibration': case 'automatic': return v == null;
+    case 'shack-keys': return v===null || validShackKeys(v) && Number.isSafeInteger(v.epoch) && v.epoch>0;
     case 'input': return ['off','paddle','vband'].includes(v);
     case 'vband': return !!v && integer(v.mask,0,3) && integer(v.epoch,0,0xffffffff) && Number.isSafeInteger(v.session) && v.session > 0;
     case 'sample': case 'mute': case 'reverse': case 'word-spaces': return typeof v === 'boolean';
@@ -40,7 +42,7 @@ export class PaddleService {
       if (row.type === 'reply') {
         const pending = this.pending.get(row.id);
         if (pending) { this.pending.delete(row.id); clearTimeout(pending.timer); pending.resolve(row.value); }
-      } else if (['status','reset','element'].includes(row.type)) {
+      } else if (['status','reset','element','shack-contact'].includes(row.type)) {
         row.session = session;
         if (row.type === 'status') this.status = row;
         this.publish(row);
@@ -69,7 +71,7 @@ export class PaddleService {
     if (starting && ['arm','vband','calibrate','sample'].includes(op))
       return Promise.resolve({ error: 'Paddle engine is starting. Release both paddles and try again.' });
     if (this.pending.size >= 32) {
-      if (!['input','vband-release','disarm','interrupt'].includes(op)) return Promise.resolve({ error: 'Paddle command unavailable.' });
+      if (!(op==='shack-keys' && value===null) && !['input','vband-release','disarm','interrupt'].includes(op)) return Promise.resolve({ error: 'Paddle command unavailable.' });
       // Terminating the engine releases all contacts and any typing destination.
       this.child.kill();
       return Promise.resolve({ error: 'Paddle input was interrupted.' });

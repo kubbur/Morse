@@ -79,9 +79,25 @@ export class SendingUI {
     this.keyboardPaddles = loadKeyboardPaddles();
     this.heldCodes = new Map();
     this.pointerHolds = new Map();
+    this.paddleTouches = new Map();
     this.contactHolds = { dit: new Set(), dah: new Set() };
     this.wake = new ScreenWake({ onState: state => { this.wakeState = state; this.renderInput(); } });
     this.native = globalThis.morseMac;
+    this.shackGeneration=0;
+    try { this.shackKeys=localStorage.getItem('morse.shack.backgroundKeys')==='1'; } catch { /* Device preference. */ }
+    const backgroundKeys=$('shack-background-keys');
+    backgroundKeys.addEventListener('change',async()=>{
+      const wanted=backgroundKeys.checked;
+      backgroundKeys.disabled=true;
+      try {
+        const reply=wanted ? await this.native.requestShackKeys() : {};
+        this.shackKeys=wanted && !reply.error;
+        this.shackKeyError=reply.error || '';
+        try { localStorage.setItem('morse.shack.backgroundKeys',this.shackKeys?'1':'0'); } catch { /* Session choice. */ }
+      } catch { this.shackKeys=false; this.shackKeyError='Mac paddle key input is unavailable.'; }
+      finally { backgroundKeys.disabled=false; this.setShackRadio(!!this.shackListening); this.renderInput(); }
+    });
+    this.native?.onShackKeys?.(row=>this.backgroundContact(row));
     this.vband = new VBandKeys((mask, contact, down) => {
       if (this.native) this.connection.vbandContacts(mask);
       else this.keyboardContact(contact, down);
@@ -187,12 +203,15 @@ export class SendingUI {
     window.addEventListener('blur', () => {
       this.suspended = true;
       this.updateActivity();
-      this.pauseInput();
+      if (!(this.backgroundInput && this.source==='paddle')) this.pauseInput();
     });
-    window.addEventListener('focus', () => { this.suspended = false; this.updateActivity(); this.updateMute(); this.renderExercise(); this.wake.refresh(); });
+    window.addEventListener('focus', () => {
+      if (this.suspended && this.shackKeys && this.keyTarget?.live && this.source!=='paddle') this.pauseInput();
+      this.suspended = false; this.updateActivity(); this.updateMute(); this.renderExercise(); this.wake.refresh();
+    });
     document.addEventListener('visibilitychange', () => {
       this.updateActivity();
-      if (document.hidden) this.pauseInput();
+      if (document.hidden && !this.backgroundInput) this.pauseInput();
       else { this.updateMute(); this.wake.refresh(); }
     });
     window.addEventListener('pagehide', () => { this.pageHidden = true; this.updateActivity(); this.pauseInput(); });
@@ -216,22 +235,63 @@ export class SendingUI {
   }
 
   bindPaddle(button, contact) {
-    this.bindHold(button, down => {
-      if (this.source !== 'keyboard' || !this.keyboardPaddles.showButtons) return;
-      const side = this.settings.reverse ? (contact === 'dit' ? 'dah' : 'dit') : contact;
-      this.keyboardContact(side, down, 'screen-' + contact);
+    const pair = button.parentElement;
+    button.dataset.contact = contact;
+    const change = (touch, next) => {
+      const old = touch.button;
+      if (old === next) return;
+      const side = pad => {
+        const value = pad?.dataset.contact;
+        return value && this.settings.reverse ? (value === 'dit' ? 'dah' : 'dit') : value;
+      };
+      touch.button = next;
+      if (old && ![...this.paddleTouches.values()].some(other => other.button === old)) old.removeAttribute('data-held');
+      if (next) next.setAttribute('data-held', '');
+      this.changeContact(touch.id, side(old), side(next));
+    };
+    button.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || button.disabled || this.paddleTouches.has(e.pointerId) ||
+          this.source !== 'keyboard' || !this.keyboardPaddles.showButtons) return;
+      e.preventDefault();
+      button.focus({preventScroll:true});
+      button.setPointerCapture(e.pointerId);
+      const touch = {id:e.pointerId, origin:button, button:null};
+      this.paddleTouches.set(e.pointerId, touch);
+      change(touch, button);
     });
+    button.addEventListener('pointermove', e => {
+      const touch = this.paddleTouches.get(e.pointerId);
+      if (touch?.origin !== button) return;
+      for (const point of [...(e.getCoalescedEvents?.() || []), e]) {
+        const hit = document.elementFromPoint(point.clientX, point.clientY);
+        if (hit === pair) continue; // Keep contact across the narrow gutter.
+        const pad = hit?.closest('button[data-contact]');
+        change(touch, pad?.parentElement === pair && !pad.disabled ? pad : null);
+      }
+    });
+    button.addEventListener('pointerup', e => {
+      const touch = this.paddleTouches.get(e.pointerId);
+      if (touch?.origin !== button) return;
+      change(touch, null);
+      this.paddleTouches.delete(e.pointerId);
+    });
+    for (const name of ['pointercancel', 'lostpointercapture']) button.addEventListener(name, e => {
+      if (this.paddleTouches.get(e.pointerId)?.origin === button) this.abort('Touch input paused. Try the answer again.');
+    });
+    button.addEventListener('contextmenu', e => e.preventDefault());
   }
 
   releasePaddlesIn(panel) {
-    if ([...this.pointerHolds.keys()].some(button => panel.contains(button))) this.abort();
+    if ([...this.paddleTouches.values()].some(touch => panel.contains(touch.origin))) this.abort();
   }
 
   get stage() { return sendingStage(this.getProfile().sending.level); }
   get settings() {
     const profile = this.getProfile();
     const settings = { ...DEFAULT_SENDING_SETTINGS, ...profile.sending.settings, ...profile.settings };
-    return { ...settings, wpm:settings.sendWpm ?? settings.wpm };
+    const preferred = settings.sendWpm ?? settings.wpm;
+    const wpm = this.keyTarget?.limitWpm?.(preferred) ?? preferred;
+    return { ...settings, wpm };
   }
   get usesPaddleSidetone() { return this.source === 'paddle' || (this.source === 'vband' && !!this.native); }
   get busy() { return this.down || this.playing || this.edges.length > 0 && !this.result; }
@@ -239,7 +299,37 @@ export class SendingUI {
     if (!this.keyTarget?.dialog?.open) return !!document.querySelector('dialog[open]');
     return [...document.querySelectorAll('dialog[open]')].some(dialog=>dialog!==this.keyTarget.dialog);
   }
-  usable() { return this.active() && !this.suspended && !document.hidden && !this.pageHidden && !this.blockingDialog() && !this.playing; }
+  get backgroundInput() { return !!this.native?.setShackRadio && this.shackListening && this.keyTarget?.live && (this.source==='paddle' || this.shackKeys); }
+  get inputAvailable() { return !this.pageHidden && (this.backgroundInput || !this.suspended && !document.hidden); }
+  usable() { return this.active() && this.inputAvailable && !this.blockingDialog() && !this.playing; }
+
+  setShackRadio(listening) {
+    if (!this.native?.setShackRadio) return;
+    this.shackListening=listening;
+    const keys=this.backgroundInput && this.source!=='paddle' ? {source:this.source,dit:this.keyboardPaddles.dit,dah:this.keyboardPaddles.dah} : null;
+    const state=JSON.stringify([listening,keys]);
+    if (this.shackState===state) return;
+    this.shackState=state;
+    this.backgroundMask=0; this.backgroundClock=null;
+    this.native.setShackRadio({listening,keys,generation:++this.shackGeneration});
+    this.updateActivity();
+  }
+  backgroundContact(row) {
+    if (row.generation!==this.shackGeneration || !this.backgroundInput) return;
+    if (row.error) { this.shackKeyError=row.error; this.pauseInput(); this.renderInput(); return; }
+    if (row.reset) { this.pauseInput(); return; }
+    if (document.hasFocus() || !this.usable() || !Number.isInteger(row.mask) || row.mask<0 || row.mask>3 || !Number.isFinite(row.at)) return;
+    const now=performance.now();
+    this.backgroundClock ??= now-row.at;
+    const at=Math.min(now,row.at+this.backgroundClock), previous=this.backgroundMask;
+    this.backgroundMask=row.mask;
+    if (this.source==='straight' && row.mask!==previous) this.straight(!!row.mask,at);
+    if (this.source==='keyboard') {
+      for (const [bit,contact] of [[1,'dit'],[2,'dah']]) {
+        if ((row.mask^previous)&bit) this.changeContact('background-'+contact,row.mask&bit?null:contact,row.mask&bit?contact:null,at);
+      }
+    }
+  }
   inputHeld() { if (this.source === 'vband') return !!this.vband.mask; return this.source === 'paddle' ? this.contacts.dit || this.contacts.dah : this.source === 'keyboard' ? this.contactHolds.dit.size > 0 || this.contactHolds.dah.size > 0 : this.straightHeld; }
 
   render() {
@@ -326,6 +416,10 @@ export class SendingUI {
     const { dit, dah, showButtons } = this.keyboardPaddles;
     const dotKey = keyLabel(this.settings.reverse ? dah : dit), dashKey = keyLabel(this.settings.reverse ? dit : dah);
     const labels = JSON.stringify([dotKey, dashKey]);
+    $('shack-background-options').hidden=!this.native?.setShackRadio || converter;
+    $('shack-background-keys').checked=!!this.shackKeys;
+    const bindings=usb?'Left and Right Control':keyboard?dotKey+' and '+dashKey:'Space';
+    $('shack-background-hint').textContent=this.shackKeyError || ('On air only. '+bindings+' can transmit while you use another app. That app also receives those keys.');
     if (this.bindingLabels !== labels) {
       this.bindingLabels = labels;
       $('paddle-dot-key').value = dotKey; $('paddle-dash-key').value = dashKey;
@@ -371,12 +465,13 @@ export class SendingUI {
     this.connection.setLiveKeying?.(target?.live===true);
     if (target?.live && (this.contacts.dit || this.contacts.dah)) this.neutral=false;
     this.keyTarget = target;
+    if (this.native && !this.migrationPending) this.connection.configure(this.settings);
     this.updateActivity();
     this.updateMute();
   }
   updateActivity() {
     const active = this.active() || (!this.native && this.inputSettingsOpen());
-    this.connection.setActive(active && !this.suspended && !document.hidden && !this.pageHidden && this.usesPaddleSidetone);
+    this.connection.setActive(active && this.inputAvailable && this.usesPaddleSidetone);
     this.updateWake();
   }
 
@@ -427,12 +522,15 @@ export class SendingUI {
     clearTimeout(this.checkTimer); clearTimeout(this.holdTimer);
     this.checkTimer = this.holdTimer = null;
     cancelAnimationFrame(this.keyerFrame); this.keyerFrame = null;
+    clearTimeout(this.backgroundKeyerTimer); this.backgroundKeyerTimer=null;
     this.audio.stop(); this.playing = false; this.audioFinished = false; this.playGeneration = (this.playGeneration || 0) + 1;
     this.tone.set(false, this.settings);
     this.keyer?.reset(); this.keyer = null;
     this.down = false;
     if (!preservePaddles) {
       this.pointerHolds.clear();
+      for (const touch of this.paddleTouches.values()) touch.button?.removeAttribute('data-held');
+      this.paddleTouches.clear();
       if (this.vband?.cancel() && this.native && this.source === 'vband') void this.native.paddle('vband-release');
       this.contactHolds.dit.clear(); this.contactHolds.dah.clear();
       this.heldCodes.clear();
@@ -464,6 +562,7 @@ export class SendingUI {
     this.pauseInput('');
   }
   pauseInput(message = 'Input paused. Send the answer again.') {
+    this.backgroundMask=0; this.backgroundClock=null;
     let feedback = '';
     if (this.playing && !this.audioFinished) feedback = 'Playback paused. Hear the signal again.';
     else if (this.busy && !this.playing) feedback = message;
@@ -658,26 +757,38 @@ export class SendingUI {
   }
 
   keyboardContact(contact, down, owner = contact) {
+    this.changeContact(owner, down ? null : contact, down ? contact : null);
+  }
+
+  changeContact(owner, from, to, at=performance.now()) {
     if (this.source !== 'keyboard' && !(this.source === 'vband' && !this.native)) return;
-    const holds = this.contactHolds[contact];
-    const released = !this.contactHolds.dit.size && !this.contactHolds.dah.size;
-    const before = holds.size > 0;
-    if (down) holds.add(owner); else holds.delete(owner);
-    if (before === (holds.size > 0)) return;
+    const wasDit = this.contactHolds.dit.size > 0, wasDah = this.contactHolds.dah.size > 0;
+    if (from) this.contactHolds[from].delete(owner);
+    if (to) this.contactHolds[to].add(owner);
     const dit = this.contactHolds.dit.size > 0, dah = this.contactHolds.dah.size > 0;
-    if (this.listenContact(this.settings.reverse ? dah : dit, this.settings.reverse ? dit : dah, down && released) || !this.ready()) return;
+    if (dit === wasDit && dah === wasDah) return;
+    const left = this.settings.reverse ? dah : dit, right = this.settings.reverse ? dit : dah;
+    if (this.listenContact(left, right, !wasDit && !wasDah) || !this.ready()) return;
     this.keyer ||= this.makeKeyer(true);
-    if (!this.keyer.contacts(this.settings.reverse ? dah : dit, this.settings.reverse ? dit : dah, performance.now())) {
+    const singleTouch = typeof owner === 'number' && !!to && dit !== dah &&
+      (!wasDit && !wasDah || !!from && wasDit !== wasDah);
+    if (!this.keyer.contacts(left, right, Math.max(at,this.keyer.clock), singleTouch)) {
       this.heard = false; this.abort('Paddle timing was interrupted. Hear the signal again.'); this.updateMute(); return;
     }
-    if (!this.keyerFrame) this.keyerFrame = requestAnimationFrame(() => this.tickKeyer());
+    this.scheduleKeyer();
+  }
+
+  scheduleKeyer() {
+    if (this.keyerFrame!=null || this.backgroundKeyerTimer!=null) return;
+    if (this.backgroundInput && this.suspended) this.backgroundKeyerTimer=setTimeout(()=>this.tickKeyer(),8);
+    else this.keyerFrame=requestAnimationFrame(()=>this.tickKeyer());
   }
 
   tickKeyer() {
-    this.keyerFrame = null;
+    this.keyerFrame=null; this.backgroundKeyerTimer=null;
     if (!this.usable() || !this.keyer) return;
     this.keyer.advance(performance.now());
-    if (this.keyer.busy) this.keyerFrame = requestAnimationFrame(() => this.tickKeyer());
+    if (this.keyer.busy) this.scheduleKeyer();
     else if (!this.keyTarget) this.showReleasedMatch();
   }
 

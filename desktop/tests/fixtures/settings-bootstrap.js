@@ -10,12 +10,24 @@ if (!navigator.locks) Object.defineProperty(navigator,'locks',{value:{request:as
 localStorage.setItem('morse.progress.v1',JSON.stringify(config.state));
 let raw = null, revision = 0, serverProfile, lastSound, paddleMuted;
 const callbacks = [], commands = [], requests = [];
+window.testBandEvents=[];
+window.testBandMembers=new Set();
+window.testTransmissions=[];
+let roomNumber=0;
 const hardware = { type:'status', source:'off', phase:'waiting', output:'auto', outputs:[], outputReady:false, session:1, epoch:1,
   wpm:33, spacing:20, pitch:725, volume:38, rise:3, fall:9, curve:2, hasTone:true, hasVolume:true, sharedSound:false };
 function snapshot() { return { connected:true, profile:serverProfile, seq:0, revision:1, epoch:'fixture-epoch', devices:[] }; }
 const listing = { visible:null, revision:0, xp:30 };
 function exchange(action,body) {
   requests.push(action);
+  if (action==='shack/open' || action==='shack/poll') {
+    if (window.testBandOnline===false) return {status:503,error:'Test relay offline'};
+    const token=action==='shack/open'?'room-'+(++roomNumber):body.token;
+    if (action==='shack/open') testBandMembers.add(token);
+    return {token,live:false,cursor:0,activity:{[body.f]:1},events:action==='shack/poll'?testBandEvents.splice(0):[]};
+  }
+  if (action==='shack/leave') {testBandMembers.delete(body.token);return {};}
+  if (action==='shack/send') {testTransmissions.push(body);return {ack:body.seq};}
   if (action==='capabilities') {
     const v2 = ['mac-staging','mac-dev'].includes(config.mode);
     return {status:200, privateSync:v2, scores:v2, leaderboard:config.mode!=='mac-local'};
@@ -59,6 +71,9 @@ if (config.mode.startsWith('mac')) {
       return {...update};
     },
     onPaddle(fn){ callbacks.push(fn); },
+    onShackKeys(fn){ window.testShackContact=fn; },
+    setShackRadio(state){ window.testShackRadio=state; },
+    async requestShackKeys(){return window.testKeyPermission || {};},
     loadSave(old){ raw ??= old; return {raw,revision}; },
     save(next,at){ if(at!==revision) throw Error('Unexpected test save revision'); raw=next;return {revision:++revision}; },
     async exchange(action,{body}={}){ return exchange(action,body); },

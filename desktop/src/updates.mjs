@@ -5,6 +5,12 @@ const versionPattern = /^(\d+)\.(\d+)\.(\d+)(?:-dev\.([1-9]\d*))?$/;
 
 export const isChannel = value => value === 'stable' || value === 'dev';
 
+export function macIdentity(version) {
+  return version.includes('-dev.')
+    ? {name:'Morse Dev', id:'digital.kubbur.morse.dev'}
+    : {name:'Morse', id:'digital.kubbur.morse'};
+}
+
 function parts(version) {
   const match = versionPattern.exec(version);
   if (!match) return null;
@@ -50,7 +56,7 @@ function candidate(release, current, channel) {
   const difference = compare(target, installed);
   const changing = (channel === 'dev') !== Number.isFinite(installed[3]);
   if (!difference || difference < 0 && !changing) return null;
-  return {...details, manualSwitch:difference < 0};
+  return {...details, manualSwitch:changing};
 }
 
 export function availableUpdate(rows, current, arch, channel = 'stable') {

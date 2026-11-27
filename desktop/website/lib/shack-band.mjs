@@ -1,9 +1,30 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { SyncError } from './sync-store.mjs';
-import { validFrequency, canTransmit, validRhythm, equipment, shackUnlocked, SHACK_UNLOCK_XP, maxStationPrice } from '../public/js/shack-model.mjs';
+import { validFrequency, canTransmit, validRhythm, equipment, shackUnlocked, SHACK_UNLOCK_XP, maxStationPrice, speedGroup, limitWpm } from '../public/js/shack-model.mjs';
 
 const fail = (code, message) => { throw new SyncError(code,message); };
 const lease = 45000;
+// Keep legacy and hand-keyed transmissions inside the same character-speed range as paddles.
+function channelInterval(group, ms, wpm, gap = false) {
+  if (!group) return ms;
+  const minDit=1200/group.max, maxDit=1200/group.min;
+  const scale=wpm===undefined ? 1 : wpm/limitWpm(group,wpm);
+  // At an allowed speed, preserve any legal hand-sent dit or dah. Outside it,
+  // identify the element at the sender's speed before retiming it for the channel.
+  const split=scale===1 ? (maxDit+3*minDit)/2 : 2400/wpm;
+  if (gap && ms>=split) {
+    if (scale===1) return ms;
+    // Scale Morse letter/word spacing, then retain any extra operator pause in real time.
+    const morseGap=Math.min(ms,7*1200/wpm);
+    return Math.round(ms + morseGap*(scale-1));
+  }
+  const units=gap || ms<split ? 1 : 3;
+  return Math.round(Math.max(units*minDit,Math.min(units*maxDit,ms*scale)));
+}
+function channelOffset(station, stream, offset, wpm) {
+  const last=station.channelClock;
+  return last?.stream===stream ? last.end+channelInterval(station.group,offset-last.rawEnd,wpm,true) : offset;
+}
 export class ShackBand {
   constructor(clock = Date.now) {
     this.now = clock;
@@ -32,7 +53,7 @@ export class ShackBand {
   leave(token,s) {
     this.sessions.delete(token);
     this.feeds.get(token)?.close();
-    if (s.held) this.event(s.f,{type:'key',edge:'cancel',stream:s.held.stream,offset:s.held.offset,peer:s.id},this.now());
+    if (s.held) this.event(s.f,{type:'key',edge:'cancel',stream:s.held.stream,offset:s.held.at,peer:s.id},this.now());
     for (const feed of this.feeds.values()) feed.wake();
   }
   subscribe(body,write,end) {
@@ -91,6 +112,26 @@ export class ShackBand {
     const now = this.now();
     this.sweep(now);
     if (!body || typeof body !== 'object') fail(400,'Invalid station.');
+    if (action === 'signatures') {
+      if (!Array.isArray(body.cards) || body.cards.length>80) fail(400,'Invalid QSL request.');
+      const signatures=[];
+      for (const entry of body.cards) {
+        const card=this.contacts.get(entry?.card), peer=card?.tokens.get(entry?.token);
+        if (!peer) continue;
+        const audio=card.signed.get(card.peers.find(id=>id!==peer));
+        if (audio) signatures.push({card:entry.card,f:card.f,audio});
+      }
+      return {signatures};
+    }
+    if (action === 'sign') {
+      const card=this.contacts.get(body.card), peer=card?.tokens.get(body.token);
+      if (!peer || card.f!==body.f || !validRhythm(body.audio)) fail(400,'Invalid return QSL.');
+      if (!card.signed.has(peer)) {
+        card.signed.set(peer,body.audio);
+        this.event(card.f,{type:'signature',to:card.peers.find(id=>id!==peer),peer,card:body.card,audio:body.audio},now);
+      }
+      return {};
+    }
     if (action === 'open') {
       if (!shackUnlocked(body.lifetimeXP)) fail(403,`The Shack unlocks at ${SHACK_UNLOCK_XP.toLocaleString()} lifetime XP.`);
       let value=body.invested, keyed=true;
@@ -108,6 +149,7 @@ export class ShackBand {
       if (this.sessions.size >= 120) fail(503,'The band is full. Try again shortly.');
       const token = randomBytes(32).toString('base64url'), id = randomUUID();
       const s = { id, call:body.call, f:body.f, value, keyed, live:body.live===true, keySeq:0, passed:body.qualified === true, seen:now, seq:0, last:null, window:now, count:0 };
+      s.group=speedGroup(s.f); s.token=token;
       s.probes=s.live && body.probes===true;
       this.sessions.set(token,s);
       for (const feed of this.feeds.values()) feed.wake();
@@ -129,15 +171,6 @@ export class ShackBand {
     }
     if (s.keyed===false || !canTransmit(s.f,s.value,s.passed)) fail(403,'Receive only on this frequency.');
     if (action === 'edges') return this.edges(s,body,now);
-    if (action === 'sign') {
-      const contact = this.contacts.get(body.card);
-      if (!contact || !contact.peers.includes(s.id) || contact.f !== s.f || !validRhythm(body.audio)) fail(400,'Invalid return QSL.');
-      if (!contact.signed.has(s.id)) {
-        contact.signed.add(s.id);
-        this.event(s.f,{type:'signature',to:contact.peers.find(p=>p!==s.id),peer:s.id,card:body.card,audio:body.audio},now);
-      }
-      return {};
-    }
     if (action !== 'send' || !Number.isSafeInteger(body.seq) || body.seq < 1 || !validRhythm(body.audio) || body.audio.length>32 ||
         !Number.isSafeInteger(body.offset) || body.offset < 0 || body.offset>120000 || !/^[\w-]{1,50}$/.test(body.stream || '')) fail(400,'Invalid key timing.');
     if (body.seq <= s.seq) return {ack:s.seq};
@@ -145,8 +178,20 @@ export class ShackBand {
     if (now-s.window >= 1000) { s.window=now; s.count=0; }
     if (++s.count > 12) fail(429,'Release the key and try again.');
     s.seq=body.seq;
-    const audio = body.audio.map(([d,g])=>[d,g]);
-    this.event(s.f,{type:'signal',peer:s.id,call:s.call,offset:body.offset,stream:body.stream,audio},now);
+    let offset=body.offset, audio=body.audio;
+    if (s.group) {
+      offset=channelOffset(s,body.stream,body.offset);
+      let rawEnd=body.offset, end=offset;
+      audio=body.audio.map(([duration,gap],i)=>{
+        const mark=channelInterval(s.group,duration);
+        const space=gap || i<body.audio.length-1 ? channelInterval(s.group,gap,undefined,true) : 0;
+        rawEnd+=duration; end+=mark;
+        if (i<body.audio.length-1) { rawEnd+=gap; end+=space; }
+        return [mark,space];
+      });
+      s.channelClock={stream:body.stream,rawEnd,end};
+    }
+    this.event(s.f,{type:'signal',peer:s.id,call:s.call,offset,stream:body.stream,audio},now);
     this.contact(s,body.replyTo,audio,now);
     return {ack:s.seq};
   }
@@ -185,13 +230,23 @@ export class ShackBand {
     if (now-s.window>=1000) {s.window=now; s.count=0;}
     if (s.count+fresh.length>180) fail(429,'Too many key transitions.');
     s.count+=fresh.length;
-    for (const {edge,stream,offset,previous,gap,duration,wpm,sent,measured} of fresh) {
-      const timing=duration===undefined ? {} : {duration,wpm,sent,measured};
-      this.event(s.f,{type:'key',peer:s.id,call:s.call,edge,stream,offset,...timing,...(gap===undefined ? {} : {previous,gap})},now);
-      if (edge==='down') s.held={stream,offset};
+    for (const input of fresh) {
+      const {edge,stream,offset,previous,gap,duration,wpm,sent,measured}=input;
+      const speed=duration===undefined ? undefined : wpm;
+      let at=offset;
+      if (edge==='down') {
+        at=channelOffset(s,stream,offset,speed);
+        s.held={stream,offset,at,speed};
+      } else if (s.group) {
+        at=s.held.at;
+        if (edge==='up') at+=channelInterval(s.group,offset-s.held.offset,s.held.speed);
+      }
+      const timing=duration===undefined ? {} : {duration:channelInterval(s.group,duration,wpm),wpm:s.group?limitWpm(s.group,wpm):wpm,sent,measured};
+      this.event(s.f,{type:'key',peer:s.id,call:s.call,edge,stream,offset:at,...timing,...(gap===undefined ? {} : {previous,gap:channelInterval(s.group,gap,speed,true)})},now);
       if (edge==='up') {
-        const audio=[[Math.max(8,offset-s.held.offset),0]];
-        this.event(s.f,{type:'signal',legacy:true,peer:s.id,call:s.call,stream,offset:s.held.offset,audio},now);
+        const audio=[[Math.max(8,at-s.held.at),0]];
+        if (s.group) s.channelClock={stream,rawEnd:offset,end:at};
+        this.event(s.f,{type:'signal',legacy:true,peer:s.id,call:s.call,stream,offset:s.held.at,audio},now);
         this.contact(s,body.replyTo,audio,now);
       }
       if (edge==='up' || edge==='cancel') s.held=null;
@@ -206,7 +261,8 @@ export class ShackBand {
       if (other.id!==replyTo || other.id!==s.heard?.peer || now-s.heard.at>90000 || other.f!==s.f || !other.last) continue;
       const peers=[s.id,other.id].sort(), id=peers.join('-');
       if (this.contacts.has(id)) continue;
-      this.contacts.set(id,{peers,f:s.f,at:now,signed:new Set()});
+      // A participant can return the card from Logbook after both radios leave the frequency.
+      this.contacts.set(id,{peers,f:s.f,at:now,tokens:new Map([[s.token,s.id],[other.token,other.id]]),signed:new Map()});
       this.event(s.f,{type:'contact',to:s.id,peer:other.id,call:other.call,card:id,audio:other.last.audio},now);
       this.event(s.f,{type:'contact',to:other.id,peer:s.id,call:s.call,card:id,audio},now);
     }

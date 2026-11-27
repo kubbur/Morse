@@ -87,7 +87,7 @@ if (api) {
     $('mac-version').textContent='Installed version '+state.version;
     const dev=state.channel==='dev', channel=dev ? 'Dev' : 'Stable';
     $('update-channel').value=dev ? 'dev' : 'stable'; $('update-channel').disabled=!state.enabled;
-    $('update-status').textContent=state.message || (busy ? 'Checking '+channel+'…' : state.manualSwitch ? 'To switch now, download Morse '+state.available+' and replace the installed app.' :
+    $('update-status').textContent=state.message || (busy ? 'Checking '+channel+'…' : state.manualSwitch ? 'Download '+channel+' '+state.available+' and move '+(dev?'Morse Dev.app':'Morse.app')+' to Applications to use both builds.' :
         state.available ? 'Morse '+state.available+' is available.' : !state.enabled ? 'Update checks are disabled in this test session.' :
         state.phase==='checked' ? (dev ? 'No newer Dev build is available.' : 'You’re up to date.') : '');
     $('update-check').disabled=!state.enabled || busy;

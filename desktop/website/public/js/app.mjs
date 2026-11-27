@@ -728,6 +728,14 @@ function renderHeader() {
 
 function renderControls() {
   const p = profile(), settings = { ...p.settings, sendWpm:p.settings.sendWpm ?? p.settings.wpm, recallSeconds:responseGoal(p) };
+  const speed=$('send-wpm'), group=$('shack-input-dialog').open ? shack.group : null;
+  const min=group?.min ?? 5, max=group?.max ?? 80;
+  if (speed.min!==String(min) || speed.max!==String(max)) {
+    speed.min=min; speed.max=max;
+    const labels=speed.parentElement.querySelector('.range-limits');
+    labels.firstElementChild.textContent=min; labels.lastElementChild.textContent=max;
+  }
+  if (group) settings.sendWpm=shack.onAirWpm(settings.sendWpm);
   const stage = isGrowingCourse(settings) ? courseStage(settings.courseLevel) : null;
   $('lab-course').min = stage?.audioAlphabet ? '2' : '4';
   $$('[data-setting]').forEach(control => {
@@ -1202,12 +1210,14 @@ function showShackInputs() {
   $('shack-input-body').append(inputCard);
   inputCard.querySelector('.section-heading').after(sendSpeedControl);
   openDialog('shack-input-dialog');
+  renderControls();
   sender.updateActivity(); sender.renderInput();
 }
 $('shack-input-dialog').addEventListener('close',()=>{
   if ($('shack-input-dialog').open) return;
   sendSpeedHome.prepend(sendSpeedControl);
   inputHome.insertBefore(inputCard,nextInputCard);
+  renderControls();
   sender.updateActivity(); sender.renderInput();
 });
 for (const id of ['shack-input-dialog','operator-profile-dialog']) {
@@ -1933,6 +1943,9 @@ document.addEventListener('input', event => {
 
 document.addEventListener('change', event => {
   const control = event.target.closest('input[type="range"][data-setting]');
+  if (control?.id==='send-wpm' && $('shack-input-dialog').open && shack.group) {
+    shack.setGroupSpeed(Number(control.value)); return;
+  }
   if (control && soundFields.includes(control.dataset.setting)) changeSettings({[control.dataset.setting]: Number(control.value)});
 });
 

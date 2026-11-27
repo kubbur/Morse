@@ -7,6 +7,7 @@ export class BandRadio {
   constructor(exchange, changed, received) {
     Object.assign(this,{exchange,changed,received});
     this.epoch=0; this.activity={}; this.state='off'; this.queue=[];
+    this.returns=new Map();
   }
   close() {
     ++this.epoch;
@@ -15,7 +16,7 @@ export class BandRadio {
     clearTimeout(old?.probeTimer);
     this.transmitter?.close(); this.transmitter=null; this.legacyDown=null;
     this.room=null; this.queue=[]; this.pending=[]; this.stream=null; this.sending=false;
-    this.activity={}; this.state='off'; this.key=''; this.heard=null;
+    this.activity={}; this.state='off'; this.key=''; this.heard=null; this.delayMs=null;
     if (old) {
       this.received({type:'silence',f:old.f});
       void this.exchange('leave',{f:old.f,token:old.token}).catch(()=>{});
@@ -29,10 +30,12 @@ export class BandRadio {
     const epoch=this.epoch;
     this.state='connecting'; this.changed();
     try {
+      const sent=performance.now();
       const opened=await this.exchange('open',{...station,live:true,probes:true});
       if (!opened.token) throw Error('Unavailable');
       if (epoch!==this.epoch) { void this.exchange('leave',{token:opened.token,f:station.f}).catch(()=>{}); return; }
       const room=this.room={f:station.f,token:opened.token,cursor:opened.cursor,seq:0,id:opened.id,live:opened.live===true,joined:performance.now()};
+      this.delayMs=Math.round(room.joined-sent);
       if (room.live && opened.probes===true) {
         room.paths=new Map();
         room.stations=0;
@@ -57,7 +60,11 @@ export class BandRadio {
     if (!room.paths || stations===room.stations) return;
     const previous=room.stations;
     room.stations=stations;
-    if (stations<2) { clearTimeout(room.probeTimer); room.burst=0; return; }
+    if (stations<2) {
+      clearTimeout(room.probeTimer); room.burst=0;
+      if (!room.probing) room.probeTimer=setTimeout(()=>void this.probe(room),15000);
+      return;
+    }
     if (stations>previous && !room.burst) {
       room.burst=4;
       clearTimeout(room.probeTimer);
@@ -65,16 +72,21 @@ export class BandRadio {
     }
   }
   async probe(room) {
-    if (room!==this.room || room.stations<2) return;
+    if (room!==this.room) return;
     room.probing=true;
-    const sent=Math.round(performance.now()-room.joined);
-    try { await this.exchange('probe',{token:room.token,f:room.f,sent}); }
+    const start=performance.now(), sent=Math.round(start-room.joined);
+    try {
+      await this.exchange('probe',{token:room.token,f:room.f,sent});
+      if (room!==this.room) return;
+      this.delayMs=Math.round(performance.now()-start);
+      this.changed();
+    }
     catch { /* The next sample is independent. Keying never waits for a probe. */ }
     room.probing=false;
-    if (room===this.room && room.stations>=2) {
+    if (room===this.room) {
       room.burst=Math.max(0,room.burst-1);
       // Stagger stations sharing a busy frequency so probes do not all hit the relay together.
-      const interval=room.burst ? 400 : 4000;
+      const interval=room.stations<2 ? 15000 : room.burst ? 400 : 4000;
       room.probeTimer=setTimeout(()=>void this.probe(room),interval*(1+.2*Math.random()));
     }
   }
@@ -82,16 +94,25 @@ export class BandRadio {
     const room=this.room;
     if (!room || epoch!==this.epoch) return;
     try {
+      const start=performance.now();
       const data=await this.exchange('poll',{token:room.token,f:room.f,cursor:room.cursor,...(room.live ? {live:true} : {})});
       if (epoch!==this.epoch) return;
       room.cursor=data.cursor;
       const arrived=performance.now();
+      const delay=room.live ? this.delayMs : Math.round(arrived-start);
       if (room.live && Number.isFinite(data.serverTime)) {
         const offset=arrived-data.serverTime;
         room.serverOffset=data.serverTime<room.lastServerTime ? offset : Math.min(room.serverOffset ?? offset,offset);
         room.lastServerTime=data.serverTime;
       }
       for (const event of data.events || []) {
+        if (event.type==='contact' && event.card) {
+          if (this.returns.size>=80) this.returns.delete(this.returns.keys().next().value);
+          this.returns.set(event.card,{token:room.token,f:room.f,until:Date.now()+3600000});
+        } else if (event.type==='signature') {
+          const receipt=this.returns.get(event.card);
+          if (receipt) receipt.received=true;
+        }
         // Audio buffered through a suspended tab or broken connection belongs in the past.
         const stale=room.live && arrived-(event.at+room.serverOffset)>1000;
         if (event.type==='probe') {
@@ -110,7 +131,8 @@ export class BandRadio {
         } else this.received(event);
       }
       this.updateProbes(room,data.activity[room.f] || 0);
-      const changed=this.state!=='live' || JSON.stringify(this.activity)!==JSON.stringify(data.activity);
+      const changed=this.state!=='live' || delay!==this.delayMs || JSON.stringify(this.activity)!==JSON.stringify(data.activity);
+      this.delayMs=delay;
       this.state='live'; this.retryDelay=0;
       this.activity=data.activity;
       if (changed) this.changed();
@@ -168,9 +190,18 @@ export class BandRadio {
     if (epoch===this.epoch) this.sending=false;
   }
   async sign(card,audio) {
-    if (!this.room) return false;
-    try { await this.exchange('sign',{token:this.room.token,f:this.room.f,card,audio}); return true; }
+    const station=this.returns.get(card) || this.room;
+    if (!station) return false;
+    try { await this.exchange('sign',{token:station.token,f:station.f,card,audio}); return true; }
     catch { return false; }
+  }
+  pendingReturns() {
+    const cards=[];
+    for (const [card,receipt] of this.returns) {
+      if (receipt.until<=Date.now()) this.returns.delete(card);
+      else if (!receipt.received) cards.push({card,token:receipt.token});
+    }
+    return cards;
   }
 }
 

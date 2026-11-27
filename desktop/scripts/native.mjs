@@ -10,8 +10,8 @@ export function buildNative(target, archs = ['arm64', 'x86_64'], checks = false)
   const files = checks ? ['tests/NativeChecks.m', 'PaddleBridge.m'] : ['PaddleService.m', 'MorseEngine.m'];
   const args = ['clang', ...archs.flatMap(arch => ['-arch', arch]), '-mmacosx-version-min=13.0', '-std=gnu11',
     '-fobjc-arc', '-fblocks', '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-deprecated-declarations',
-    ...['AppKit','AVFoundation','CoreAudio','AudioToolbox','AudioUnit','CoreGraphics'].flatMap(f => ['-framework', f]),
-    ...[...files, 'VBandTarget.m', 'DevicePreferences.m', 'MorseTyping.c', 'TypingKeys.m', 'Sidetone.c'].map(f => join(nativeSource, f)), '-o', target];
+    ...['AppKit','AVFoundation','CoreAudio','AudioToolbox','AudioUnit','CoreGraphics','Carbon'].flatMap(f => ['-framework', f]),
+    ...[...files, 'VBandTarget.m', 'ShackKeys.m', 'DevicePreferences.m', 'MorseTyping.c', 'TypingKeys.m', 'Sidetone.c'].map(f => join(nativeSource, f)), '-o', target];
   execFileSync('/usr/bin/xcrun', args, { stdio: 'inherit' });
   execFileSync('/usr/bin/codesign', ['-s', '-', '--timestamp=none', '--force', target], { stdio: 'inherit' });
 }
