@@ -40,6 +40,10 @@ Practice assets and course data are bundled. The renderer uses a sandbox and con
 
 Morse checks GitHub for the matching product and architecture. The first build that uses Sparkle must be installed manually over 1.1.0. For subsequent updates, Sparkle checks the archive’s Ed25519 signature against the public key embedded in the installed app. An unconfigured development build offers **Download update**. Closing the last window leaves Morse running.
 
+Choose **Settings → Updates → Channel** beside the installed version. **Stable** follows releases from `main`. **Dev** follows signed prereleases from `dev`. Switching checks immediately and opens the installer when a newer signed build is available. When Stable has a lower version, **Download Stable** opens the matching ZIP. The two builds keep their existing separate practice profiles, and the channel choice is remembered across relaunches. Morse 1.1.5 predates the selector. Early testers can start with a Dev download.
+
+Every Mac workflow run on `dev` builds the next patch version with a numbered `-dev.N` suffix for Apple Silicon and Intel. After both jobs pass, run `node scripts/publish-dev.mjs RUN_ID` from `desktop/` on the publishing Mac. It downloads that run’s archives, verifies their hashes and versions, signs their update feeds with the existing Keychain key, and publishes a GitHub prerelease pinned to the tested commit. Testers receive the build once publication succeeds.
+
 Stable builds embed the release public key in `assets/sparkle-public-key.txt`. The development and test builds can use `MORSE_UPDATE_PUBLIC_KEY_FILE` for a separate key. The optional `MORSE_SPARKLE_ARCHIVE` selects an offline copy of the pinned SDK.
 
 The publisher’s Mac holds the private Ed25519 key in the login Keychain under the Sparkle service and account `digital.kubbur.morse`. Keep an encrypted recovery copy under the publisher’s control. After verifying the final arm64 and x64 ZIPs in `dist/`, run the following from `desktop/` on that Mac.

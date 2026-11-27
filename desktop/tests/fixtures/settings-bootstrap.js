@@ -42,13 +42,14 @@ function exchange(action,body) {
 }
 if (config.mode.startsWith('mac')) {
   const update = {version:'1.1.0-dev.5',installedNotes:'Local release notes',enabled:true,
-    automatic:false,automaticSupported:true,available:'',notes:'',installable:false,ready:false,phase:'idle',message:''};
+    channel:'stable',automatic:false,automaticSupported:true,available:'',notes:'',installable:false,ready:false,phase:'idle',message:''};
   let updateChanged;
   window.morseMac = {
     syncMode: config.mode==='mac-staging' ? 'staging' : config.mode==='mac-website' ? 'website' : 'offline', onUpdate(fn){updateChanged=fn;},
     async update(action,value){
       if (action==='check') Object.assign(update,{available:'2.0.0',phase:'checked',installable:true,notes:'New timing display\n<em>Release text</em>'});
       if (action==='automatic') update.automatic=value;
+      if (action==='channel') Object.assign(update,{channel:value,available:value==='dev'?'2.0.1-dev.10':'',phase:'checked',installable:value==='dev'});
       if (action==='install') window.testInstallRequested=true;
       if (action!=='state') updateChanged({...update});
       return {...update};

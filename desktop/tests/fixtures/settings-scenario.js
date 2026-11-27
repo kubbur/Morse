@@ -48,6 +48,11 @@
     expect(get('update-notes').open && get('update-notes-text').textContent.includes('<em>') && !get('update-notes-text').children.length,'Release notes presentation');
     get('update-auto').click(); expect(get('update-auto').checked,'Automatic update choice');
     get('update-install').click(); expect(window.testInstallRequested,'Install action');
+    expect(get('mac-updates').contains(get('update-channel')) && get('update-channel').value==='stable','Stable channel beside installed version');
+    get('update-channel').value='dev'; get('update-channel').dispatchEvent(new Event('change'));
+    await wait(()=>get('update-status').textContent.includes('2.0.1-dev.10'),'Dev build in the Updates bar');
+    get('update-channel').value='stable'; get('update-channel').dispatchEvent(new Event('change'));
+    await wait(()=>get('update-install').hidden,'Return to Stable updates');
   } else expect(!get('mac-updates'),'Mac updater in browser');
   if(mac) await wait(()=>get('sound-choices').textContent.includes('Use Paddle'),'Native migration unavailable');
   const button=Array.from(get('sound-choices').children).find(b=>b.textContent.startsWith(mac?'Use Paddle':'Use Send'));

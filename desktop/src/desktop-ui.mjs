@@ -64,6 +64,7 @@ if (api) {
   const updates = document.createElement('section');
   updates.className='card update-bar'; updates.id='mac-updates';
   updates.innerHTML=`<div class="update-version"><h2>Updates</h2><span id="mac-version" class="muted small-copy"></span></div>
+    <label class="update-auto" for="update-channel">Channel <select id="update-channel" aria-label="Update channel" title="Dev uses a separate practice profile on this Mac"><option value="stable">Stable</option><option value="dev">Dev</option></select></label>
     <p id="update-status" role="status"></p>
     <div class="pair-actions"><button type="button" class="button secondary" id="update-check">Check for updates</button>
     <button type="button" class="button primary" id="update-install" hidden>Install update</button>
@@ -84,14 +85,17 @@ if (api) {
     updateState=state;
     const busy=state.phase==='checking';
     $('mac-version').textContent='Installed version '+state.version;
-    $('update-status').textContent=state.message || (busy ? 'Checking GitHub…' : state.available ? 'Morse '+state.available+' is available.' :
-        !state.enabled ? 'Update checks are disabled in this test session.' : state.phase==='checked' ? 'You’re up to date.' : '');
+    const dev=state.channel==='dev', channel=dev ? 'Dev' : 'Stable';
+    $('update-channel').value=dev ? 'dev' : 'stable'; $('update-channel').disabled=!state.enabled;
+    $('update-status').textContent=state.message || (busy ? 'Checking '+channel+'…' : state.manualSwitch ? 'To switch now, download Morse '+state.available+' and replace the installed app.' :
+        state.available ? 'Morse '+state.available+' is available.' : !state.enabled ? 'Update checks are disabled in this test session.' :
+        state.phase==='checked' ? (dev ? 'No newer Dev build is available.' : 'You’re up to date.') : '');
     $('update-check').disabled=!state.enabled || busy;
     $('update-auto').checked=state.automatic; $('update-auto').disabled=!state.automaticSupported;
     $('update-release').hidden=!state.available;
     $('update-install').hidden=!state.available; $('update-install').disabled=busy;
-    $('update-install').textContent=state.installable ? 'Install update' : 'Download update';
-    notice.hidden=!state.available; notice.textContent='Update available';
+    $('update-install').textContent=state.manualSwitch ? 'Download '+channel : state.installable ? 'Install update' : 'Download update';
+    notice.hidden=!state.available || state.manualSwitch; notice.textContent='Update available';
     $('update-notes-text').textContent=(state.available ? state.notes : state.installedNotes) || 'No release notes were provided for this version.';
   }
   const action=(name,value)=>api.update(name,value).catch(()=>{
@@ -99,6 +103,7 @@ if (api) {
     $('update-status').textContent='The update settings could not be accessed.';
   });
   $('update-check').onclick=()=>action('check');
+  $('update-channel').onchange=e=>action('channel',e.target.value);
   $('update-auto').onchange=e=>action('automatic',e.target.checked);
   $('update-install').onclick=()=>action('install');
   $('update-release').onclick=()=>action('release');
