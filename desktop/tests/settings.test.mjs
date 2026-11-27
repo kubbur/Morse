@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { alphabet, sanitizeShack } from '../website/public/js/shack-model.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -86,10 +87,14 @@ test('Mac and browser settings, course reset and recovery controls in an offline
       ['mac-website', 'sending-resume-scenario.js'],
       ['browser','sending-feedback-scenario.js'],
       ['browser','leaderboard-visibility-scenario.js'],
+      ['browser','shack-scenario.js'],
+      ['browser','shack-audio-scenario.js'],
+      ['mac-website','shack-scenario.js'],
     ];
     for(const [mode, scenario] of cases) await t.test(mode+' '+scenario,async()=>{
       const bootstrap=join(dir,mode+'.js');
       const state=oldSave(), listing=scenario==='leaderboard-visibility-scenario.js';
+      if (scenario==='shack-scenario.js') {state.profiles[0].stats.xp=800;state.profiles[0].callsign='TF3KBR';state.profiles[0].shack=sanitizeShack({copied:alphabet,sent:alphabet.replace('E','')});}
       if (listing) Object.assign(state.profiles[0],{callsign:'TEST1',leaderboard:true});
       await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state,listing})+';\n'+setup);
       const base=mode==='browser' ? root : staged;

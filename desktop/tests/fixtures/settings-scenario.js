@@ -93,7 +93,7 @@
   }
   expect(get('copying-styles').textContent.includes('No answers recorded') && !get('copying-styles').textContent.includes('Ready'),'Copying status');
   get('progress-send').click();
-  expect(get('listen-progress-panels').hidden && !get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-ATTEMPT ACCURACY') && get('stats-grid').children.length===3, 'Sending dashboard metrics');
+  expect(get('listen-progress-panels').hidden && !get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-ATTEMPT ACCURACY') && get('stats-grid').querySelectorAll('article').length===3 && get('stats-grid').querySelector('button[data-view="shack"]'), 'Sending dashboard metrics');
   expect(get('send-badge-grid').children.length>=get('badge-grid').children.length && get('send-weak-characters').textContent.includes('No recent'), 'Sending badges and weak sounds');
   get('progress-listen').click();
   expect(!get('listen-progress-panels').hidden && get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-LISTEN'), 'Listening dashboard metrics');

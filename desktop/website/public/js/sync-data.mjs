@@ -1,3 +1,4 @@
+import { mergeShack } from './shack-model.mjs';
 import { sanitizeState } from './progress.mjs';
 import { rankGoal } from './endless.mjs';
 import { sanitizePacing } from './recognition.mjs';
@@ -88,6 +89,10 @@ export function hasLocalChanges(meta, local) {
   if (meta.legacySendActivity && !base.sending.activity && local.sending.activity) {
     base = { ...base, sending: { ...base.sending, activity: local.sending.activity } };
   }
+  if (meta.legacyShack && !base.shack && local.shack) {
+    const { shack, ...acknowledgedFields } = local;
+    return syncChanged(base, acknowledgedFields);
+  }
   return syncChanged(base, local);
 }
 
@@ -97,6 +102,7 @@ export function hasLocalChanges(meta, local) {
 export function mergeProgress(baseInput, localInput, remoteInput) {
   const base = syncProfile(baseInput), local = syncProfile(localInput), remote = syncProfile(remoteInput);
   const result = clone(remote);
+  if (local.shack || remote.shack) result.shack = mergeShack(local.shack, remote.shack);
   result.sending = mergeSending(base.sending, local.sending, remote.sending);
   for (const key of ['callsign', 'leaderboard']) if (!same(base[key], local[key])) result[key] = local[key];
   for (const key of keys(base.settings, local.settings)) {

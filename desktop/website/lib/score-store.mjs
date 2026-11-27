@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { sanitizeCallsign, dayStreak } from '../public/js/progress.mjs';
+import { balances, equipmentSnapshot, mergeShack, sanitizeShack } from '../public/js/shack-model.mjs';
 import { SyncError } from './sync-store.mjs';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
@@ -20,6 +21,7 @@ export class ScoreStore {
   constructor(privateStore) {
     this.store = privateStore;
     privateStore.db.exec(`CREATE TABLE IF NOT EXISTS stations(call TEXT PRIMARY KEY, creator TEXT NOT NULL, owner TEXT, historical INTEGER NOT NULL DEFAULT 0, import_id TEXT);
+      CREATE TABLE IF NOT EXISTS shack_stations(call TEXT PRIMARY KEY REFERENCES stations(call) ON DELETE CASCADE, receipts TEXT NOT NULL, spent INTEGER NOT NULL, equipped TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS historical_receipts(id TEXT PRIMARY KEY, call TEXT UNIQUE NOT NULL, xp INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS original_days(call TEXT PRIMARY KEY, days TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS publishers(key TEXT PRIMARY KEY, gen INTEGER NOT NULL, enabled INTEGER NOT NULL, call TEXT NOT NULL);
@@ -69,7 +71,8 @@ export class ScoreStore {
     const status = () => ({ revision, visible: listing ? !!listing.visible : null, xp: Math.max(listing?.best || 0, ledger()), ...(listing?.absolute_only ? {absoluteOnly:true} : {}) });
     if (action === 'listing') {
       if (!exact(body,['callsign'])) fail(400, 'Invalid listing request.');
-      return status();
+      const saved=s.get('SELECT receipts FROM shack_stations WHERE call=?',call);
+      return {...status(),...(saved ? {station:JSON.parse(saved.receipts)} : {})};
     }
     const gen = body.generation;
     if (!Number.isSafeInteger(gen) || gen < 0 || !Number.isSafeInteger(body.revision) || body.revision < 0) fail(400,'Invalid listing change.');
@@ -159,8 +162,14 @@ export class ScoreStore {
     return s.transaction(() => {
       const key = token && digest(token), publisher = key && s.get('SELECT * FROM publishers WHERE key=?', key);
       if (action === 'leaderboard') {
-        const rows = s.all(`SELECT s.call AS callsign, max(coalesce(l.best,0),s.historical+coalesce(sum(r.xp),0)) AS xp FROM stations s LEFT JOIN score_listings l ON l.call=s.call LEFT JOIN score_results r ON r.call=s.call WHERE coalesce(l.visible,1)=1 GROUP BY s.call ORDER BY xp DESC,s.call`);
-        const entries = rows.map((row, i) => {
+        const rows = s.all(`SELECT scores.callsign, scores.earned, g.equipped,
+          max(0,scores.earned-coalesce(g.spent,0)) AS xp FROM (
+            SELECT s.call AS callsign, max(coalesce(l.best,0),s.historical+coalesce(sum(r.xp),0)) AS earned
+            FROM stations s LEFT JOIN score_listings l ON l.call=s.call LEFT JOIN score_results r ON r.call=s.call
+            WHERE coalesce(l.visible,1)=1 GROUP BY s.call
+          ) scores LEFT JOIN shack_stations g ON g.call=scores.callsign ORDER BY xp DESC,scores.callsign`);
+        const entries = rows.map(({callsign,xp,equipped,earned}, i) => {
+          const row={callsign,xp,...(equipped ? {lifetimeXP:earned,equipped:JSON.parse(equipped)} : {})};
           const days = Object.fromEntries(s.all('SELECT DISTINCT day FROM score_results WHERE call=? ORDER BY day DESC LIMIT 366', row.callsign).map(r => [r.day,1]));
           const legacy=s.get('SELECT days FROM original_days WHERE call=?',row.callsign);
           return { ...row, rank: i + 1, streak: dayStreak({ days:{...(legacy?JSON.parse(legacy.days):{}),...days} }, new Date(s.now())) };
@@ -169,6 +178,27 @@ export class ScoreStore {
       }
       if (!key) fail(401, 'Publisher credential required.');
       if (s.get('SELECT key FROM revoked_publishers WHERE key=?',key)) fail(403,'This device was revoked.');
+      if (action === 'station') {
+        const {callsign,generation,revision,station}=body;
+        if (!exact(body,['callsign','generation','revision','station']) || !station || !exact(station,['converted','orders','equipped','sold','soldAt']))
+          fail(400,'Invalid station equipment.');
+        const owner=s.get('SELECT creator,owner FROM stations WHERE call=?',callsign);
+        if (!owner || (owner.creator!==key && (!owner.owner || s.device(privateToken)?.save_id!==owner.owner)))
+          fail(403,'This publisher cannot update the station.');
+        const listing=s.get('SELECT visible,revision FROM score_listings WHERE call=?',callsign);
+        if (!publisher?.enabled || publisher.gen!==generation || publisher.call!==callsign ||
+            revision!==(listing?.revision || 0) || listing && !listing.visible)
+          fail(409,'Leaderboard visibility changed.');
+        const incoming=equipmentSnapshot(sanitizeShack(station));
+        if (!incoming) fail(400,'Missing equipment receipts.');
+        const previous=s.get('SELECT receipts FROM shack_stations WHERE call=?',callsign);
+        const merged=previous ? mergeShack(JSON.parse(previous.receipts),incoming) : sanitizeShack(incoming);
+        const snapshot=equipmentSnapshot(merged), ids=merged.equipped.map(slot=>slot?.id || null);
+        s.run(`INSERT INTO shack_stations(call,receipts,spent,equipped) VALUES(?,?,?,?)
+          ON CONFLICT(call) DO UPDATE SET receipts=excluded.receipts, spent=excluded.spent, equipped=excluded.equipped`,
+          callsign,JSON.stringify(snapshot),balances(merged,0).spent,JSON.stringify(ids));
+        return {station:snapshot};
+      }
       if (['listing','visibility','total'].includes(action)) return this.listing(action,key,privateToken,body,publisher);
       const gen = body.generation;
       if (!Number.isSafeInteger(gen) || gen < 0) fail(400, 'Invalid sharing generation.');

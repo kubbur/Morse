@@ -1,4 +1,6 @@
+import { equipmentSnapshot, mergeShack } from './shack-model.mjs';
 import { DeviceSync } from './device-sync.mjs';
+import { ShackFeed } from './shack-feed.mjs';
 import { newProfile, STORAGE_KEY } from './progress.mjs';
 import { publicSnapshot, scoreSnapshot } from './practice-storage.mjs';
 import { syncProfile, syncChanged, hasLocalChanges, playbackOnDevice } from './sync-data.mjs';
@@ -14,17 +16,20 @@ export class Station extends DeviceSync {
     this.privateEnabled=false;
   }
   async exchange(action, body={}) {
-    const scope=this.getProfile().id;
+    const learner=this.getProfile().id;
+    const scope=action.startsWith('shack/') ? 'band' : learner;
     let result;
     if (this.requestImpl) return this.requestImpl(action,{scope,body});
+    if (!this.mac && action==='shack/leave') this.shackFeed?.close(body.token);
     if (this.mac) result=await this.mac.exchange(action,{scope,body});
+    else if (action==='shack/poll' && body.live) result=await (this.shackFeed ??= new ShackFeed()).next(body);
     else {
       const response=await fetch('/api/v2/'+action,{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'error',
         headers:{'Content-Type':'application/json','X-Morse-Sync':'2'},body:JSON.stringify({scope,body}),signal:AbortSignal.timeout(10000)});
       const data=await response.json().catch(()=>({error:'Service unavailable. Practice is saved here.'}));
       result={status:response.status,...data};
     }
-    if (scope!==this.getProfile().id) throw new Error('Learner changed.');
+    if (learner!==this.getProfile().id) throw new Error('Learner changed.');
     if (result.status>=400) throw Object.assign(new Error(result.error || 'Saved locally. Waiting to reconnect.'),{status:result.status});
     return result;
   }
@@ -38,8 +43,46 @@ export class Station extends DeviceSync {
     const row=this.storage.row();
     if (this.hasScores(row)) this.queueScores();
   }
+  equipmentChange(row) {
+    const p=this.getProfile(), listing=row.listings?.[p.callsign];
+    if (!p.leaderboard || !p.callsign || (row.listings && !listing?.visible) || row.visibilityQueue?.length) return null;
+    const station=equipmentSnapshot(p.shack);
+    if (!station) return null;
+    const body={callsign:p.callsign,generation:row.generation,revision:listing?.revision || 0,station};
+    return JSON.stringify(body)===row.postedEquipment ? null : body;
+  }
+  acceptEquipment(remote) {
+    if (!remote) return;
+    const p=this.getProfile(), merged=mergeShack(p.shack,remote);
+    if (JSON.stringify(equipmentSnapshot(p.shack))===JSON.stringify(equipmentSnapshot(merged))) return;
+    const state=JSON.parse(this.storage.getItem(STORAGE_KEY));
+    const saved=state.profiles.find(learner=>learner.id===p.id);
+    if (!saved) return;
+    saved.shack=merged;
+    this.storage.setItem(STORAGE_KEY,JSON.stringify(state));
+    p.shack=merged;
+  }
+  async publishEquipment() {
+    const row=this.storage.row(), body=this.equipmentChange(row);
+    if (!body || (this.gearRetryAt || 0)>Date.now()) return;
+    let receipt;
+    try { receipt=await this.exchange('scores/station',body); }
+    catch(error) {
+      if (error.status!==404) throw error;
+      this.gearRetryAt=Date.now()+60000;
+      return;
+    }
+    const p=this.getProfile();
+    if (!p.leaderboard || p.callsign!==body.callsign || row.generation!==body.generation || this.storage.failed) return;
+    if (!receipt.station) throw Error('The website did not acknowledge the station.');
+    this.storage.atomic(()=>{
+      this.acceptEquipment(receipt.station);
+      row.postedEquipment=JSON.stringify(body);
+    });
+    this.onScoresPublished?.();
+  }
   hasScores(row) {
-    if (row.visibilityQueue?.length) return true;
+    if (row.visibilityQueue?.length || (this.gearRetryAt || 0)<=Date.now() && this.equipmentChange(row)) return true;
     if (!row.listings) return row.needsConsent || row.scores.length || row.history?.decision === 'queued';
     const p = this.getProfile(), listing = row.listings[p.callsign];
     if (!p.leaderboard || !listing?.visible) return false;
@@ -80,7 +123,9 @@ export class Station extends DeviceSync {
     const receipt = await this.exchange('scores/listing',{callsign:call});
     if (this.getProfile().callsign !== call || this.storage.row().generation !== generation || this.storage.failed) return;
     const last = this.storage.row().listings[call];
-    if (receipt.revision < last.revision || receipt.revision === last.revision && receipt.xp <= last.xp) return;
+    if (receipt.revision < last.revision) return;
+    if (receipt.visible && p.leaderboard && receipt.station) this.acceptEquipment(receipt.station);
+    if (receipt.revision === last.revision && receipt.xp <= last.xp) return;
     this.rememberListing(call,receipt,null);
     this.changedScoresOnReconnect();
     this.onStatus(this.status);
@@ -194,6 +239,7 @@ export class Station extends DeviceSync {
       if (!this.hasScores(row)) return;
       if (row.listings) {
         await this.flushListing();
+        await this.publishEquipment();
         this.scoreError = null;
         return;
       }
@@ -223,6 +269,7 @@ export class Station extends DeviceSync {
           this.onScoresPublished?.();
         }
       }
+      if (current()) await this.publishEquipment();
       this.scoreError=null;
     } catch(error) {
       this.scoreError = error.status === 404 && this.storage.row().listings
@@ -277,7 +324,7 @@ export class Station extends DeviceSync {
       if (hasLocalChanges(meta,syncProfile(this.getProfile()))) {
         this.schedule(0); return meta;
       }
-      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,legacySendingSessions:meta.legacySendingSessions,legacySendActivity:meta.legacySendActivity};
+      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,legacySendingSessions:meta.legacySendingSessions,legacySendActivity:meta.legacySendActivity,legacyShack:meta.legacyShack};
       const received=super.receive(result,meta);
       if (received?.force) {received.previous=previous;this.save(received);}
       return received;

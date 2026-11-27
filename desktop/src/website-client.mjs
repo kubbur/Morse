@@ -1,3 +1,5 @@
+import { equipment } from '../website/public/js/shack-model.mjs';
+import { ShackFeed } from '../website/public/js/shack-feed.mjs';
 import { actions, cookieNames } from '../website/lib/exchange.mjs';
 
 export const siteOrigin = 'https://morse.kubbur.digital';
@@ -6,10 +8,11 @@ export const testOrigin = 'http://127.0.0.1:38764';
 function publicRankings(data) {
   const validCount = n => Number.isSafeInteger(n) && n >= 0;
   if (!Array.isArray(data?.entries) || data.entries.length > 50) throw Error('Invalid leaderboard response.');
-  const entries = data.entries.map(({rank,callsign,xp,streak})=>{
+  const entries = data.entries.map(({rank,callsign,xp,streak,lifetimeXP,equipped})=>{
     if (!validCount(rank) || rank < 1 || typeof callsign !== 'string' || !/^[A-Z0-9/]{2,16}$/.test(callsign) ||
         !validCount(xp) || !validCount(streak)) throw Error('Invalid leaderboard entry.');
-    return {rank,callsign,xp,streak};
+    const profile=Array.isArray(equipped) && equipped.length===3 && equipped.every((id,i)=>id===null || equipment(id)?.slot===i) && validCount(lifetimeXP) && lifetimeXP>=xp;
+    return {rank,callsign,xp,streak,...(profile ? {lifetimeXP,equipped} : {})};
   });
   return {status:200,entries,me:null};
 }
@@ -17,6 +20,7 @@ function publicRankings(data) {
 export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
   if (!['staging','offline','website'].includes(mode)) throw Error('Unknown Morse website mode.');
   const origin = mode === 'staging' ? testOrigin : siteOrigin;
+  const bandFeed=new ShackFeed(fetcher,origin);
   let cached, pending;
   async function capabilities() {
     if (mode === 'offline') return { privateSync:false, scores:false, leaderboard:false };
@@ -39,8 +43,18 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
     try { return await pending; } finally { pending=null; }
   }
 
-  return async (action, {scope, body} = {}) => {
+  const request = async (action, {scope, body} = {}) => {
     if (action !== 'capabilities' && !actions.has(action)) return {status:400,error:'Unknown operation.'};
+    if (action.startsWith('shack/')) {
+      if (mode === 'offline') return {status:503,error:'The live band is offline.'};
+      if (action==='shack/leave') bandFeed.close(body.token);
+      if (action==='shack/poll' && body.live) return bandFeed.next(body);
+      const response = await fetcher(origin+'/api/v2/'+action,{method:'POST',redirect:'error',credentials:'omit',cache:'no-store',
+        signal:AbortSignal.timeout(8000),headers:{'Content-Type':'application/json','X-Morse-Sync':'2',Origin:origin},
+        body:JSON.stringify({scope:'band',body})});
+      const data = await response.json().catch(()=>({error:'The live band is unavailable.'}));
+      return {...data,status:response.status};
+    }
     let capabilitiesNow;
     try { capabilitiesNow = await capabilities(); }
     catch { return {status:503,error:'Could not reach the Morse website. Progress is saved on this Mac.'}; }
@@ -67,7 +81,7 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
     const keyFor = name => mode === 'staging' ? name : 'website:'+name;
     if (!await safeStorage.isAsyncEncryptionAvailable()) return { status:503,error:'Private credential storage is unavailable.' };
     const cookies=[];
-    const required = ['scores/consent','scores/listing','scores/visibility','scores/total'].includes(action) ? [names.scores,names.private] : [names[kind]];
+    const required = ['scores/consent','scores/listing','scores/visibility','scores/total','scores/station'].includes(action) ? [names.scores,names.private] : [names[kind]];
     for (const name of required) {
       const row=db.prepare('SELECT encrypted FROM credentials WHERE id=?').get(keyFor(name));
       if (row) { const {result}=await safeStorage.decryptStringAsync(Buffer.from(row.encrypted)); cookies.push(name+'='+result); }
@@ -87,4 +101,9 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
       return {status:503,error:'The website is unavailable. Progress is saved on this Mac.'};
     return {...await response.json(),status:response.status};
   };
+  // The main process can outlive a reloaded, closed or crashed practice window.
+  request.closeBand = () => {
+    for (const token of bandFeed.sessions.keys()) bandFeed.close(token);
+  };
+  return request;
 }

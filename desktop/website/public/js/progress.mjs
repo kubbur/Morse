@@ -20,6 +20,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 export const QUICK_LETTER_XP = 2;
 export const COURSE_FOCUS_COPIES = 5;
+import { sanitizeShack } from './shack-model.mjs';
+
 export function sanitizeCallsign(value) {
   const text = typeof value === 'string' ? value.trim().toUpperCase() : '';
   return /^[A-Z0-9][A-Z0-9/]{1,15}$/.test(text) ? text : '';
@@ -267,6 +269,7 @@ export function sanitizeState(input) {
     profile.credits=Object.fromEntries(Object.entries(safeObject(source.credits)).filter(([key,n])=>
       /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(key) && Number.isSafeInteger(n) && n>0 && n<=1e9));
     if (Math.min(1e9,Object.values(profile.credits).reduce((sum,n)=>sum+n,0))>stats.xp) throw new Error('The result credits exceed the saved XP.');
+    if (source.shack) profile.shack = sanitizeShack(source.shack);
     profile.sending = sanitizeSending(source.sending);
     profile.soundVersion = 1;
     const oldSpeed = source.soundVersion === 1 ? source.previousTiming :

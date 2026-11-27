@@ -1,4 +1,8 @@
 import { pairedProgress } from './initial-merge.mjs';
+import { ShackUI } from './shack-ui.mjs';
+import { balances, certify } from './shack-model.mjs';
+import { operatorProfile } from './shack-views.mjs';
+import { drawGear } from './shack-gear.mjs';
 import { syncProfile, mergeProgress } from './sync-data.mjs';
 import { MORSE, PROSIGNS, patternFor, LETTERS, DIGITS, PUNCTUATION, KOCH, envelopeAt, gradeAnswer, normalizeText, supportedCharacters } from './morse.mjs';
 import { LESSONS, CONTENT, COURSE_LETTERS, COURSE_LEVELS, legacyCourseLevel, earCourseLevelFor, courseStage, courseLevelFor, alphabetFor, isGrowingCourse, isEndless, courseFocus, practiceKey, candidatesFor, randomPrompt, transmissionText } from './lessons.mjs';
@@ -60,6 +64,9 @@ const returningLearner=loaded.state.profiles.find(p=>p.id===loaded.state.activeI
 if (storage.row().foundation || storage.row().choiceSet) $('intro-share').checked=returningLearner.leaderboard;
 let state = loaded.state;
 let view = 'practice';
+let shack, progressReturn = 'practice';
+let publicOperators = new Map();
+const views = ['practice','send','journey','lab','shack'];
 let playing = false;
 let playingKind = '';
 let playbackId = 0;
@@ -705,7 +712,7 @@ function renderHeader() {
       else button.removeAttribute('aria-current');
     }
   });
-  for (const name of ['practice', 'send', 'journey', 'lab']) $(`view-${name}`).hidden = name !== view;
+  for (const name of views) $(`view-${name}`).hidden = name !== view;
   queueKeyboardLayout();
 }
 
@@ -968,7 +975,7 @@ function renderPractice() {
   $('daily-progress').setAttribute('aria-valuetext', `${count} of ${settings.goal} signals copied today`);
   $('daily-progress').firstElementChild.style.width = `${Math.min(100, count / settings.goal * 100)}%`;
   $('daily-message').textContent = count >= settings.goal ? 'Daily goal reached.' : `${settings.goal - count} more to reach today’s goal.`;
-  $('xp-count').textContent = `${governingXP(p).toLocaleString()} XP`;
+  $('xp-count').textContent = `${storage.scoreTotal(p).toLocaleString()} XP`;
   renderPath();
   renderAudioState();
   renderCopyPace();
@@ -1133,7 +1140,10 @@ function renderJourney() {
     .sort(([, a], [, b]) => a.recent.filter(Boolean).length / a.recent.length - b.recent.filter(Boolean).length / b.recent.length);
   $('send-weak-characters').innerHTML = weakSend.length ? '<div class="weak-chips">' + weakSend.map(([c, row]) =>
     `<span class="weak-item"><strong>${escape(c)}</strong><small>${row.recent.filter(Boolean).length}/${row.recent.length} correct</small></span>`).join('') + '</div>' : '<p class="empty-note">No recent missed patterns.</p>';
-  $('stats-grid').innerHTML = cards.map(([label, value, caption]) => `<article class="card stat-card"><span class="eyebrow">${label}</span><strong>${value}</strong><p>${caption}</p></article>`).join('');
+  const back = $('progress-return');
+  back.dataset.view = progressReturn;
+  back.textContent = '← Back to ' + ({practice:'Listen',send:'Send',shack:'The Shack',lab:'Settings'}[progressReturn] || 'Listen');
+  $('stats-grid').innerHTML = cards.map(([label, value, caption]) => `<article class="card stat-card"><span class="eyebrow">${label}</span><strong>${value}</strong><p>${caption}</p></article>`).join('') + `<button type="button" class="card stat-card shack-xp" data-view="shack"><span class="eyebrow">TOTAL XP</span><strong>${governingXP(p).toLocaleString()} XP</strong><span>Open The Shack →</span></button>`;
   const days = Array.from({ length: 7 }, (_, index) => { const date = new Date(); date.setDate(date.getDate() - 6 + index); return { date, count: stats.days[localDay(date)] || 0 }; });
   const max = Math.max(5, ...days.map(d => d.count));
   $('weekly-chart').innerHTML = days.map(({ date, count }, index) => `<div class="week-day${index === 6 ? ' today' : ''}"><strong>${count}</strong><div class="week-bar" data-count="${count}"></div><span>${date.toLocaleDateString(undefined, { weekday: 'short' })}</span></div>`).join('');
@@ -1153,7 +1163,38 @@ function renderJourney() {
 }
 
 function governingXP(p) {
-  return storage.scoreTotal(p);
+  return balances(p.shack,storage.scoreTotal(p)).xp;
+}
+
+function showOperator(entry) {
+  const own=!entry, p=profile();
+  $('operator-profile-title').textContent=own ? 'My profile' : 'Operator profile';
+  const details=entry || {callsign:p.callsign || shack.call,xp:governingXP(p),lifetimeXP:storage.scoreTotal(p),
+    equipped:p.shack?.equipped.map(slot=>slot?.id || null)};
+  $('operator-profile-body').innerHTML=operatorProfile({...details,lifetimeXP:details.lifetimeXP ?? details.xp});
+  $('operator-profile-body').querySelectorAll('[data-portrait]').forEach(drawGear);
+  openDialog('operator-profile-dialog');
+}
+$('my-operator-profile').addEventListener('click',()=>showOperator());
+$('leaderboard-rows').addEventListener('click',event=>{
+  const button=event.target.closest('[data-operator]');
+  if (!button || !publicOperators.has(button.dataset.operator)) return;
+  showOperator(publicOperators.get(button.dataset.operator));
+});
+const inputCard=$('input-settings'), inputHome=inputCard.parentNode, nextInputCard=inputCard.nextElementSibling;
+function showShackInputs() {
+  $('shack-input-body').append(inputCard);
+  openDialog('shack-input-dialog');
+  sender.updateActivity(); sender.renderInput();
+}
+$('shack-input-dialog').addEventListener('close',()=>{
+  inputHome.insertBefore(inputCard,nextInputCard);
+  sender.updateActivity(); sender.renderInput();
+});
+for (const id of ['shack-input-dialog','operator-profile-dialog']) {
+  $(id).addEventListener('close',()=>{
+    if (view==='shack' && !$(id).open) {shack.updateReceiver();shack.scheduleBeacon();shack.focus();}
+  });
 }
 for (const activity of ['listen', 'send']) $('progress-' + activity).addEventListener('click', () => {
   progressActivity = activity;
@@ -1212,7 +1253,7 @@ function renderListingStatus() {
   const p = profile(), row = storage.row(p.id), listing = row.listings?.[p.callsign];
   const intent = row.visibilityQueue?.[0];
   $('listing-state').textContent = deviceSync?.scoreError || row.listingError || (intent ? `Waiting for the website to ${intent.visible ? 'show' : 'hide'} ${intent.call}.` :
-    listing ? listing.visible ? `Visible on the leaderboard · ${listing.xp.toLocaleString()} XP confirmed` : 'Hidden on the leaderboard.' : '');
+    listing ? listing.visible ? `Visible on the leaderboard · ${balances(p.shack,listing.xp).xp.toLocaleString()} XP${deviceSync?.equipmentChange?.(row) ? ' · station update pending' : ' confirmed'}` : 'Hidden on the leaderboard.' : '');
 }
 async function refreshLeaderboard(force = false) {
   if (mac?.syncMode === 'staging') $('leaderboard-title').textContent = 'Local test leaderboard';
@@ -1233,18 +1274,19 @@ async function refreshLeaderboard(force = false) {
     const p = profile(), callsign = p.callsign;
     if (view === 'journey') renderJourney();
     const station = result.me?.callsign === callsign ? result.me : result.entries.find(entry => entry.callsign === callsign);
-    $('leaderboard-rows').innerHTML = result.entries.map(entry => `<tr${entry.callsign === callsign ? ' class="leaderboard-self"' : ''}><td>${entry.rank}</td><th scope="row">${escape(entry.callsign)}</th><td>${entry.xp.toLocaleString()}</td><td><span class="leaderboard-streak" aria-label="${entry.streak}-day practice streak">${entry.streak}<span aria-hidden="true">d</span></span></td></tr>`).join('');
+    publicOperators=new Map(result.entries.map(entry=>[entry.callsign,entry]));
+    $('leaderboard-rows').innerHTML = result.entries.map(entry => `<tr${entry.callsign === callsign ? ' class="leaderboard-self"' : ''}><td>${entry.rank}</td><th scope="row"><button type="button" class="text-button" data-operator="${escape(entry.callsign)}" aria-haspopup="dialog">${escape(entry.callsign)}</button></th><td>${entry.xp.toLocaleString()}</td><td><span class="leaderboard-streak" aria-label="${entry.streak}-day practice streak">${entry.streak}<span aria-hidden="true">d</span></span></td></tr>`).join('');
     const pendingXP = storage.row(p.id).scores.reduce((sum, score) => sum + score.xp, 0);
     const row = storage.row(p.id), listing = row.listings?.[callsign];
     const comparison = station ? `${callsign} · #${station.rank} · ${station.xp.toLocaleString()} leaderboard XP` :
-      listing?.visible ? `${callsign} · outside the top 50 · ${listing.xp.toLocaleString()} leaderboard XP` :
+      listing?.visible ? `${callsign} · outside the top 50 · ${balances(p.shack,listing.xp).xp.toLocaleString()} leaderboard XP` :
       listing?.visible === false ? `${callsign} · hidden` : `${callsign} · outside the displayed rankings`;
     const change = row.visibilityQueue?.find(intent => intent.call === callsign);
     const status = change ? (change.visible ? ' · Waiting to show on the website' : ' · Waiting to hide on the website') : !p.leaderboard ? ' · Sharing off' : pendingXP ? ` · ${pendingXP.toLocaleString()} XP waiting to upload` : !row.listings ? ' · Only eligible shared results count. You can include earlier XP in Saved progress.' : '';
     $('leaderboard-me').textContent = callsign ? `${comparison} · ${governingXP(p).toLocaleString()} total XP${status}` : '';
     $('leaderboard-message').textContent = result.entries.length ? 'Top 50 stations' : 'No leaderboard entries yet.';
     leaderboardUpdated = Date.now();
-  } catch { $('leaderboard-message').textContent = 'The leaderboard is offline. Your progress stays saved here.'; }
+  } catch { publicOperators.clear(); $('leaderboard-rows').replaceChildren(); $('leaderboard-message').textContent = 'The leaderboard is offline. Your progress stays saved here.'; }
   finally {
     leaderboardLoading = false;
     const again = leaderboardRefreshDue;
@@ -1254,6 +1296,7 @@ async function refreshLeaderboard(force = false) {
 }
 
 function clearMorseData() {
+  if (shack?.active) shack.leave();
   stopPlayback({ save: false });
   sender?.connection.disconnect();
   sender?.pause();
@@ -1273,7 +1316,7 @@ function clearMorseData() {
   $('intro-callsign').removeAttribute('aria-invalid');
   $('learner-callsign').value = ''; $('list-on-leaderboard').checked = false;
   $('pair-offer').hidden = true; $('pair-qr').replaceChildren(); $('pair-link').value = '';
-  $('leaderboard-rows').replaceChildren(); $('leaderboard-me').textContent = ''; leaderboardUpdated = 0;
+  publicOperators.clear(); $('leaderboard-rows').replaceChildren(); $('leaderboard-me').textContent = ''; leaderboardUpdated = 0;
   $('delete-data-confirmation').hidden = true;
   composing = false;
   view = 'practice'; history.replaceState(null, '', '#practice');
@@ -1431,6 +1474,7 @@ function render() {
   renderPractice();
   renderJourney();
   sender?.render();
+  if (view === 'shack') shack?.render();
   if ($('progress-dialog').open) renderSavedProgress();
 }
 
@@ -1621,16 +1665,27 @@ function openChart() {
 }
 
 function changeView(next) {
-  if (!['practice', 'send', 'journey', 'lab'].includes(next)) return;
+  if (!views.includes(next)) return;
+  const shackNavigation = view === 'shack' || next === 'shack';
+  if (next === 'journey' && view !== next) progressReturn = view;
+  if (view === 'shack' && next !== view) {
+    for (const id of ['shack-input-dialog','operator-profile-dialog']) if ($(id).open) closeNativeDialog($(id));
+    shack?.leave();
+  }
   cancelAnswerFocus();
   if (view === 'send' && next !== view) sender?.pause();
   if (next === 'send' && view !== next) sender?.preparePrompt();
   stopPlayback();
   view = next;
-  history.replaceState(null, '', `#${next}`);
+  if (location.hash !== `#${next}`) {
+    if (shackNavigation) history.pushState({progressReturn}, '', `#${next}`);
+    else history.replaceState({progressReturn}, '', `#${next}`);
+  }
+  else if (next === 'journey' && views.includes(history.state?.progressReturn)) progressReturn = history.state.progressReturn;
   render();
   if (next === 'journey') { void refreshService(); refreshLeaderboard(); }
   window.scrollTo({ top: 0, behavior: 'instant' });
+  if (next === 'shack') shack?.focus();
   if (next === 'lab' && !$('sound-choice').hidden) $('sound-choice').scrollIntoView({ block:'nearest' });
   if (next === 'practice' && !showLessonGuidance()) focusAnswer({ select: profile().round?.completed });
 }
@@ -1773,6 +1828,7 @@ $('lab-course-level').innerHTML = Array.from({ length: COURSE_LEVELS }, (_, i) =
 document.addEventListener('click', event => {
   const viewButton = event.target.closest('button[data-view]');
   if (viewButton) changeView(viewButton.dataset.view);
+  if (event.target.closest('#shack-station')) return;
   const closeButton = event.target.closest('[data-close]');
   if (closeButton) {
     finishDialog($(closeButton.dataset.close));
@@ -2105,6 +2161,7 @@ $('confirm-import').addEventListener('click', () => {
   catch { $('progress-message').textContent = 'Could not back up the current save. Export it before importing.'; return; }
   try { storage.atomic(()=>{ if (restored.callsign!==profile().callsign) storage.chooseListing({ ...profile() },restored.callsign,false); storage.setItem(STORAGE_KEY, JSON.stringify(imported)); storage.row().stream=crypto.randomUUID(); storage.row().foundation=syncProfile(restored); deviceSync?.replace('import'); }); }
   catch { $('progress-message').textContent = 'Could not save the imported progress. Your current progress was kept.'; return; }
+  if (shack?.active) shack.leave();
   stopPlayback({ save: false });
   state = imported;
   cancelImport();
@@ -2251,20 +2308,28 @@ window.addEventListener('hashchange', () => {
     return;
   }
   const next = location.hash.slice(1);
-  if (['practice', 'send', 'journey', 'lab'].includes(next)) changeView(next);
+  if (views.includes(next)) changeView(next);
+  else if (!next) changeView('practice');
 });
 
-sender = new SendingUI({ getProfile: profile, persist, activitySource: () => ({ stream: storage.row().stream ||= crypto.randomUUID(), day: localDay() }), soundChoice: renderSoundChoice, inputSettingsOpen: () => view === 'lab', active: () => view === 'send', onEarn: (xp,id) => { storage.result(profile(),'send',xp,id); profile().stats.xp = Math.min(1e9, profile().stats.xp + xp); } });
+sender = new SendingUI({ getProfile: profile, persist, activitySource: () => ({ stream: storage.row().stream ||= crypto.randomUUID(), day: localDay() }), soundChoice: renderSoundChoice, inputSettingsOpen: () => view === 'lab' || $('shack-input-dialog').open, active: () => view === 'send' || view === 'shack' && !!sender?.keyTarget, onEarn: (xp,id) => { storage.result(profile(),'send',xp,id); profile().stats.xp = Math.min(1e9, profile().stats.xp + xp); } });
 ensureRound();
 const initialView = location.hash.slice(1);
-if (['practice', 'send', 'journey', 'lab'].includes(initialView)) view = initialView;
+if (views.includes(initialView)) view = initialView;
+if (view === 'journey' && views.includes(history.state?.progressReturn)) progressReturn = history.state.progressReturn;
+shack = new ShackUI({root:$('shack-station'), profile, xp:p=>storage.scoreTotal(p), persist, sender, go:changeView,
+  openInputs:showShackInputs, openProfile:()=>showOperator(),
+  badges:p=>[...collectedBadges(p),...earnedSendBadges(p.sending)],
+  exchange:(action,body)=>stationFor(profile().id).exchange('shack/'+action,body),
+  award:() => { if (certify(profile())) { persist(); announce('On-air check complete · 300 XP'); } }
+});
 render();
 function stationFor(id) {
   if (learnerStations.has(id)) return learnerStations.get(id);
   const local = () => state.profiles.find(p => p.id === id);
   const station = new Station({
     mac, canPublish: () => service.scores, canSync: () => service.privateSync, storage: storage.forLearner(id), getProfile: local,
-    ready: () => !!local() && (id !== state.activeId || !playing && !continuous && !composing && !sender?.busy && !sender?.nextTimer && !$$('dialog').some(d => d.open && !['progress-dialog', 'callsign-intro-dialog'].includes(d.id) && !(d === $('guidance-dialog') && focusCardOpen()))),
+    ready: () => !!local() && (id !== state.activeId || !shack?.capturing && !playing && !continuous && !composing && !sender?.busy && !sender?.nextTimer && !$$('dialog').some(d => d.open && !['progress-dialog', 'callsign-intro-dialog'].includes(d.id) && !(d === $('guidance-dialog') && focusCardOpen()))),
     applyProfile(shared, options) {
       if (id === state.activeId) return acceptSyncedProfile(shared, options);
       const next = localProfileWithSync(local(), shared, options?.replace);

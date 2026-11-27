@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { sanitizeShack, purchase, equip, equipmentSnapshot } from '../website/public/js/shack-model.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -726,4 +727,58 @@ test('a new owner device reconnecting with an old offline show cannot undo a lat
   assert.deepEqual(b.storage.row().visibilityQueue,[]); assert.match(b.storage.row().listingError,/hidden/);
   chooseVisibility(b,true); await b.station.flushScores();
   assert.equal(ranks(e)[0].xp,20); assert.equal(b.p.leaderboard,true);
+});
+
+test('losing a desktop window disconnects its live receivers and a new window can tune again',async()=>{
+  const connections=[];
+  const fetcher=async(url,{signal})=>{
+    assert.equal(new URL(url).pathname,'/api/v2/shack/feed');
+    connections.push(signal);
+    const body=new ReadableStream({start(controller){
+      controller.enqueue(new TextEncoder().encode('{"cursor":1,"events":[]}\n'));
+      signal.addEventListener('abort',()=>controller.close(),{once:true});
+    }});
+    return new Response(body,{headers:{'Content-Type':'application/x-ndjson'}});
+  };
+  const client=websiteClient(null,null,'staging',fetcher);
+  const tune=token=>client('shack/poll',{body:{token,f:7025,cursor:0,live:true}});
+  try {
+    await Promise.all([tune('first'),tune('second')]);
+    assert.deepEqual(connections.map(s=>s.aborted),[false,false]);
+    client.closeBand();
+    assert.deepEqual(connections.map(s=>s.aborted),[true,true]);
+    assert.equal((await tune('first')).cursor,1);
+    assert.deepEqual(connections.map(s=>s.aborted),[true,true,false]);
+  } finally { client.closeBand(); }
+});
+
+test('checkout lowers the published rank and profiles show only equipped gear across retries and visibility changes',async t=>{
+  const exchange=new Exchange(':memory:');t.after(()=>exchange.close());
+  let lose=true;
+  const f=fixture(exchange,async(action,payload,next)=>{
+    const receipt=await next(action,payload);
+    if(action==='scores/station' && lose){lose=false;throw Error('Lost equipment receipt');}
+    return receipt;
+  });
+  const second=fixture(exchange);
+  f.p.stats.xp=800;second.p.stats.xp=600;
+  chooseVisibility(f,true,'TEST1');chooseVisibility(second,true,'TEST2');
+  await f.station.flushScores();await second.station.flushScores();
+  assert.deepEqual(ranks(exchange).map(r=>r.xp),[800,600]);
+  const s=f.p.shack=sanitizeShack();
+  purchase(s,['0-0','1-0','2-0'],10,800);equip(s,'1-0',1,11);
+  await f.station.flushScores();await f.station.flushScores();
+  const entry=ranks(exchange)[1];
+  assert.deepEqual(entry,{callsign:'TEST1',xp:500,lifetimeXP:800,equipped:[null,'1-0',null],rank:2,streak:0});
+  assert.equal(f.station.hasScores(f.storage.row()),false);
+  const old=structuredClone(equipmentSnapshot(s));equip(s,'2-0',2,20);
+  await f.station.flushScores();
+  const body={callsign:'TEST1',generation:f.storage.row().generation,revision:1,station:old};
+  await f.station.exchange('scores/station',body);
+  assert.deepEqual(ranks(exchange)[1].equipped,[null,'1-0','2-0']);
+  await assert.rejects(second.station.exchange('scores/station',body),/publisher/);
+  f.earn(20);await f.station.flushScores();assert.equal(ranks(exchange)[1].xp,520);
+  chooseVisibility(f,false);await f.station.flushScores();
+  assert.deepEqual(ranks(exchange).map(r=>r.callsign),['TEST2']);
+  await assert.rejects(f.station.exchange('scores/station',body),/visibility/);
 });

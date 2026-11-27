@@ -95,16 +95,20 @@ function createWindow() {
     },
   });
   const contents = window.webContents;
+  const interruptSession = () => {
+    paddle?.command('interrupt');
+    exchange?.closeBand();
+  };
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   for (const name of ['will-navigate', 'will-redirect']) contents.on(name, (event, url) => { if (!appDocument(url)) event.preventDefault(); });
   contents.on('will-attach-webview', event => event.preventDefault());
   window.once('ready-to-show', () => window?.show());
   contents.on('did-finish-load',()=>{ if (paddle?.status) publish('paddle-event',paddle.status); });
-  contents.on('did-start-navigation',(_e,_url,inPlace,main)=>{ if (main && !inPlace) paddle?.command('interrupt'); });
+  contents.on('did-start-navigation',(_e,_url,inPlace,main)=>{ if (main && !inPlace) interruptSession(); });
   window.on('blur', () => { if (paddle?.input==='vband') void paddle.command('vband-release'); });
-  window.on('closed', () => { paddle?.command('interrupt'); window = null; });
+  window.on('closed', () => { interruptSession(); window = null; });
   contents.on('render-process-gone', () => {
-    paddle?.command('interrupt');
+    interruptSession();
     if (!closing) dialog.showMessageBox({ type: 'error', title: 'Morse', message: 'The practice window stopped.', detail: 'Your saved progress is kept. Reopen the window to continue.', buttons: ['Reopen', 'Quit'] }).then(({ response }) => { if (response === 0) { window?.reload(); showWindow(); } else app.quit(); });
   });
   window.loadURL(APP_ORIGIN).catch(error => {

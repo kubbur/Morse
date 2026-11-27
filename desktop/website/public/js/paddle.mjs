@@ -110,6 +110,11 @@ export class PaddleConnection {
     if (this.enabled && this.wanted) this.open();
     else if (!this.enabled) { this.close(); this.onStatus('off', 'Morse Paddle paused outside Send'); }
   }
+  setLiveKeying(enabled) {
+    if (!!this.liveKeying===enabled) return;
+    this.liveKeying=enabled;
+    this.queue=[]; this.anchor=null; this.heldSince=null;
+  }
   open() {
     this.close();
     if (!this.enabled || !this.wanted) return;
@@ -139,18 +144,19 @@ export class PaddleConnection {
     // A bounded playout buffer lets close contact changes retain their native
     // timestamps rather than stretching marks with event-loop/network jitter.
     const arrived = this.now();
-    if (!this.anchor) this.anchor = { remote: row.timeMs, local: arrived };
+    if (!this.anchor || this.liveKeying) this.anchor = { remote: row.timeMs, local: arrived };
     const cursor = this.remoteNow();
     if (row.timeMs < cursor - 5 || this.queue.length > 512) {
       this.queue = []; this.anchor = { remote: row.timeMs, local: arrived }; this.onReset();
       this.onStatus('ready', 'Paddle timing paused. Try that answer again.');
     } else this.onStatus('ready', 'Morse Paddle connected · Mac sidetone');
-    this.queue.push(row);
+    if (this.liveKeying) this.onContacts(row.dit,row.dah,row.timeMs);
+    else this.queue.push(row);
     this.lastArrival = arrived;
     if (row.dit || row.dah) this.heldSince ??= arrived;
     else this.heldSince = null;
   }
-  remoteNow() { return this.anchor ? this.anchor.remote + this.now() - this.anchor.local - 100 : -Infinity; }
+  remoteNow() { return this.anchor ? this.anchor.remote + this.now() - this.anchor.local - (this.liveKeying ? 16 : 100) : -Infinity; }
   tick() {
     if (!this.anchor) return;
     if (this.heldSince != null && this.now() - this.heldSince > 10000) { this.fail('Paddle held too long. Release both contacts and reconnect.'); return; }

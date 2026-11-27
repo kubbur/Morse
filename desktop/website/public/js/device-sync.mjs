@@ -11,6 +11,7 @@ function rememberReceipt(meta, submitted, received) {
   if (spacingOnDevice(received, preference) !== received) meta.spacingPreference = preference;
   else delete meta.spacingPreference;
   meta.legacySendingSessions = !!submitted.sending.sessionHistory && !received.sending?.sessionHistory;
+  meta.legacyShack = !!submitted.shack && !received.shack;
   meta.legacySendActivity = !!submitted.sending.activity && !received.sending?.activity;
 }
 export class DeviceSync {
@@ -122,6 +123,7 @@ export class DeviceSync {
     if (replace && !preferred.sending.activity && local.sending.activity && meta.legacySendActivity) {
       merged = { ...merged, sending: { ...merged.sending, activity: local.sending.activity } };
     }
+    if (replace && meta.legacyShack && !preferred.shack && local.shack) merged = { ...merged, shack:local.shack };
     if (remote !== meta.remote) {
       // A push may have been followed by another edit while in flight. Remember
       // the attempted values, so the newer edit still gets its own request.

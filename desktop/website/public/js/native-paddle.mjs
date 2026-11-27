@@ -40,6 +40,10 @@ export class BuiltInPaddle {
       edge: edge => {
         if (!this.active || !this.connected || !this.configured || this.status?.typing || this.ui.migrationPending) return;
         const eligible = ui.usable() && document.hasFocus() && !ui.listenHeld;
+        if (ui.keyTarget) {
+          if (eligible) ui.edge(edge);
+          return;
+        }
         if (this.command || !eligible || !ui.heard || ui.result?.valid || ui.getProfile().sending.pendingLevel) {
           // A held paddle can generate many dits. Only a single complete dit
           // followed by a neutral watermark is a playback command.
@@ -54,6 +58,7 @@ export class BuiltInPaddle {
         const command = this.command;
         this.command = null;
         if (!this.active || !this.connected || !this.configured || ui.migrationPending || this.status?.typing || !ui.usable() || !document.hasFocus()) return;
+        if (ui.keyTarget) return;
         if (command) {
           if (command.single && command.dit && (!ui.heard || ui.result?.valid || ui.getProfile().sending.pendingLevel)) ui.playPrompt();
           return;
