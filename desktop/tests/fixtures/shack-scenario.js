@@ -19,6 +19,20 @@
   Object.defineProperty(document,'hasFocus',{configurable:true,value:()=>true});
   Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});
   window.dispatchEvent(new Event('focus'));
+  if (fixture.mode==='browser') {
+    go('shack');
+    const pair=q('.instrument + .shack-paddles'), keys=q('#send-key-controls #send-paddles');
+    check(pair && !pair.hidden && pair.children.length===2 && keys,'Returning keyboard operator lost the radio paddles');
+    const radio=q('.instrument').getBoundingClientRect(), touch=pair.getBoundingClientRect(), band=q('.band').getBoundingClientRect();
+    check(touch.height>=44 && radio.bottom<=touch.top && touch.bottom<=band.top,'Phone paddles must sit below the radio and above Band activity');
+    const label=q('.profile-call small');
+    label.scrollIntoView({block:'center'});
+    const rect=label.getBoundingClientRect(), hit=document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2);
+    check(hit?.closest('button')===label.closest('button') && label.closest('button').offsetHeight>=44,'My profile label missed its tap target');
+    hit.click();
+    check(q('#operator-profile-dialog').open && q('.operator-call').textContent==='TF3KBR','Tapping My profile did not open the operator');
+    click('[data-close="operator-profile-dialog"]');
+  }
   go('lab');if(!q('#sound-choice').hidden)q('#sound-choices').firstElementChild.click();
   const mac=fixture.mode.startsWith('mac'),choice=q('#send-source');choice.value=mac?'paddle':'straight';
   choice.dispatchEvent(new Event('change',{bubbles:true}));if(mac)testPaddleReady();
@@ -57,8 +71,51 @@
   go('lab');check(q('#send-continue-mode').getClientRects().length && q('#send-pause-control').hidden===(lessonSettings.continueMode!=='timed') && learner().sending.settings.pauseSeconds===lessonSettings.pauseSeconds,'Lesson settings after closing the Shack popup');
   go('journey');click('.shack-xp');
   tab('bench');click('[data-act="equip"][data-id="0-0"]');tab('air');
+  check(q('[data-face="frequency"]').textContent==='7.026' && q('[data-face="room"]').textContent==='Slow CW calling frequency','Default slow calling frequency');
+  for (const f of [7024,7025,7027,7028,7026]) {
+    click('[data-act="tune"][data-f="'+f+'"]');
+    check(q('[data-act="open-check"]').hidden && q('[data-face="pace"]').textContent.includes('8–12') &&
+      q('[data-face="room"]').textContent===(f===7026?'Slow CW calling frequency':'Slow CW open channel'),'Starter slow channel '+f);
+  }
+  const pitchBefore=learner().settings.tone, toneKnob=q('.pitch-knob');
+  click('[data-act="pitch-step"][data-step="50"]');
+  check(q('[data-face="pitch"]').textContent===pitchBefore+50+' Hz' && learner().settings.tone===pitchBefore+50,'Radio pitch did not save to the profile');
+  if(mac) await wait(()=>testSound()?.pitch===pitchBefore+50,'Radio pitch did not reach the native sidetone');
+  toneKnob.setPointerCapture=()=>{};
+  const dragPitch=(type,x)=>toneKnob.dispatchEvent(new PointerEvent(type,{pointerId:21,pointerType:'touch',clientX:x,button:0,bubbles:true}));
+  dragPitch('pointerdown',10);dragPitch('pointermove',22);
+  check(toneKnob.getAttribute('aria-valuenow')===String(pitchBefore+150) && learner().settings.tone===pitchBefore+50,'Pitch drag did not preview two 50 Hz steps');
+  dragPitch('pointercancel',22);
+  check(q('[data-face="pitch"]').textContent===pitchBefore+50+' Hz','Cancelling pitch drag changed the saved tone');
+  dragPitch('pointerdown',10);dragPitch('pointermove',16);dragPitch('pointerup',16);
+  check(learner().settings.tone===pitchBefore+100,'Releasing pitch drag did not save its 50 Hz step');
+  const turnPitch=key=>toneKnob.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));
+  turnPitch('Home');check(learner().settings.tone===200 && q('[data-step="-50"]').disabled,'Lower pitch limit');
+  turnPitch('End');check(learner().settings.tone===2000 && q('[data-step="50"]').disabled,'Upper pitch limit');
+  turnPitch('ArrowDown');check(learner().settings.tone===1950 && toneKnob.getAttribute('aria-valuetext')==='1950 Hz','Pitch keyboard step');
+  go('send');
+  const sharedPitch=q('#send-pitch');
+  check(sharedPitch.value==='1950','Send pitch did not follow the radio');
+  sharedPitch.value='600'; sharedPitch.dispatchEvent(new Event('change',{bubbles:true}));
+  go('shack');check(q('[data-face="pitch"]').textContent==='600 Hz' && q('[data-face="frequency"]').textContent==='7.026','Shared pitch changed the tuned frequency');
   if (!mac) {
-    const {BandRadio}=await import('./js/shack-radio.mjs');
+    const {BandRadio,Receiver}=await import('./js/shack-radio.mjs');
+    const originalUnlock=Receiver.prototype.unlock;
+    let rx;
+    Receiver.prototype.unlock=async function() {
+      rx=this; this.audio.context=new OfflineAudioContext(1,48000,48000);
+    };
+    const hiss=()=>q('[data-act="hiss"]');
+    check(hiss().getAttribute('aria-pressed')==='false','Hiss should start off');
+    hiss().click();check(localStorage.getItem('morse.shack.hiss')==='1' && !rx,'Hiss preference started a stopped receiver');
+    click('[data-act="monitor"]');await wait(()=>rx?.hissVoice,'No hiss while listening');
+    const voice=rx.hissVoice;
+    click('[data-act="profile"] small');check(!rx.hissVoice,'Hiss leaked into My profile');
+    click('[data-close="operator-profile-dialog"]');await wait(()=>rx.hissVoice && rx.hissVoice!==voice,'Hiss did not resume');
+    click('[data-act="monitor"]');check(!rx.hissVoice,'Receiver still hissing after Stop listening');
+    hiss().click();check(localStorage.getItem('morse.shack.hiss')==='0','Hiss preference did not clear');
+    Receiver.prototype.unlock=originalUnlock;
+    const sendDit=q('#send-key-controls #send-dit');
     const marks=[], original=BandRadio.prototype.edge;
     BandRadio.prototype.edge=function(down,at,wpm,duration) {
       if (down) marks.push({wpm,duration});
@@ -72,7 +129,7 @@
     click('[data-act="settings"]');setSource('keyboard');
     if (!q('#show-paddle-buttons').checked) q('#show-paddle-buttons').click();
     await closeInputs();
-    const dit=q('.instrument #send-dit'),dah=q('.instrument #send-dah');
+    const dit=q('.instrument + .shack-paddles [data-shack-paddle="dit"]'),dah=q('.instrument + .shack-paddles [data-shack-paddle="dah"]');
     for (const button of [dit,dah]) {
       const rect=button?.getBoundingClientRect();
       check(rect && rect.width>=44 && rect.height>=44 && rect.left>=0 && rect.right<=390,'Touch paddles do not fit the phone');
@@ -90,7 +147,7 @@
     check(marks.length===count+1 && Math.abs(marks.at(-1).duration-3*unit)<.01,'Touch dash after cancellation');
     click('[data-act="settings"]');q('#show-paddle-buttons').click();await closeInputs();
     check(!dit.getClientRects().length && !dah.getClientRects().length,'Unchecked paddles are still visible');
-    go('send');check(q('#send-key-controls #send-dit')===dit,'Send lost its original touch controls');
+    go('send');check(q('#send-key-controls #send-dit')===sendDit && sendDit!==dit,'Send lost its independent touch controls');
     go('shack');click('[data-act="settings"]');setSource('straight');await closeInputs();
     BandRadio.prototype.edge=original;
   }

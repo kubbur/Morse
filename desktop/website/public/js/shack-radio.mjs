@@ -178,7 +178,43 @@ export class Receiver {
   constructor(settings) { this.settings=settings; this.audio=new MorseAudio(); this.voices=new Set(); this.clocks=new Map(); this.live=new LiveKeyReceiver(); }
   unlock() { return this.audio.unlock(); }
   key(event) {this.live.key(this.audio.context,this.settings(),event);}
+  setHiss(enabled) {
+    const ctx=this.audio.context;
+    const level=enabled && ctx ? Math.max(0,Math.min(100,this.settings().volume)) / 100 * .055 : 0;
+    if (!level || ctx.state==='closed') {
+      if (this.hissVoice) {
+        const {source,gain}=this.hissVoice;
+        this.hissVoice=null;
+        const now=ctx.currentTime;
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setTargetAtTime(0,now,.003);
+        source.stop(now+.016);
+      }
+      return;
+    }
+    if (!this.hissVoice) {
+      // A looping, band-limited noise bed shares only the receiver's output.
+      if (!this.noiseBuffer || this.noiseBuffer.sampleRate!==ctx.sampleRate) {
+        this.noiseBuffer=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate);
+        const samples=this.noiseBuffer.getChannelData(0);
+        for (let i=0;i<samples.length;i++) samples[i]=Math.random()*2-1;
+      }
+      const source=ctx.createBufferSource(), filter=ctx.createBiquadFilter(), gain=ctx.createGain();
+      source.buffer=this.noiseBuffer; source.loop=true;
+      filter.type='bandpass'; filter.frequency.value=1350; filter.Q.value=.7;
+      gain.gain.value=0;
+      source.connect(filter).connect(gain).connect(ctx.destination);
+      source.onended=()=>{source.disconnect();filter.disconnect();gain.disconnect();};
+      source.start();
+      this.hissVoice={source,gain,level:0};
+    }
+    if (this.hissVoice.level!==level) {
+      this.hissVoice.gain.gain.setTargetAtTime(level,ctx.currentTime,.008);
+      this.hissVoice.level=level;
+    }
+  }
   stop() {
+    this.setHiss(false);
     this.live.stop();
     for (const voice of this.voices) { try { voice.stop(); } catch {} }
     this.voices.clear(); this.clocks.clear(); this.audio.stop();

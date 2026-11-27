@@ -79,7 +79,6 @@ export class SendingUI {
     this.keyboardPaddles = loadKeyboardPaddles();
     this.heldCodes = new Map();
     this.pointerHolds = new Map();
-    this.screenPaddles = $('send-paddles');
     this.contactHolds = { dit: new Set(), dah: new Set() };
     this.wake = new ScreenWake({ onState: state => { this.wakeState = state; this.renderInput(); } });
     this.native = globalThis.morseMac;
@@ -182,11 +181,7 @@ export class SendingUI {
     $('send-help').addEventListener('click', () => { this.revealed = true; if (!this.stage.guided) this.assisted = true; this.renderExercise(); $('send-feedback').textContent = 'Pattern shown. This attempt is practice; use the next exercise for mastery.'; });
     $('send-retry').addEventListener('click', () => { this.clearAnswer(); this.focusKey(); });
     this.bindHold($('send-key'), (down, at) => this.straight(down, at));
-    for (const contact of ['dit', 'dah']) this.bindHold($('send-' + contact), down => {
-      if (this.source !== 'keyboard' || !this.keyboardPaddles.showButtons) return;
-      const side = this.settings.reverse ? (contact === 'dit' ? 'dah' : 'dit') : contact;
-      this.keyboardContact(side, down, 'screen-' + contact);
-    });
+    for (const contact of ['dit', 'dah']) this.bindPaddle($('send-' + contact), contact);
     document.addEventListener('keydown', e => this.key(e, true), true);
     document.addEventListener('keyup', e => this.key(e, false), true);
     window.addEventListener('blur', () => {
@@ -220,13 +215,16 @@ export class SendingUI {
     button.addEventListener('contextmenu', e => e.preventDefault());
   }
 
-  placePaddles(host = null, enabled = true) {
-    const parent = host || $('send-key-controls');
-    if (this.screenPaddles.parentElement !== parent) {
-      if ([...this.pointerHolds.keys()].some(button => this.screenPaddles.contains(button))) this.abort();
-      parent.append(this.screenPaddles);
-    }
-    for (const button of this.screenPaddles.children) button.disabled = !enabled;
+  bindPaddle(button, contact) {
+    this.bindHold(button, down => {
+      if (this.source !== 'keyboard' || !this.keyboardPaddles.showButtons) return;
+      const side = this.settings.reverse ? (contact === 'dit' ? 'dah' : 'dit') : contact;
+      this.keyboardContact(side, down, 'screen-' + contact);
+    });
+  }
+
+  releasePaddlesIn(panel) {
+    if ([...this.pointerHolds.keys()].some(button => panel.contains(button))) this.abort();
   }
 
   get stage() { return sendingStage(this.getProfile().sending.level); }

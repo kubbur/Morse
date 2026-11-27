@@ -22,7 +22,12 @@ export const items = tiers.flatMap(([tier, prices, names], level) =>
   names.map((name, slot) => ({ id: `${slot}-${level}`, slot, level, tier, price: prices[slot], originalPrice: originalTiers[level][1][slot], name })));
 const catalog = new Map(items.map(item => [item.id, item]));
 export const equipment = id => catalog.get(id);
-export const rooms = new Map([[7025,'Slow CW'],[7030,'Calling frequency'],[7032,'Club room'],[7035,'Ragchew'],[7038,'Open frequency']]);
+export const SLOW_CW_CALLING_KHZ = 7026;
+const slowCWRooms = new Map([-2,-1,0,1,2].map(offset => [
+  SLOW_CW_CALLING_KHZ + offset, offset === 0 ? 'Slow CW calling frequency' : 'Slow CW open channel',
+]));
+export const isSlowCW = f => slowCWRooms.has(f);
+export const rooms = new Map([...slowCWRooms,[7030,'Calling frequency'],[7032,'Club room'],[7035,'Ragchew'],[7038,'Open frequency']]);
 export const frequency = f => (f / 1000).toFixed(3);
 export const validFrequency = f => Number.isInteger(f) && f >= 7020 && f <= 7050;
 export const badgePrice = id => id === 'send-first' ? 35 : id === 'send-ten' ? 75 : 25;
@@ -138,7 +143,7 @@ export function equip(s, id, slot, at = Date.now()) {
   return true;
 }
 export const assembled = s => slots.every((_,slot)=>!!s.equipped[slot]?.id);
-export const minimumStation = f => stationPrices[f===7025 ? 0 : [7030,7032,7035].includes(f) ? 1 : 2];
+export const minimumStation = f => stationPrices[isSlowCW(f) ? 0 : [7030,7032,7035].includes(f) ? 1 : 2];
 export function coverage(p) {
   const s = p.shack || {};
   return { copied:symbols((s.copied || '') + [...alphabet].filter(c=>p.stats.characters[c]?.correct > 0).join('')),
@@ -153,7 +158,7 @@ export function certify(p) {
   return true;
 }
 export function canTransmit(f, value, passed) {
-  return validFrequency(f) && value>=minimumStation(f) && (f===7025 || passed);
+  return validFrequency(f) && value>=minimumStation(f) && (isSlowCW(f) || passed);
 }
 export function hunt(date = new Date()) {
   const day = date.toISOString().slice(0,10), seed = Math.floor(Date.parse(day)/86400000);

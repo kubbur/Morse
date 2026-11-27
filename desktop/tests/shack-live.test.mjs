@@ -13,6 +13,22 @@ const open=(band,call,frequency=f,live=true,equipped=['0-0','1-0','2-0'])=>
   band.request('open',{call,f:frequency,qualified:true,equipped,live,lifetimeXP:5000});
 const key=(edge,offset,stream='cw')=>({edge,offset,stream});
 
+test('unqualified starter stations can exchange CW on each slow channel and only hear their own frequency',()=>{
+  const band=new ShackBand();
+  const join=(call,f)=>band.request('open',{call,f,equipped:['0-0','1-0','2-0'],qualified:false,live:true,lifetimeXP:5000});
+  const send=(station,f)=>band.request('edges',{token:station.token,f,first:1,edges:[key('down',0),key('up',120)]});
+  const hear=(station,f)=>band.request('poll',{token:station.token,f,cursor:station.cursor}).events;
+  for (const f of [7024,7025,7026,7027,7028]) {
+    const a=join('TESTA',f), b=join('TESTB',f), next=join('TESTC',f+1);
+    assert.equal(send(a,f).ack,2); assert.equal(send(b,f).ack,2);
+    assert.deepEqual(hear(a,f).map(e=>e.peer),[b.id,b.id]);
+    assert.deepEqual(hear(b,f).map(e=>e.peer),[a.id,a.id]);
+    assert.deepEqual(hear(next,f+1),[]);
+    for(const station of [a,b,next]) band.request('leave',{token:station.token});
+  }
+  for (const f of [7023,7029,7030]) assert.throws(()=>send(join('TESTA',f),f),/Receive only/);
+});
+
 test('a key-down wakes the tuned feed before release; overlapping uploads play once and old radios hear completed marks',async()=>{
   const band=new ShackBand(), a=open(band,'TESTA'), b=open(band,'TESTB');
   const other=open(band,'TESTC',7035), old=open(band,'TESTD',f,false), monitor=open(band,'TESTR',f,true,[null,'1-0','2-0']);

@@ -35,5 +35,27 @@
     await check(wpm,false);
     await check(wpm,true);
   }
+  // Render hiss and a received mark into one PCM buffer, including both mute transitions.
+  const rate=48000, offline=new OfflineAudioContext(1,rate,rate);
+  let clock=0;
+  const rx=new Receiver(()=>({tone:750,volume:70,wpm:30}));
+  rx.audio.context={state:'running',sampleRate:rate,get currentTime(){return clock;},destination:offline.destination,
+    createBuffer:(...args)=>offline.createBuffer(...args),createBufferSource:()=>offline.createBufferSource(),
+    createBiquadFilter:()=>offline.createBiquadFilter(),createGain:()=>offline.createGain(),createOscillator:()=>offline.createOscillator()};
+  clock=.05;rx.setHiss(true);
+  const voice=rx.hissVoice;
+  clock=.12;rx.setHiss(true);
+  if(rx.hissVoice!==voice) throw Error('Refreshing the radio duplicated the noise source');
+  rx.key({peer:'test',stream:'pitch',edge:'down',offset:0,duration:100,wpm:30});
+  clock=.38;rx.setHiss(false);
+  const pcm=(await offline.startRendering()).getChannelData(0);
+  const samples=(start,end)=>pcm.subarray(Math.round(start*rate),Math.round(end*rate));
+  const rms=data=>Math.sqrt(data.reduce((sum,x)=>sum+x*x,0)/data.length);
+  const hiss=rms(samples(.11,.21)), tone=samples(.25,.33);
+  let crossings=0;
+  for(let i=1;i<tone.length;i++) if(tone[i-1]<0 && tone[i]>=0) crossings++;
+  if(rms(samples(0,.04))!==0 || hiss<.0001 || hiss>rms(tone)/4 || rms(samples(.43,.55))!==0)
+    throw Error('Receiver hiss did not respect its level or mute state');
+  if(Math.abs(crossings/.08-750)>25) throw Error('Received tone did not use the selected pitch');
   window.testComplete=true;
 })().catch(e=>window.testFailure=e.message);

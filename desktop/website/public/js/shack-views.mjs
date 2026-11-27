@@ -1,7 +1,10 @@
-import { alphabet, slots, tiers, items, equipment, assembled, receiving, stationTier, balances, cost, coverage, rooms, frequency, badgePrice } from './shack-model.mjs';
+import { alphabet, slots, tiers, items, equipment, assembled, receiving, stationTier, balances, cost, coverage, rooms, frequency, badgePrice, SLOW_CW_CALLING_KHZ } from './shack-model.mjs';
 export const esc = v => String(v).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => n.toLocaleString();
 export const button = (label, action, attrs='', type='quiet') => `<button type="button" class="${type}" data-act="${action}" ${attrs}>${esc(label)}</button>`;
+export const paddleControls = `<div class="shack-paddles" role="group" aria-label="On-screen paddles" hidden>
+  <button type="button" class="quiet" data-shack-paddle="dit">Dot</button>
+  <button type="button" class="quiet" data-shack-paddle="dah">Dash</button></div>`;
 const portrait = item => `<canvas width="144" height="72" data-portrait="${item.id}" aria-hidden="true"></canvas>`;
 export const tabs = new Map([['air','On air'],['bench','Workbench'],['shop','Shop'],['log','Logbook']]);
 const tabIcons = {
@@ -13,7 +16,8 @@ const tabIcons = {
 export function heading(ui) {
   const station=assembled(ui.s) ? stationTier(ui.s)+' station' : receiving(ui.s) ? 'Receive-only station' : 'Station under construction';
   return `<div class="hero"><div><p class="kicker">Virtual 40 m band</p><h1>The Shack</h1></div>
-    <div class="callout"><div class="label">${station}</div>${button(ui.call,'profile','aria-haspopup="dialog" title="My profile"','profile-call')}<small>My profile</small></div></div>
+    <button type="button" class="callout profile-call" data-act="profile" aria-haspopup="dialog" aria-controls="operator-profile-dialog" aria-label="My profile, ${esc(ui.call)}">
+      <span class="label">${station}</span><strong>${esc(ui.call)}</strong><small>My profile</small></button></div>
     <div class="shack-nav"><nav class="tabs" aria-label="The Shack">${[...tabs].map(([id,label])=>
       `<button type="button" data-act="tab" data-id="${id}" ${ui.tab===id?'aria-current="page"':''}><svg class="svg" viewBox="0 0 24 24" aria-hidden="true">${tabIcons[id]}</svg>${label}</button>`).join('')}</nav>
     ${button('← Progress','progress','','textbtn')}</div>`;
@@ -27,7 +31,7 @@ function activity(ui) {
 export { activity };
 export function air(ui) {
   const rig=equipment(ui.s.equipped[1]?.id);
-  return `<div class="radio-layout"><section class="instrument" data-rig="${rig?.level ?? 'none'}" aria-label="CW transceiver">
+  return `<div class="radio-layout"><div class="radio-console"><section class="instrument" data-rig="${rig?.level ?? 'none'}" aria-label="CW transceiver">
     <div class="facehead"><span class="label">∿ &nbsp; ${rig?.name || 'Radio slot empty'}</span><span class="tiny">1 kHz / step</span></div>
     <div class="face"><div class="lcd"><div class="lcd-top"><span class="lcd-state" data-face="mode">RX</span><span data-face="pace"></span></div>
     <div class="freqline"><strong class="frequency" data-face="frequency"></strong><span class="mhz">MHz</span></div>
@@ -36,8 +40,11 @@ export function air(ui) {
     <div class="tuneops">${button('−','step','data-step="-1" aria-label="Tune down 1 kHz"','mini')}${button('+','step','data-step="1" aria-label="Tune up 1 kHz"','mini')}</div></div></div>
     <div class="scale"><input type="range" data-dial aria-label="Tune frequency in kilohertz" min="7020" max="7050" step="1" value="${ui.f}">
     <div class="scale-labels">${[7020,7025,7030,7035,7040,7045,7050].map(f=>`<span>${frequency(f)}</span>`).join('')}</div></div>
-    <div class="transmit">${button('Listen','monitor','','btn')}${button('Input settings','settings','aria-haspopup="dialog"','textbtn')}${button('On-air check','open-check','aria-haspopup="dialog" hidden','textbtn')}</div>
-    <div data-paddle-slot></div><p class="radio-note" data-face="note" role="status"></p></section>
+    <div class="pitch-control"><div class="knob pitch-knob" role="slider" tabindex="0" aria-label="Receive and send tone" aria-valuemin="200" aria-valuemax="2000"></div>
+    <div><span class="label">CW pitch</span><output data-face="pitch"></output></div>
+    <div class="tuneops">${button('−','pitch-step','data-step="-50" aria-label="Lower CW pitch by 50 Hz"','mini')}${button('+','pitch-step','data-step="50" aria-label="Raise CW pitch by 50 Hz"','mini')}</div></div>
+    <div class="transmit">${button('Listen','monitor','','btn')}${button('Input settings','settings','aria-haspopup="dialog"','textbtn')}${button('Radio hiss','hiss',`aria-pressed="${ui.hiss === true}"`,'hiss-toggle')}${button('On-air check','open-check','aria-haspopup="dialog" hidden','textbtn')}</div>
+    <p class="radio-note" data-face="note" role="status"></p></section>${paddleControls}</div>
     <aside class="card band"><div class="head"><h2>Band activity</h2><small class="tiny">Operators</small></div><div data-band>${activity(ui)}</div></aside></div>
     <div class="secondary-grid"><section class="card beacon-card"><span class="label">Beacon hunt</span><h2>Find Reykjavík</h2>
     <p class="panel-copy">Tune between 7.040–7.049 MHz. Copy RVK’s three-digit code to earn its QSL.</p>${button('Open hunt','hunt','','textbtn')}</section>
@@ -94,7 +101,7 @@ export function logbook(ui) {
       return `<article class="card"><div class="ticket ticket-full ${c.beacon?'':'remote'}"><span class="ticket-header">${c.beacon?'BEACON QSL':'TWO-WAY CW'}</span><b>${esc(c.from)}</b><span class="ticket-foot">${frequency(c.f)} MHz · ${c.beacon?'Reykjavík':'To '+esc(ui.call)}</span></div>
         <div class="ticket-body"><p class="tiny">${stamp.slice(0,10)} · ${stamp.slice(11,16)} UTC</p><div class="actions">
         ${button('Play card','play',`data-id="${id}" ${c.audio?'':'disabled'}`,'mini')}${c.beacon?'':c.mine?button('Play my signature','mine',`data-id="${id}"`,'mini'):button('Sign return QSL','sign',`data-id="${id}"`,'mini')}</div></div></article>`;
-    }).join('')}</div>` : `<section class="empty"><strong>Your wall is ready for its first card.</strong><p class="panel-copy">Make a two-way contact or copy the Reykjavík beacon.</p>${button('Tune Slow CW','tune','data-f="7025"')}</section>`}`;
+    }).join('')}</div>` : `<section class="empty"><strong>Your wall is ready for its first card.</strong><p class="panel-copy">Make a two-way contact or copy the Reykjavík beacon.</p>${button('Tune Slow CW','tune',`data-f="${SLOW_CW_CALLING_KHZ}"`)}</section>`}`;
 }
 export function checkPanel(ui) {
   const done=coverage(ui.p), missing=ui.missing(), next=ui.challenge;
@@ -102,7 +109,7 @@ export function checkPanel(ui) {
     <p class="panel-copy">Finish the remaining letters and numbers in practice, or demonstrate them here to transmit on this frequency.</p>
     <div class="coverage">${['copied','sent'].map(k=>`<label>${k==='copied'?'Copied':'Sent'} · ${done[k].length} / ${alphabet.length}<progress max="36" value="${done[k].length}"></progress></label>`).join('')}</div>
     ${next ? next.dir==='copied' ? `<form data-check><label>What did you hear? <input name="copy" maxlength="1" autocomplete="off"></label>${button('Hear again','prompt','','mini')}<button class="btn" type="submit">Check</button></form>` :
-      `<p>Send <strong class="challenge-char">${next.ch}</strong> with your practice key.</p><div data-paddle-slot></div>` : ''}
+      `<p>Send <strong class="challenge-char">${next.ch}</strong> with your practice key.</p>${paddleControls}` : ''}
     <div class="actions">${next ? button('Pause check','cancel-check','','textbtn') : missing.length ? button('Take on-air check','check','','quiet') : '<strong>Qualified for all station tiers</strong>'}
     ${button('Practise listening','listen-tab','','textbtn')}${button('Practise sending','send-tab','','textbtn')}</div></section>`;
 }

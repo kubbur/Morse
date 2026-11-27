@@ -1,9 +1,11 @@
-import { sanitizeShack, items, equipment, cost, equip, purchase, sellBadge, assembled, installed, receiving, minimumStation, qualified, canTransmit, alphabet, coverage, frequency, validFrequency, validRhythm, rooms, hunt, SHACK_UNLOCK_XP } from './shack-model.mjs';
+import { sanitizeShack, items, equipment, cost, equip, purchase, sellBadge, assembled, installed, receiving, minimumStation, qualified, canTransmit, alphabet, coverage, frequency, validFrequency, validRhythm, rooms, hunt, SHACK_UNLOCK_XP, SLOW_CW_CALLING_KHZ, isSlowCW } from './shack-model.mjs';
 import { timeline } from './morse.mjs';
 import { decodeSending } from './sending.mjs';
 import { BandRadio, Receiver } from './shack-radio.mjs';
 import { drawGear } from './shack-gear.mjs';
-import { heading, air, bench, shop, logbook, checkPanel, activity, button, tabs, esc } from './shack-views.mjs';
+import { heading, air, bench, shop, logbook, checkPanel, activity, button, tabs, esc, paddleControls } from './shack-views.mjs';
+
+const hissPreference = 'morse.shack.hiss';
 
 function rhythm(text,settings) {
   const {tones}=timeline(text,settings);
@@ -18,7 +20,9 @@ function captured(edges) {
 export class ShackUI {
   constructor(options) {
     Object.assign(this,options);
-    this.tab='air'; this.slot=0; this.f=7025; this.edges=[]; this.monitor=false;
+    this.tab='air'; this.slot=0; this.f=SLOW_CW_CALLING_KHZ; this.edges=[]; this.monitor=false;
+    this.hiss=false;
+    try { this.hiss=localStorage.getItem(hissPreference)==='1'; } catch { /* Device storage is optional. */ }
     this.root.tabIndex=-1;
     this.receiver=new Receiver(()=>this.sender.settings);
     this.band=new BandRadio(this.exchange,()=>this.updateReceiver(),event=>this.receive(event));
@@ -40,7 +44,7 @@ export class ShackUI {
     this.root.addEventListener('input',e=>{if(e.target.matches('[data-dial]')) this.tune(Number(e.target.value));});
     this.bindDrag();
     this.bindKnob();
-    document.addEventListener('visibilitychange',()=>{if (document.hidden) this.receiver.stop();});
+    document.addEventListener('visibilitychange',()=>{if (document.hidden) this.receiver.stop(); else this.updateReceiver();});
     window.addEventListener('pagehide',()=>this.leave());
     window.addEventListener('pageshow',()=>{if (!this.root.closest('[hidden]')) this.render();});
   }
@@ -54,7 +58,7 @@ export class ShackUI {
   }
   get capturing() { return this.start!=null || !!this.edges.length; }
   get transmit() { return assembled(this.s) && canTransmit(this.f,installed(this.s),qualified(this.p)); }
-  get needsCheck() { return this.f!==7025 && assembled(this.s) && installed(this.s)>=minimumStation(this.f) && !qualified(this.p); }
+  get needsCheck() { return !isSlowCW(this.f) && assembled(this.s) && installed(this.s)>=minimumStation(this.f) && !qualified(this.p); }
   connectBand() {
     if (!receiving(this.s)) { this.monitor=false; this.receiver.audio.setListening(false); this.receiver.stop(); this.band.close(); return; }
     const equipped=this.s.equipped.map(slot=>slot?.id || null);
@@ -64,7 +68,7 @@ export class ShackUI {
   openCheck() {
     if (!this.needsCheck || this.checkDialog.open) return;
     this.sender.setKeyTarget(null); this.receiver.stop(); clearTimeout(this.beaconTimer);
-    this.checkDialog.querySelector('[data-check-content]').innerHTML=checkPanel(this);
+    this.fillPanel(this.checkDialog.querySelector('[data-check-content]'),checkPanel(this));
     this.checkDialog.querySelector('[data-check-status]').textContent='';
     this.checkDialog.showModal(); this.updateReceiver();
   }
@@ -85,7 +89,6 @@ export class ShackUI {
   }
   leave() {
     this.active=false; if(this.checkDialog.open) this.checkDialog.close(); this.sender.setKeyTarget(null); this.clearCapture(); this.band.close();
-    this.sender.placePaddles();
     this.receiver.stop(); this.receiver.audio.release(); clearTimeout(this.beaconTimer);
     this.monitor=false; this.challenge=null; this.signing=null; this.hunting=false; this.note='';
   }
@@ -95,9 +98,14 @@ export class ShackUI {
     this.challenge=null; this.signing=null; this.hunting=false; this.note='';
     this.tab=tab; this.render(); this.focus();
   }
+  fillPanel(panel, markup) {
+    this.sender.releasePaddlesIn(panel);
+    panel.innerHTML=markup;
+    for (const key of panel.querySelectorAll('[data-shack-paddle]')) this.sender.bindPaddle(key,key.dataset.shackPaddle);
+  }
   render() {
-    if (this.owner && this.owner!==this.p.id) {this.leave();this.f=7025;this.tab='air';}
-    this.sender.placePaddles();
+    if (this.owner && this.owner!==this.p.id) {this.leave();this.f=SLOW_CW_CALLING_KHZ;this.tab='air';}
+    this.pitchPreview=null;
     this.owner=this.p.id; this.active=true;
     this.award();
     const screen=this.tab==='air'?air(this):this.tab==='bench'?bench(this):this.tab==='shop'?shop(this):logbook(this);
@@ -110,14 +118,14 @@ export class ShackUI {
           ${won?'':`<form data-hunt><label>Beacon code <input name="pin" inputmode="numeric" maxlength="3" pattern="[0-9]{3}" required autocomplete="off"></label><button type="submit" class="btn">Check code</button></form>`}</section>`;
       }
       if (this.checkDialog.open) {
-        if (this.needsCheck) this.checkDialog.querySelector('[data-check-content]').innerHTML=checkPanel(this);
+        if (this.needsCheck) this.fillPanel(this.checkDialog.querySelector('[data-check-content]'),checkPanel(this));
         else {this.challenge=null; this.checkDialog.close();}
       }
     } else if (this.tab==='log' && this.signing) {
-      detail=`<section class="card check"><h2>Sign your return QSL</h2><p class="panel-copy">Key <strong>${esc(this.call)}</strong> with your practice input.</p><div data-paddle-slot></div>
+      detail=`<section class="card check"><h2>Sign your return QSL</h2><p class="panel-copy">Key <strong>${esc(this.call)}</strong> with your practice input.</p>${paddleControls}
         <div class="actions">${button('Save signature','save-sign')}${button('Start over','clear-sign','','textbtn')}${button('Cancel','cancel-sign','','textbtn')}</div></section>`;
     }
-    this.root.innerHTML=heading(this)+screen+detail+'<p class="shack-status" data-status role="status"></p>';
+    this.fillPanel(this.root,heading(this)+screen+detail+'<p class="shack-status" data-status role="status"></p>');
     this.root.querySelector('[data-status]').textContent=this.note || '';
     for(const canvas of this.root.querySelectorAll('canvas[data-portrait]')) drawGear(canvas);
     if (this.tab==='air' || this.band.key || !receiving(this.s)) this.connectBand();
@@ -127,24 +135,31 @@ export class ShackUI {
   updateReceiver() {
     if (!this.active) return;
     let mode='';
+    const modal=document.querySelector('dialog[open]');
     if (this.checkDialog.open) mode=this.challenge?.dir==='sent' ? 'check' : '';
-    else if (!document.querySelector('dialog[open]')) {
+    else if (!modal) {
       if (this.signing) mode='signature';
       else if (this.tab==='air' && !this.hunting) mode=this.transmit ? 'air' : this.needsCheck ? 'locked' : '';
     }
     this.sender.setKeyTarget(this.sinks[mode] || null);
-    const host=(this.checkDialog.open ? this.checkDialog : this.root).querySelector('[data-paddle-slot]');
-    this.sender.placePaddles(host,!host || !!mode);
+    const {source:input,keyboardPaddles}=this.sender;
+    const showPaddles=input==='keyboard' && keyboardPaddles.showButtons;
+    const paddles=(this.checkDialog.open ? this.checkDialog : this.root).querySelector('.shack-paddles');
+    if (paddles) {
+      paddles.hidden=!showPaddles;
+      for (const key of paddles.children) key.disabled=!mode;
+    }
+    const built=receiving(this.s);
+    this.receiver.setHiss(this.hiss && this.monitor && built && this.tab==='air' && !document.hidden && !modal);
     if (this.tab!=='air') return;
     const q=s=>this.root.querySelector(s), face=n=>q('[data-face="'+n+'"]');
     if (!face('frequency')) return;
     face('frequency').textContent=frequency(this.f);
-    const built=receiving(this.s), h=hunt(), beacon=this.f===h.f;
-    const {source:input,keyboardPaddles}=this.sender;
+    const h=hunt(), beacon=this.f===h.f;
     const source={straight:'straight key (Space)',keyboard:'keyboard paddles ('+keyboardPaddles.dit+' / '+keyboardPaddles.dah+')',paddle:'paddle adapter',vband:'VBand adapter'}[input] || 'practice key';
     const needsConnection=(input==='paddle' || input==='vband' && this.sender.native) && !this.sender.connection.connected;
     face('mode').textContent=!built?'OFF':this.start!=null && mode==='air'?'TX':'RX';
-    face('pace').textContent=this.f===7025?'8–12 WPM welcome':beacon?'Beacon signal':'Virtual 40 m';
+    face('pace').textContent=isSlowCW(this.f)?'8–12 WPM welcome':beacon?'Beacon signal':'Virtual 40 m';
     face('room').textContent=rooms.get(this.f) || (beacon?'RVK beacon':'Open frequency');
     const reason=!built ? 'Equip a radio and an antenna in the Workbench to listen.' :
       !this.s.equipped[0]?.id ? 'Receive only · equip a Morse key to send.' :
@@ -152,16 +167,18 @@ export class ShackUI {
       this.needsCheck ? 'Receive only · complete the on-air check to transmit here.' :
       needsConnection ? 'Connect your '+source+' in Input settings.' :
       this.band.state==='offline' ? 'Local sidetone · live rooms offline.' :
-      this.band.state==='connecting' ? 'Connecting to the frequency…' : 'Ready to send with your '+source+'.';
+      this.band.state==='connecting' ? 'Connecting to the frequency…' : showPaddles ? 'Use Dot and Dash below, or your '+source+'.' : 'Ready to send with your '+source+'.';
     q('[data-act="open-check"]').hidden=!this.needsCheck;
     face('note').textContent=reason;
     const dial=q('[data-dial]'), knob=q('.knob'); dial.value=this.f;
     knob.style.setProperty('--rotation',(-135+(this.f-7020)*9)+'deg');
     knob.setAttribute('aria-valuenow',String(this.f));knob.setAttribute('aria-valuetext',frequency(this.f)+' MHz');
+    this.showPitch(this.pitchPreview ?? this.sender.settings.tone);
     let i=0;const bars=built && (beacon || (this.band.activity[this.f] || 0)>1) ? 8 : 0;
     for(const bar of q('.meter').children){bar.style.height=(4+i)+'px';bar.classList.toggle('off',i++>=bars);}
     const monitor=q('[data-act="monitor"]');monitor.textContent=built ? this.monitor?'Stop listening':'Listen' : Object.keys(this.s.orders).length?'Equip your station':'Get starter equipment';
     monitor.setAttribute('aria-pressed',String(this.monitor));
+    q('[data-act="hiss"]').setAttribute('aria-pressed',String(this.hiss));
     const list=q('[data-band]'), html=activity(this);
     if (html!==this.bandHTML || list!==this.bandNode) {this.bandHTML=html;this.bandNode=list;list.innerHTML=html;}
   }
@@ -171,6 +188,25 @@ export class ShackUI {
     this.f=f;this.note='';
     this.connectBand();
     this.updateReceiver();this.scheduleBeacon();
+  }
+  showPitch(tone) {
+    const knob=this.root.querySelector('.pitch-knob');
+    if (!knob) return;
+    knob.style.setProperty('--rotation',(-135+(tone-200)*270/1800)+'deg');
+    knob.setAttribute('aria-valuenow',String(tone));
+    knob.setAttribute('aria-valuetext',tone+' Hz');
+    this.root.querySelector('[data-face="pitch"]').textContent=tone+' Hz';
+    this.root.querySelector('[data-act="pitch-step"][data-step="-50"]').disabled=tone<=200;
+    this.root.querySelector('[data-act="pitch-step"][data-step="50"]').disabled=tone>=2000;
+  }
+  setPitch(tone) {
+    const next=Math.max(200,Math.min(2000,50*Math.round(tone/50)));
+    this.pitchPreview=null;
+    this.showPitch(next);
+    if (next===this.p.settings.tone) return;
+    this.p.settings.tone=next;
+    if (this.sender.native) this.sender.connection.configure(this.sender.settings);
+    this.persist();
   }
   scheduleBeacon() {
     clearTimeout(this.beaconTimer);
@@ -284,6 +320,12 @@ export class ShackUI {
       return;
     }
     if (act==='open-check') {this.openCheck();return;}
+    if (act==='pitch-step') {this.setPitch(this.sender.settings.tone+Number(el.dataset.step));return;}
+    if (act==='hiss') {
+      this.hiss=!this.hiss;
+      try { localStorage.setItem(hissPreference,this.hiss?'1':'0'); } catch { /* Keep the choice for this session. */ }
+      this.updateReceiver();return;
+    }
     if (['progress','listen-tab','send-tab'].includes(act)) {
       if (this.checkDialog.open) this.checkDialog.close();
       this.go({progress:'journey','listen-tab':'practice','send-tab':'send'}[act]);return;
@@ -388,15 +430,33 @@ export class ShackUI {
   bindKnob() {
     let drag=null;
     this.root.addEventListener('pointerdown',e=>{
-      if(!e.target.matches('.knob'))return;
-      drag={x:e.clientX,f:this.f};e.target.setPointerCapture(e.pointerId);
+      const knob=e.target;
+      if (!knob.matches('.knob') || e.button!==0 || (drag?.knob.isConnected && drag.knob.hasPointerCapture(drag.id))) return;
+      const pitch=knob.matches('.pitch-knob');
+      drag={knob,id:e.pointerId,x:e.clientX,pitch,start:pitch ? this.sender.settings.tone : this.f};
+      knob.setPointerCapture(e.pointerId);
     });
-    this.root.addEventListener('pointermove',e=>{if(drag && e.target.matches('.knob'))this.tune(Math.min(7050,Math.max(7020,drag.f+Math.round((e.clientX-drag.x)/6))));});
-    for(const evt of ['pointerup','pointercancel','lostpointercapture']) this.root.addEventListener(evt,()=>{drag=null;});
+    this.root.addEventListener('pointermove',e=>{
+      if (!drag || e.pointerId!==drag.id || e.target!==drag.knob) return;
+      const steps=Math.round((e.clientX-drag.x)/6);
+      if (drag.pitch) {
+        this.pitchPreview=Math.max(200,Math.min(2000,drag.start+50*steps));
+        this.showPitch(this.pitchPreview);
+      } else this.tune(Math.min(7050,Math.max(7020,drag.start+steps)));
+    });
+    for (const type of ['pointerup','pointercancel','lostpointercapture']) this.root.addEventListener(type,e=>{
+      if (!drag || e.pointerId!==drag.id || e.target!==drag.knob) return;
+      const pitch=drag.pitch; drag=null;
+      if (pitch) this.setPitch(type==='pointerup' ? this.pitchPreview ?? this.sender.settings.tone : this.sender.settings.tone);
+    });
     this.root.addEventListener('keydown',e=>{
       if(!e.target.matches('.knob'))return;
-      const f={ArrowLeft:this.f-1,ArrowDown:this.f-1,ArrowRight:this.f+1,ArrowUp:this.f+1,Home:7020,End:7050}[e.key];
-      if(f!=null){e.preventDefault();this.tune(f);}
+      const pitch=e.target.matches('.pitch-knob'), value=pitch?this.sender.settings.tone:this.f, step=pitch?50:1;
+      const next={ArrowLeft:value-step,ArrowDown:value-step,ArrowRight:value+step,ArrowUp:value+step,
+        Home:Number(e.target.getAttribute('aria-valuemin')),End:Number(e.target.getAttribute('aria-valuemax'))}[e.key];
+      if (next==null) return;
+      e.preventDefault();
+      if (pitch) this.setPitch(next); else this.tune(next);
     });
   }
 }
