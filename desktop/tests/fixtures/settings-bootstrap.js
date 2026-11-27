@@ -10,13 +10,28 @@ if (!navigator.locks) Object.defineProperty(navigator,'locks',{value:{request:as
 localStorage.setItem('morse.progress.v1',JSON.stringify(config.state));
 let raw = null, revision = 0, serverProfile, lastSound, paddleMuted;
 const callbacks = [], commands = [], requests = [];
+window.testBandEvents=[];
+window.testBandMembers=new Set();
+window.testTransmissions=[];
+let roomNumber=0;
 const hardware = { type:'status', source:'off', phase:'waiting', output:'auto', outputs:[], outputReady:false, session:1, epoch:1,
   wpm:33, spacing:20, pitch:725, volume:38, rise:3, fall:9, curve:2, hasTone:true, hasVolume:true, sharedSound:false };
 function snapshot() { return { connected:true, profile:serverProfile, seq:0, revision:1, epoch:'fixture-epoch', devices:[] }; }
 const listing = { visible:null, revision:0, xp:30 };
 function exchange(action,body) {
   requests.push(action);
-  if (action==='capabilities') return {status:200, privateSync:config.mode==='mac-staging', scores:config.mode==='mac-staging', leaderboard:config.mode!=='mac-local'};
+  if (action==='shack/open' || action==='shack/poll') {
+    if (window.testBandOnline===false) return {status:503,error:'Test relay offline'};
+    const token=action==='shack/open'?'room-'+(++roomNumber):body.token;
+    if (action==='shack/open') testBandMembers.add(token);
+    return {token,live:false,cursor:0,activity:{[body.f]:1},events:action==='shack/poll'?testBandEvents.splice(0):[]};
+  }
+  if (action==='shack/leave') {testBandMembers.delete(body.token);return {};}
+  if (action==='shack/send') {testTransmissions.push(body);return {ack:body.seq};}
+  if (action==='capabilities') {
+    const v2 = ['mac-staging','mac-dev'].includes(config.mode);
+    return {status:200, privateSync:v2, scores:v2, leaderboard:config.mode!=='mac-local'};
+  }
   if (config.listing && action.startsWith('scores/')) {
     if (action==='scores/leaderboard') return {entries:listing.visible===false ? [] : [{rank:1,callsign:'TEST1',xp:listing.xp,streak:1}],me:null};
     if (action==='scores/session') return {ready:true};
@@ -29,6 +44,7 @@ function exchange(action,body) {
       return {...listing};
     }
     if (action==='scores/total') return {...listing,acknowledged:body.results.map(r=>r.id)};
+    if (action==='scores/achievements') return {achievements:body.achievements};
   }
   if (action==='scores/leaderboard') return {entries:[{rank:1,callsign:'TEST1',xp:30,streak:1}],me:null};
   if (action==='private/adopt') return {status:403,error:'No earlier browser credential.'};
@@ -42,18 +58,23 @@ function exchange(action,body) {
 }
 if (config.mode.startsWith('mac')) {
   const update = {version:'1.1.0-dev.5',installedNotes:'Local release notes',enabled:true,
-    automatic:false,automaticSupported:true,available:'',notes:'',installable:false,ready:false,phase:'idle',message:''};
+    channel:'stable',automatic:false,automaticSupported:true,available:'',notes:'',installable:false,ready:false,phase:'idle',message:''};
   let updateChanged;
   window.morseMac = {
-    syncMode: config.mode==='mac-staging' ? 'staging' : config.mode==='mac-website' ? 'website' : 'offline', onUpdate(fn){updateChanged=fn;},
+    buildChannel: config.mode==='mac-dev' ? 'dev' : 'stable',
+    syncMode: config.mode==='mac-staging' ? 'staging' : ['mac-website','mac-dev'].includes(config.mode) ? 'website' : 'offline', onUpdate(fn){updateChanged=fn;},
     async update(action,value){
       if (action==='check') Object.assign(update,{available:'2.0.0',phase:'checked',installable:true,notes:'New timing display\n<em>Release text</em>'});
       if (action==='automatic') update.automatic=value;
+      if (action==='channel') Object.assign(update,{channel:value,available:value==='dev'?'2.0.1-dev.10':'',phase:'checked',installable:value==='dev'});
       if (action==='install') window.testInstallRequested=true;
       if (action!=='state') updateChanged({...update});
       return {...update};
     },
     onPaddle(fn){ callbacks.push(fn); },
+    onShackKeys(fn){ window.testShackContact=fn; },
+    setShackRadio(state){ window.testShackRadio=state; },
+    async requestShackKeys(){return window.testKeyPermission || {};},
     loadSave(old){ raw ??= old; return {raw,revision}; },
     save(next,at){ if(at!==revision) throw Error('Unexpected test save revision'); raw=next;return {revision:++revision}; },
     async exchange(action,{body}={}){ return exchange(action,body); },

@@ -1,7 +1,18 @@
+import { join } from 'node:path';
+import { devOrigin } from '../website/public/js/service-origin.mjs';
+
 export const APP_PORT = 37473;
 export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
-export const WEBSITE = 'https://morse.kubbur.digital/';
+export const PADDLE_GUIDE_URL = 'https://github.com/kubbur/Morse/tree/main/docs/assembly';
 
+export function channelForBuild(version, packaged) {
+  return !packaged || version.includes('-dev.') ? 'dev' : 'stable';
+}
+
+// Older Dev releases used Stable. An origin-specific directory also isolates the renderer's saved data and pending uploads on rollback.
+export function websiteProfileDirectory(directory, mode, channel) {
+  return mode === 'website' && channel === 'dev' ? join(directory, new URL(devOrigin).hostname) : directory;
+}
 
 export function appDocument(value) {
   try {
@@ -27,9 +38,11 @@ export function allowedPermission(permission, requestingOrigin, documentUrl) {
   return ['screen-wake-lock', 'persistent-storage'].includes(permission);
 }
 
-export function progressExport(value) {
+export function progressExport(value, filename) {
   try {
     const url = new URL(value);
-    return url.protocol === 'blob:' && url.origin === APP_ORIGIN;
+    return url.protocol === 'blob:' && url.origin === APP_ORIGIN &&
+      (/^morse-progress-[\d-]+\.json$/.test(filename) ||
+       /^Morse(?:-Dev)?-recovery-(?:[A-Z0-9-]{2,16}|no-callsign)-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ\.txt$/.test(filename));
   } catch { return false; }
 }

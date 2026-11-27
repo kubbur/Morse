@@ -7,7 +7,7 @@ const hash = value => createHash('sha256').update(value).digest('base64');
 export function practiceWorker(files) {
   const entries = [...files].filter(([path]) =>
     !path.includes('move-progress') &&
-    (path.startsWith('/js/') || ['/index.html','/app.css','/fonts.css','/favicon.svg'].includes(path) || /\.(?:woff2|wav|png)$/.test(path))
+    (path.startsWith('/js/') || ['/index.html','/app.css','/shack.css','/fonts.css','/favicon.svg'].includes(path) || /\.(?:woff2|wav|png)$/.test(path))
   ).sort(([a],[b])=>a.localeCompare(b));
   const manifest = entries.map(([path,file])=>[path,'sha256-'+hash(file.content)]);
   const version = createHash('sha256').update(JSON.stringify(manifest)).digest('hex').slice(0,24);

@@ -303,6 +303,10 @@ body[data-active-view=practice] main{padding-top:24px}
 .reset-progress-button{display:flex}.reset-progress-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.reset-progress-actions .danger-button{margin-top:0}
 
 .progress-menu-button{width:auto;gap:7px;font-size:12px;padding:6px 8px}@media(max-width:760px){.progress-menu-button{width:38px;padding:6px}.progress-menu-label{display:none}}
+.progress-menu-button[data-sync=synced]{--sync-light:var(--accent-text)}
+.progress-menu-button[data-sync=pending]{--sync-light:var(--bad)}
+.progress-menu-button[data-sync]{color:var(--sync-light)}
+.progress-menu-button[data-sync] .icon{filter:drop-shadow(0 0 4px var(--sync-light))}
 .answer-label .copy-pace{position:relative;border:0;letter-spacing:0}.copy-pace::after{content:'';position:absolute;inset:-7px -2px}.copy-pace:hover{box-shadow:0 0 0 1px var(--muted)}.copy-pace:focus-visible{outline-offset:3px}
 .timing-mode-control{display:grid;gap:6px;margin-top:14px}.timing-mode-control label{font-size:12px;color:var(--muted)}.timing-mode-control select{width:100%;font-size:13px;min-height:38px}.timing-mode-control small{font-size:11px;line-height:1.5;color:var(--muted)}
 
@@ -492,6 +496,8 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 /* Sending has its own input surface; no text field or software keyboard is
    needed while practising with a paddle. */
 .sender{padding:30px;max-width:1060px;margin-inline:auto;overflow:hidden}
+.paddle-guide{display:flex;align-items:center;gap:.5rem;width:fit-content;min-height:44px;margin:0 auto 12px;padding:0 .9rem;border:1px solid var(--border);border-radius:8px;color:var(--accent-text);font-weight:600;text-decoration:none}
+.paddle-guide:is(:hover,:focus-visible){border-color:var(--accent-text);text-decoration:underline}
 .send-heading{display:flex;align-items:center;justify-content:space-between;gap:20px}
 .send-heading h2{font-size:clamp(22px,3vw,32px);margin:8px 0}
 .send-heading .signal-level{margin:0;font-size:14px}
@@ -610,6 +616,7 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 .send-key-controls .straight-key{width:100%}
 #send-paddles{display:flex;gap:12px}
 #send-paddles .button{flex:1}
+#send-paddles .button[data-held]{box-shadow:inset 0 0 0 3px currentColor}
 .send-feedback{min-height:42px;line-height:1.4;font-size:14px;margin:14px 0 0}
 .send-metrics{display:flex;gap:18px;font:13px/1.5 var(--mono);color:var(--muted);min-height:20px;margin-bottom:6px}
 .send-metrics[hidden]{display:flex!important;visibility:hidden}
@@ -672,7 +679,7 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 .quick-sound summary{cursor:pointer;font-weight:700}
 .quick-sound-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 28px;margin:18px 0 8px}
 .quick-sound .lab-control{margin:0}
-.quick-sound .lab-control>.range-limits{display:flex;justify-content:space-between;margin:0;color:var(--muted);font:11px var(--mono)}
+.lab-control>.range-limits{display:flex;justify-content:space-between;margin:0;color:var(--muted);font:11px var(--mono)}
 .quick-sound output{white-space:nowrap;font-variant-numeric:tabular-nums}
 .input-settings .field{margin:12px 0;min-width:0}
 .input-settings .field select{width:100%}
@@ -680,12 +687,18 @@ body.practice-keyboard .reward-detail{font-size:9px;max-width:220px}
 #paddle-bindings{display:flex;flex-wrap:wrap;align-items:end;gap:10px}
 #paddle-bindings label{display:grid;gap:4px}
 #paddle-bindings input{width:5em;min-height:44px;text-align:center;font-family:var(--mono);color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:8px}
+.paddle-save{display:inline-grid;place-items:center}
+.paddle-save>*{grid-area:1/1}
+#paddle-keys-saved{pointer-events:none;color:var(--accent-text);font-size:13px;font-weight:600}
+.paddle-save:has(#paddle-keys-saved:not(:empty)) button span{opacity:0}
 #keyboard-paddle-options .morse-toggle{margin-left:0;font-size:13px}
 #paddle-key-message:empty{display:none}
 #sound-choices,#earlier-exports{display:grid;gap:7px}
 #sound-choices button,#earlier-exports button{text-align:left;white-space:normal}
 .recovery-settings{margin:16px 0}
 .recovery-settings h4{margin:0}
+.recovery-settings.is-prompt{border-left:3px solid var(--accent-text);padding-left:14px}
+#download-recovery{justify-self:start}
 #recovery-issued{display:grid;gap:4px;margin-top:10px}
 #recovery-output{user-select:all;overflow-wrap:anywhere;font-family:var(--mono)}
 @media(max-width:620px){.quick-sound-grid{grid-template-columns:minmax(0,1fr)}}

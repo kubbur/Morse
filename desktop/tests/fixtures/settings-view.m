@@ -26,7 +26,7 @@ static NSString *directory, *origin;
 @end
 
 int main(int argc,const char **argv) { @autoreleasepool {
-    if (argc!=4) return 2;
+    if (argc!=4 && argc!=5) return 2;
     directory=[@(argv[1]) stringByStandardizingPath];
     origin=[NSUUID.UUID.UUIDString.lowercaseString stringByAppendingString:@".invalid"];
     [NSURLProtocol registerClass:FixtureProtocol.class];
@@ -36,7 +36,8 @@ int main(int argc,const char **argv) { @autoreleasepool {
     if (!html || !bootstrap || !scenario) return 2;
     html=[html stringByReplacingOccurrencesOfString:@"<head>" withString:
         [NSString stringWithFormat:@"<head><script>%@</script>",bootstrap]];
-    WebView *web=[[WebView alloc] initWithFrame:NSMakeRect(0,0,[bootstrap containsString:@"\"mode\":\"mac-website\""] ? 440 : 1080,820) frameName:nil groupName:origin];
+    CGFloat width=argc==5 ? [@(argv[4]) doubleValue] : [bootstrap containsString:@"\"mode\":\"mac-website\""] ? 440 : 1080;
+    WebView *web=[[WebView alloc] initWithFrame:NSMakeRect(0,0,width,820) frameName:nil groupName:origin];
     WebPreferences *prefs=[[WebPreferences alloc] initWithIdentifier:origin];
     prefs.autosaves=NO; prefs.privateBrowsingEnabled=YES; web.preferences=prefs;
     [web setMaintainsBackForwardList:NO];

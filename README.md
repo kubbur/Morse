@@ -8,7 +8,7 @@ Morse code listening and sending practice for Mac and the web.
 
 | File | Download |
 | --- | --- |
-| **Morse for Mac 1.1.5** | [Apple Silicon](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-mac-x64.zip) |
+| **Morse for Mac 1.1.6** | [Apple Silicon](https://github.com/kubbur/Morse/releases/download/morse-v1.1.6/Morse-1.1.6-mac-arm64.zip) · [Intel](https://github.com/kubbur/Morse/releases/download/morse-v1.1.6/Morse-1.1.6-mac-x64.zip) |
 | **Paddle and converter assembly guide** | [PDF with BOM and wiring diagrams](https://github.com/kubbur/Morse/releases/download/morse-v1.0.0/DIY-Morse-Paddle-and-Mac-Converter-Guide.pdf) |
 
 Requires macOS 13 or later. Unzip the download and move **Morse.app** to **Applications**. These builds are signed ad hoc. If macOS asks for approval, follow [Apple’s instructions](https://support.apple.com/en-us/102445).
@@ -34,4 +34,4 @@ The separate Morse Paddle companion is still available for the browser trainer. 
 
 - [`desktop/`](desktop/) — trainer source, tests and Mac packaging. [Build instructions](desktop/README.md).
 - [`Source/`](Source/) — native paddle engine and standalone companion. [Companion build instructions](Source/README.md).
-- [Trainer source ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-source.zip) · [Website update ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-web.zip).
+- [Trainer source ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.6/Morse-1.1.6-source.zip) · [Website update ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.6/Morse-1.1.6-web.zip).

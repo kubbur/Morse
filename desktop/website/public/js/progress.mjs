@@ -20,6 +20,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 export const QUICK_LETTER_XP = 2;
 export const COURSE_FOCUS_COPIES = 5;
+import { sanitizeShack } from './shack-model.mjs';
+
 export function sanitizeCallsign(value) {
   const text = typeof value === 'string' ? value.trim().toUpperCase() : '';
   return /^[A-Z0-9][A-Z0-9/]{1,15}$/.test(text) ? text : '';
@@ -66,6 +68,7 @@ export function sanitizeSettings(input = {}) {
     settings.courseCount = stage.letterCount;
     settings.level = stage.maxLength;
   }
+  if (Number.isFinite(source.sendWpm)) settings.sendWpm = integer(source.sendWpm, 5, 80, settings.wpm);
   return settings;
 }
 
@@ -167,6 +170,7 @@ function sanitizeRound(input, settings, endless, focus, listening) {
     lastGuess: typeof input.lastGuess === 'string' ? safeText(input.lastGuess, 100) : null,
     plays: integer(input.plays, 0, 10000, 0), attempts, sessionAttempts: integer(input.sessionAttempts, 0, attempts, 0),
     heard: input.heard === true, assisted: introduction || !!recovery || input.assisted === true, introduction, recovery,
+    ...(Number.isInteger(input.heardWpm) ? {heardWpm:integer(input.heardWpm,5,80,settings.wpm)} : {}),
     completed: input.completed === true, solved: input.solved === true,
     awarded: integer(input.awarded, 0, 220, 0),
     clean: input.clean === true, hintOpen: input.hintOpen === true,
@@ -180,15 +184,15 @@ function sanitizeRound(input, settings, endless, focus, listening) {
   };
 }
 
-// Profile settings drive playback, grading and the native keyer. Keep the
-// sending export fields aligned for older readers of the version 1 file.
+// Older profiles used one speed. Preserve it until the learner chooses separate speeds.
 export function mirrorSendingSpeed(profile) {
-  profile.sending.settings.wpm = profile.settings.wpm;
+  profile.sending.settings.wpm = profile.settings.sendWpm ?? profile.settings.wpm;
   profile.sending.settings.farnsworth = profile.settings.farnsworth;
 }
 
 export function newProfile(name = 'Listener') {
   const profile = { soundVersion: 1, id: id(), name: safeText(name) || 'Listener', callsign: '', leaderboard: false, credits: {}, settings: { ...DEFAULT_SETTINGS }, stats: emptyStats(), sessionId: '', round: null, focus: emptyFocus(), listening: emptyListening(), guidance: emptyGuidance(), pacing: sanitizePacing(), headPacing: sanitizePacing(), review: emptyReview(), endless: emptyEndless(), sending: emptySending() };
+  profile.settings.sendWpm = 15;
   mirrorSendingSpeed(profile);
   return profile;
 }
@@ -267,6 +271,7 @@ export function sanitizeState(input) {
     profile.credits=Object.fromEntries(Object.entries(safeObject(source.credits)).filter(([key,n])=>
       /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(key) && Number.isSafeInteger(n) && n>0 && n<=1e9));
     if (Math.min(1e9,Object.values(profile.credits).reduce((sum,n)=>sum+n,0))>stats.xp) throw new Error('The result credits exceed the saved XP.');
+    if (source.shack) profile.shack = sanitizeShack(source.shack);
     profile.sending = sanitizeSending(source.sending);
     profile.soundVersion = 1;
     const oldSpeed = source.soundVersion === 1 ? source.previousTiming :
@@ -442,8 +447,10 @@ export function finishRound(profile, { solved = false, now = new Date() } = {}) 
   const limit = responseGoal(profile) * 1000;
   const quickCharacters = clean ? responses.filter(ms => ms !== null && Number.isFinite(ms) && ms >= 0 && ms <= limit).length : 0;
   const quick = clean && responses.length === round.target.replaceAll(' ', '').length && quickCharacters === responses.length;
-  const speedBonus = quickCharacters * QUICK_LETTER_XP;
-  const awarded = (clean ? 20 : solved ? 8 : 0) + speedBonus;
+  const speedBonus = Math.min(4, quickCharacters) * QUICK_LETTER_XP;
+  const characterSpeed = round.heardWpm ?? profile.settings.wpm;
+  const cleanXP = 16 + (characterSpeed >= 20 ? 2 : 0) + (characterSpeed >= 30 ? 2 : 0);
+  const awarded = (clean ? cleanXP : solved ? 8 : 0) + speedBonus;
   const stats = profile.stats;
   round.completed = true;
   round.recovery = null;
@@ -518,7 +525,7 @@ export function finishRound(profile, { solved = false, now = new Date() } = {}) 
     entry.seen++;
     if (letter.correct && !mistake && !round.assisted && round.plays === 1) entry.correct++;
   }
-  stats.rounds.push({ id: id(), at: now.getTime(), level: round.target.replaceAll(' ', '').length, wpm: profile.settings.wpm, solved, clean, quick, speedBonus, assisted: round.assisted || round.plays > 1 || round.attempts > 1 });
+  stats.rounds.push({ id: id(), at: now.getTime(), level: round.target.replaceAll(' ', '').length, wpm: characterSpeed, solved, clean, quick, speedBonus, assisted: round.assisted || round.plays > 1 || round.attempts > 1 });
   stats.rounds = stats.rounds.slice(-300);
   const dayEntries = Object.entries(stats.days).sort().slice(-366);
   stats.days = Object.fromEntries(dayEntries);

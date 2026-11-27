@@ -1,25 +1,16 @@
-## What’s new in Morse 1.1.5
+## What’s new in Morse 1.1.6
 
-- When you return to **Send** and see **Paddle ready**, tap dit once to hear the prompt. Long transmissions scroll horizontally and keep the timing feedback in view.
-- Choose the guided course, Koch lessons, custom practice or unlocked Endless radio from **Listen**. Listening preferences stay together in **Settings**, with the Mac update controls at the top.
-- **Progress** has separate Listen and Send views. Sending now shows clean signals, first-attempt accuracy, practice streaks and characters that need practice. There are 25 sending badges and 24 listening badges. First-attempt tracking starts with this version.
-
-## Leaderboard
-
-With the matching website update, your higher local or confirmed leaderboard total governs. If you previously shared only new results, open **Saved progress** and choose **Show my total** once to include earlier Listen and Send XP.
-
-Uncheck **Share my scores on the Morse leaderboard** to hide your callsign. Check it again to show your total, including XP earned while hidden. Private progress sync is a separate choice. If you are offline or the website still uses the older leaderboard service, your change waits on this device. A previously listed callsign can remain visible until the website confirms the change.
+- **The Shack opens at 5,000 lifetime XP.** That buys a complete starter station. Equip your radio, antenna and key, then open **On air** to listen and send. Better equipment opens more frequencies. Each calling frequency has two open channels on either side for one-to-one practice.
+- **Each unique QSL card earns 100 XP**, including cards already in your logbook. Open **My profile** to show your QSL count, badges, completed Listen and Send levels, and equipped station.
+- **Send gives you more room between letters at lower speeds.** At 10 WPM, a 495 ms letter gap counts as a valid letter gap in level 43. Accuracy carries more weight than speed when earning practice XP.
+- **Saved progress** glows green when private sync is up to date and red when changes are waiting. Enabling sync prompts you to generate a recovery code. Download it as a text file named with the app, callsign and time. You can also delete your progress and its linked online backup.
 
 ## Install or update
 
-On Morse 1.1.1 through 1.1.4, open **Settings → Updates → Check for updates** and choose **Install update**. For a first install or an upgrade from 1.1.0, download the ZIP for your Mac, quit Morse and move **Morse.app** to Applications. Both builds require macOS 13 or later.
+On Morse 1.1.1 through 1.1.5, open **Settings → Updates → Check for updates**, then choose **Install update**. For a first install or an upgrade from 1.1.0, download the ZIP for your Mac and move **Morse.app** to Applications. Both builds require macOS 13 or later. You can install **Morse Dev.app** alongside Stable. Each channel has its own profiles, leaderboard and update feed.
 
-[Apple Silicon download](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-mac-arm64.zip) · [Intel download](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-mac-x64.zip)
+[Apple Silicon download](https://github.com/kubbur/Morse/releases/download/morse-v1.1.6/Morse-1.1.6-mac-arm64.zip) · [Intel download](https://github.com/kubbur/Morse/releases/download/morse-v1.1.6/Morse-1.1.6-mac-x64.zip)
 
-Both downloads use ad hoc signing. If macOS asks for approval on first launch, follow Apple’s instructions. [Opening a downloaded Mac app](https://support.apple.com/en-us/102445)
+Both Mac downloads use ad hoc signing. If macOS asks for approval on first launch, follow Apple’s instructions. [Opening a downloaded Mac app](https://support.apple.com/en-us/102445)
 
-## Progress and rollback
-
-Export a copy from **Saved progress** before upgrading. To return to 1.1.4, export your latest progress, turn off automatic updates, quit Morse and reinstall the previous build. [Morse 1.1.4 downloads](https://github.com/kubbur/Morse/releases/tag/morse-v1.1.4)
-
-The website ZIP contains the browser trainer, server and Docker build files for a separate deployment. Back up the live database before deploying it. If rolling the server back, keep public rankings disabled until hidden callsigns are filtered and any newer visibility choices have been reconciled. [Website update ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.5/Morse-1.1.5-web.zip)
+For a self-hosted website, back up the Stable database and deploy the website ZIP with your existing Stable data volume. [Stable website ZIP](https://github.com/kubbur/Morse/releases/download/morse-v1.1.6/Morse-1.1.6-web.zip)

@@ -3,28 +3,31 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APP_ORIGIN } from '../src/policy.mjs';
 import { root } from '../scripts/stage.mjs';
+import { macIdentity } from '../src/updates.mjs';
 
-const executable = process.env.MORSE_DESKTOP_EXECUTABLE || (process.platform === 'darwin' ? join(root, `build/packages/Morse-darwin-${process.arch}/Morse.app/Contents/MacOS/Morse`) : join(root, 'build/packages/Morse-linux-x64/Morse'));
+const {name} = macIdentity(JSON.parse(await readFile(join(root,'package.json'))).version);
+const executable = process.env.MORSE_DESKTOP_EXECUTABLE || (process.platform === 'darwin' ? join(root,'build/packages',name+'-darwin-'+process.arch,name+'.app/Contents/MacOS',name) : join(root, 'build/packages/Morse-linux-x64/Morse'));
 const temporary = await mkdtemp(join(tmpdir(), 'morse-desktop-smoke-'));
 const output = join(root, 'build/test-results'); await mkdir(output, { recursive: true });
 const checks = [], errors=[];
 const checked=message=>{checks.push(message); console.log('PASS '+message);};
-let child, browser;
+let child, browser, processLog;
 async function launch() {
   const args = ['--morse-isolated', '--disable-gpu', '--disable-background-networking',
     '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', `--user-data-dir=${join(temporary,'profile')}`];
   child = spawn(executable, args, { stdio: ['ignore','pipe','pipe'],
     env: {...process.env, XDG_CONFIG_HOME:join(temporary,'config'), XDG_CACHE_HOME:join(temporary,'cache')},
   });
-  let log = '', endpoint, startError;
+  processLog='';
+  let endpoint, startError;
   const capture = chunk => {
-    log = (log + chunk).slice(-20000);
-    endpoint ||= /DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[\da-f-]+)/i.exec(log)?.[1];
+    processLog = (processLog + chunk).slice(-20000);
+    endpoint ||= /DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[\da-f-]+)/i.exec(processLog)?.[1];
   };
   child.stdout.on('data', capture); child.stderr.on('data', capture);
   child.once('error', error => { startError = error; });
@@ -32,7 +35,7 @@ async function launch() {
   let ready = false;
   while (Date.now() < deadline && !ready) {
     if (startError) throw startError;
-    if (child.exitCode !== null || child.signalCode) throw Error(`Morse exited during launch (${child.signalCode || child.exitCode}). ${log.slice(-1200)}`);
+    if (child.exitCode !== null || child.signalCode) throw Error(`Morse exited during launch (${child.signalCode || child.exitCode}). ${processLog.slice(-1200)}`);
     if (endpoint) {
       const url = new URL(endpoint);
       const response = await fetch(`http://${url.host}/json/list`, { signal: AbortSignal.timeout(1500) }).catch(() => null);
@@ -40,7 +43,7 @@ async function launch() {
     }
     if (!ready) await delay(100);
   }
-  if (!ready) throw Error(`Morse did not open the practice window. Debugger announced: ${!!endpoint}. ${log.slice(-1200)}`);
+  if (!ready) throw Error(`Morse did not open the practice window. Debugger announced: ${!!endpoint}. ${processLog.slice(-1200)}`);
   // Electron publishes Chromium's debugger endpoint after launch. Its first
   // empty frame is replaced when the bundled trainer commits navigation.
   browser = await chromium.connectOverCDP(endpoint, {timeout:15000});
@@ -58,7 +61,7 @@ async function stop() {
     const timer = setTimeout(() => child?.kill('SIGKILL'), 10000);
     try {
       const [code, signal] = await ended;
-      assert.equal(signal, null, 'Morse must quit through its normal lifecycle');
+      assert.equal(signal, null, 'Morse must quit through its normal lifecycle. '+processLog.slice(-2000));
       assert.equal(code, 0);
     } finally { clearTimeout(timer); }
   }

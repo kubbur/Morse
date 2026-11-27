@@ -24,6 +24,10 @@
   Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => true });
   window.dispatchEvent(new Event('focus'));
+  check(el('nav-shack').hidden && el('progress-total').disabled,'The Shack is open below the XP threshold');
+  location.hash='shack';
+  await wait(()=>location.hash==='#journey' && !el('view-journey').hidden,'Locked Shack link did not return to Progress');
+  check(document.querySelector('.shack-xp').disabled && !el('shack-station').children.length,'Locked Progress entry or station mounted');
   const { MorseAudio } = await import('/js/audio.mjs');
   const { KeyTone } = await import('/js/send-ui.mjs');
   const { loadKeyboardPaddles } = await import('/js/keyboard-paddles.mjs');
@@ -38,11 +42,24 @@
   check(el('keyboard-paddle-options').hidden, 'USB offered keyboard assignments');
   change('send-source', 'keyboard');
   check(!el('keyboard-paddle-options').hidden && el('paddle-dot-key').value === 'Z' && el('paddle-dash-key').value === 'X', 'Default keys');
+  const savedNotice = el('paddle-keys-saved');
   el('paddle-dot-key').value = 'X';
   el('paddle-bindings').requestSubmit();
-  check(el('paddle-key-message').textContent.includes('different') && loadKeyboardPaddles().dit === 'z', 'Duplicate keys saved');
+  check(!savedNotice.textContent && el('paddle-key-message').textContent.includes('different') && loadKeyboardPaddles().dit === 'z', 'Duplicate keys saved');
   el('paddle-dot-key').value = 'Ö'; el('paddle-dash-key').value = 'E';
+  const setItem = Storage.prototype.setItem;
+  try {
+    Storage.prototype.setItem = function(key, value) {
+      if (key === 'morse.keyboard-paddles.v1') throw new Error('Storage unavailable');
+      return setItem.call(this, key, value);
+    };
+    el('paddle-bindings').requestSubmit();
+    check(!savedNotice.textContent && el('paddle-key-message').textContent.includes('for this session'), 'Storage failure showed a successful save');
+  } finally { Storage.prototype.setItem = setItem; }
   el('paddle-bindings').requestSubmit();
+  check(savedNotice.textContent === 'Saved' && !el('paddle-key-message').textContent, 'Successful save did not replace the error');
+  change('paddle-dot-key', 'Ö');
+  check(!savedNotice.textContent, 'Editing a binding kept the previous save confirmation');
   el('show-paddle-buttons').click();
   check(!loadKeyboardPaddles().showButtons && loadKeyboardPaddles().dit === 'ö', 'Character or visibility lost');
   el('send-reverse').click();
@@ -71,6 +88,7 @@
   check(heard[1] === heard[0] && !el('send-decoded').textContent && current().sending.attempts === attempts + 1, 'Command entered the retry');
   key('keydown','Ö','Semicolon',{shiftKey:true}); key('keyup','ö','Semicolon');
   await wait(() => el('send-capture').dataset.result === 'good', 'Layout-aware dot was graded');
+  check(current().stats.xp>=5000 && !el('nav-shack').hidden,'Sending across the threshold did not reveal the tab');
   const xp = current().sending.earned;
   await waitMs(1300);
   check(heard.length === 2 && el('send-instruction').textContent.includes('Press E'), 'Manual result did not wait');

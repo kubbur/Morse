@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { sanitizeShack, purchase, equip, equipmentSnapshot } from '../website/public/js/shack-model.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,12 +8,12 @@ import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { siteOrigin, websiteClient } from '../src/website-client.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { newProfile, newState, importState, resetListeningProgress, resetSendingProgress, sanitizeSettings, STORAGE_KEY } from '../website/public/js/progress.mjs';
+import { newProfile, newState, importState, mirrorSendingSpeed, resetListeningProgress, resetSendingProgress, sanitizeSettings, STORAGE_KEY } from '../website/public/js/progress.mjs';
 import { PracticeStorage } from '../website/public/js/practice-storage.mjs';
 import { Station } from '../website/public/js/station.mjs';
 import { pairedProgress } from '../website/public/js/initial-merge.mjs';
 import { syncProfile } from '../website/public/js/sync-data.mjs';
-import { Exchange } from '../website/lib/exchange.mjs';
+import { Exchange, cookieNames } from '../website/lib/exchange.mjs';
 import { snapshot,restore } from '../scripts/backup.mjs';
 import { LearnerDB } from '../src/learner-db.mjs';
 import { recordSending } from '../website/public/js/sending.mjs';
@@ -28,7 +29,7 @@ function fixture(exchange, injected) {
   const transport=async(action,{body})=>{
     const [kind,op]=action.split('/');
     if(action==='scores/session') {cookies.scores ||= randomBytes(32).toString('base64url'); return {ready:true};}
-    const result=kind==='scores' ? exchange.scores.request(op,cookies.scores,cookies.private,body) : exchange.private.request(op,cookies.private,body);
+    const result=kind==='scores' ? exchange.scores.request(op,cookies.scores,cookies.private,body) : exchange.private.request(op,cookies.private,body,cookies.scores);
     if(Object.hasOwn(result,'setToken')) {cookies.private=result.setToken;delete result.setToken;}
     return result;
   };
@@ -230,6 +231,73 @@ test('old websites can acknowledge Send results without erasing the fuller sessi
   assert.equal(mac.p.sending.sessionHistory.fragments[0].answers, 2);
   assert.deepEqual(practiceSessions(mac.p).map(r => r.answers), [2]);
   assert.equal(mac.station.status.message, 'Progress synced');
+});
+
+test('independent sending speed survives a shared-speed server and follows explicit changes after upgrade', async t => {
+  const server = new Exchange(':memory:');
+  t.after(() => server.close());
+  let legacy = true, pushes = 0;
+  const mac = fixture(server, (action, payload, next) => {
+    if (action === 'private/push') pushes++;
+    if (!legacy) return next(action, payload);
+    const copy = structuredClone(payload);
+    for (const profile of [copy.body.profile, copy.body.base, copy.body.foundation]) {
+      if (!profile) continue;
+      delete profile.settings.sendWpm;
+      profile.sending.settings.wpm = profile.settings.wpm;
+    }
+    return next(action, copy);
+  });
+  Object.assign(mac.p.settings, {wpm:34, sendWpm:18});
+  mirrorSendingSpeed(mac.p);
+  await mac.station.start('Mac');
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(mac.p.settings.sendWpm, 18);
+  assert.equal(mac.station.meta().base.sending.settings.wpm, 34);
+  assert.equal(pushes, 0);
+  mac.p.settings.sendWpm = 21;
+  mirrorSendingSpeed(mac.p);
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(mac.station.status.message, 'Progress synced');
+  assert.equal(mac.p.sending.settings.wpm, 21);
+  assert.equal(pushes, 1);
+
+  const browser = fixture(server);
+  const { code } = await mac.station.request('recovery-code');
+  await browser.station.recover(code);
+  assert.equal(browser.p.sending.settings.wpm, 34, 'recover the speed actually stored by the old website');
+  legacy = false;
+  browser.p.settings.sendWpm = 26;
+  mirrorSendingSpeed(browser.p);
+  await browser.station.flush(); await mac.station.flush(); await mac.station.flush();
+  assert.equal(mac.p.settings.wpm, 34);
+  assert.equal(mac.p.sending.settings.wpm, 26);
+  assert.equal(mac.station.meta().localSendWpm, undefined);
+  assert.equal(pushes, 1);
+});
+
+test('the shared leaderboard counts scaled Send and Listen awards once after a lost acknowledgement', async t => {
+  const server = new Exchange(':memory:');
+  t.after(() => server.close());
+  let loseAck = true;
+  const mac = fixture(server, async (action, payload, next) => {
+    const result = await next(action, payload);
+    if (action === 'scores/submit' && loseAck) {
+      loseAck = false;
+      throw Error('Response lost after commit');
+    }
+    return result;
+  });
+  mac.share(true);
+  mac.earn(16);
+  mac.p.stats.xp += 17;
+  mac.storage.result(mac.p, 'send', 17);
+  mac.storage.setItem(STORAGE_KEY, JSON.stringify(mac.state));
+  await mac.station.flushScores();
+  assert.equal(mac.storage.row().scores.length, 2);
+  await mac.station.flushScores(); await mac.station.flushScores();
+  assert.equal(mac.storage.row().scores.length, 0);
+  assert.equal(server.scores.request('leaderboard', null, null, {}).entries[0].xp, 33);
 });
 
 test('enabling sharing publishes the next clean Send once and leaves earlier private XP out of the leaderboard', async t => {
@@ -520,6 +588,109 @@ function chooseVisibility(f, visible, call = 'TEST1') {
   });
 }
 const ranks = e => e.scores.request('leaderboard',null,null,{}).entries;
+test('QSL XP adds to a higher public practice balance and stays idempotent across retries and consent changes',async t=>{
+  const exchange=new Exchange(':memory:'); t.after(()=>exchange.close());
+  let lose=false;
+  const posted=[];
+  const f=fixture(exchange,async(action,p,next)=>{
+    if(action==='scores/achievements') posted.push(structuredClone(p.body));
+    const receipt=await next(action,p);
+    if(lose && action==='scores/achievements') {lose=false;throw Error('response lost');}
+    return receipt;
+  });
+  f.earn(20); chooseVisibility(f,true); await f.station.flushScores();
+  // This publisher has already earned more practice XP on another installation.
+  exchange.private.run('UPDATE score_listings SET best=500 WHERE call=?','TEST1');
+  await f.station.observeListing();
+  const card={from:'OTHER',f:7026,at:10};
+  f.p.shack=sanitizeShack({cards:{first:card,beacon:{...card,from:'RVK',beacon:true}}});
+  assert.equal(f.storage.scoreTotal(f.p),700);
+  lose=true;await f.station.flushScores();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,700);
+  assert.equal(ranks(exchange)[0].achievements.qsls,2);
+  assert.ok(posted.every(body=>!JSON.stringify(body).includes('OTHER') && !JSON.stringify(body).includes('beacon')));
+  chooseVisibility(f,false);await f.station.flushScores();assert.deepEqual(ranks(exchange),[]);
+  chooseVisibility(f,true);await f.station.flushScores();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,700);
+  assert.equal(f.storage.scoreTotal(f.p),700);
+  f.earn();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,720);
+  // An older imported log overlaps one published card but also contains a new one.
+  f.p.shack=sanitizeShack({cards:{first:card,newCard:{...card,from:'NEW'}}});
+  await f.station.flushScores();await f.station.flushScores();
+  assert.equal(ranks(exchange)[0].xp,820);assert.equal(f.storage.scoreTotal(f.p),820);
+  assert.equal(exchange.private.get('SELECT count(*) n FROM qsl_receipts').n,3);
+  assert.equal(exchange.private.get('SELECT count(*) n FROM saves').n,0);
+});
+
+test('erasure removes a paired save, pre-pairing revisions and public profile across restart; unrelated saves survive',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'morse-erase-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const path=join(dir,'fixture.sqlite');
+  let exchange=new Exchange(path); t.after(()=>exchange.close());
+  const a=fixture(exchange), b=fixture(exchange), other=fixture(exchange);
+  a.earn(); const offer=await a.station.start('Owner');
+  b.earn(); await b.station.start('Partner',{invite:false});
+  const joiningId=exchange.private.device(b.cookies.private).save_id;
+  b.earn();await b.station.flush();
+  await b.station.join(offer.invitation,'Partner');
+  await a.station.approve((await a.station.request('status')).invite.claim);
+  await b.station.flush();await a.station.flush();
+  chooseVisibility(a,true);await a.station.flushScores();a.earn();await a.station.flush();await a.station.flushScores();
+  const code=(await a.station.request('recovery-code')).code;
+  const id=exchange.private.device(a.cookies.private).save_id;
+  other.earn();await other.station.start('Independent',{invite:false}); chooseVisibility(other,true,'OTHER');await other.station.flushScores();
+  const unrelatedId=exchange.private.device(other.cookies.private).save_id;
+  assert.ok(exchange.private.get('SELECT 1 FROM revisions WHERE save_id=?',joiningId));
+  assert.throws(()=>exchange.private.erase(null,null,{requirePrivate:true}),/Restore access/);
+  assert.throws(()=>exchange.private.erase(null,a.cookies.scores,{requirePrivate:true}),/Restore access/);
+  assert.ok(exchange.private.device(a.cookies.private));
+  b.earn();
+  await a.station.erase({requirePrivate:true,requirePublisher:true});
+  await b.station.flush();
+  assert.equal(b.station.status.connected,false);
+  assert.equal(exchange.private.erase(a.cookies.private,a.cookies.scores,{requirePrivate:true}).erased,true);
+  exchange.close();exchange=new Exchange(path);
+  for (const table of ['saves','devices','foundations','revisions','recovery_codes','epochs']) {
+    const column=table==='saves'?'id':'save_id';
+    assert.equal(exchange.private.get('SELECT count(*) n FROM '+table+' WHERE '+column+' IN (?,?)',id,joiningId).n,0,table);
+  }
+  for (const table of ['stations','score_results','score_counters','score_listings','operator_achievements','shack_stations','qsl_receipts'])
+    assert.equal(exchange.private.get('SELECT count(*) n FROM '+table+' WHERE call=?','TEST1').n,0,table);
+  assert.throws(()=>exchange.private.request('recover',null,{code,label:'New'}),/Recovery code/);
+  assert.equal(exchange.private.request('status',b.cookies.private,{}).erased,true);
+  assert.throws(()=>exchange.scores.request('consent',a.cookies.scores,null,{generation:99,callsign:'TEST1',enabled:true}),/revoked/);
+  assert.equal(exchange.private.device(other.cookies.private).save_id,unrelatedId);
+  assert.deepEqual(ranks(exchange).map(x=>x.callsign),['OTHER']);
+});
+
+test('local erasure removes only the selected learner from browser backups and native originals and respects newer saves',()=>{
+  const state=newState(), id=state.activeId, other=newProfile('Other');
+  state.profiles.push(other);
+  const raw=JSON.stringify(state), next={...state,profiles:[other],activeId:other.id};
+  const backup=STORAGE_KEY+'.before-shared-sound';
+  const map=new Map([[STORAGE_KEY,raw],[backup,raw],['unrelated','retained']]);
+  const browser={get length(){return map.size;},key:i=>[...map.keys()][i],getItem:k=>map.get(k)??null,setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)};
+  const storage=new PracticeStorage(browser);
+  storage.setItem(STORAGE_KEY,raw);
+  storage.eraseLearner(id,next);
+  for(const key of [STORAGE_KEY,backup]) {
+    assert.deepEqual(JSON.parse(map.get(key)).profiles.map(p=>p.id),[other.id]);
+    assert.ok(!map.get(key).includes(id));
+  }
+  assert.equal(map.get('unrelated'),'retained');
+  const db=new LearnerDB(':memory:');
+  try {
+    const rev=db.load(raw).revision;
+    const cookie=cookieNames(id).private, keep=cookieNames(other.id).private;
+    for(const name of ['dev-website:'+cookie,'website:'+cookie,'dev-website:'+keep]) db.db.prepare('INSERT INTO credentials VALUES(?,?)').run(name,Buffer.from([1]));
+    assert.throws(()=>db.eraseLearner(id,JSON.stringify(next),rev+1,'dev-website:'),/newer save/);
+    assert.equal(db.db.prepare('SELECT raw FROM originals').get().raw,raw);
+    db.eraseLearner(id,JSON.stringify(next),rev,'dev-website:');
+    assert.equal(db.db.prepare('SELECT raw FROM originals').get().raw,JSON.stringify(next));
+    assert.deepEqual(db.db.prepare('SELECT id FROM credentials ORDER BY id').all().map(x=>x.id),['dev-website:'+keep,'website:'+cookie]);
+  } finally {db.close();}
+});
 test('visibility uses the higher total, keeps hidden work and survives retries without creating private saves', async t => {
   const exchange = new Exchange(':memory:'); t.after(()=>exchange.close());
   let lose = '', lastTotal;
@@ -726,4 +897,58 @@ test('a new owner device reconnecting with an old offline show cannot undo a lat
   assert.deepEqual(b.storage.row().visibilityQueue,[]); assert.match(b.storage.row().listingError,/hidden/);
   chooseVisibility(b,true); await b.station.flushScores();
   assert.equal(ranks(e)[0].xp,20); assert.equal(b.p.leaderboard,true);
+});
+
+test('losing a desktop window disconnects its live receivers and a new window can tune again',async()=>{
+  const connections=[];
+  const fetcher=async(url,{signal})=>{
+    assert.equal(new URL(url).pathname,'/api/v2/shack/feed');
+    connections.push(signal);
+    const body=new ReadableStream({start(controller){
+      controller.enqueue(new TextEncoder().encode('{"cursor":1,"events":[]}\n'));
+      signal.addEventListener('abort',()=>controller.close(),{once:true});
+    }});
+    return new Response(body,{headers:{'Content-Type':'application/x-ndjson'}});
+  };
+  const client=websiteClient(null,null,'staging',fetcher);
+  const tune=token=>client('shack/poll',{body:{token,f:7025,cursor:0,live:true}});
+  try {
+    await Promise.all([tune('first'),tune('second')]);
+    assert.deepEqual(connections.map(s=>s.aborted),[false,false]);
+    client.closeBand();
+    assert.deepEqual(connections.map(s=>s.aborted),[true,true]);
+    assert.equal((await tune('first')).cursor,1);
+    assert.deepEqual(connections.map(s=>s.aborted),[true,true,false]);
+  } finally { client.closeBand(); }
+});
+
+test('checkout lowers the published rank and profiles show only equipped gear across retries and visibility changes',async t=>{
+  const exchange=new Exchange(':memory:');t.after(()=>exchange.close());
+  let lose=true;
+  const f=fixture(exchange,async(action,payload,next)=>{
+    const receipt=await next(action,payload);
+    if(action==='scores/station' && lose){lose=false;throw Error('Lost equipment receipt');}
+    return receipt;
+  });
+  const second=fixture(exchange);
+  f.p.stats.xp=5500;second.p.stats.xp=600;
+  chooseVisibility(f,true,'TEST1');chooseVisibility(second,true,'TEST2');
+  await f.station.flushScores();await second.station.flushScores();
+  assert.deepEqual(ranks(exchange).map(r=>r.xp),[5500,600]);
+  const s=f.p.shack=sanitizeShack();
+  purchase(s,['0-0','1-0','2-0'],10,5500);equip(s,'1-0',1,11);
+  await f.station.flushScores();await f.station.flushScores();
+  const entry=ranks(exchange)[1];
+  assert.deepEqual(entry,{callsign:'TEST1',xp:500,lifetimeXP:5500,equipped:[null,'1-0',null],achievements:{listen:0,send:0,qsls:0,badges:[]},rank:2,streak:0});
+  assert.equal(f.station.hasScores(f.storage.row()),false);
+  const old=structuredClone(equipmentSnapshot(s));equip(s,'2-0',2,20);
+  await f.station.flushScores();
+  const body={callsign:'TEST1',generation:f.storage.row().generation,revision:1,station:old};
+  await f.station.exchange('scores/station',body);
+  assert.deepEqual(ranks(exchange)[1].equipped,[null,'1-0','2-0']);
+  await assert.rejects(second.station.exchange('scores/station',body),/publisher/);
+  f.earn(20);await f.station.flushScores();assert.equal(ranks(exchange)[1].xp,520);
+  chooseVisibility(f,false);await f.station.flushScores();
+  assert.deepEqual(ranks(exchange).map(r=>r.callsign),['TEST2']);
+  await assert.rejects(f.station.exchange('scores/station',body),/visibility/);
 });

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildNative } from '../scripts/native.mjs';
 import { PaddleService } from '../src/paddle-service.mjs';
+import { ShackBackground } from '../src/shack-background.mjs';
 import { NativeSidetone } from '../website/public/js/native-paddle.mjs';
 
 test('isolated native helper persists volume and never arms typing, including after restart', { skip:process.platform !== 'darwin', timeout:90000 }, async () => {
@@ -24,6 +25,9 @@ test('isolated native helper persists volume and never arms typing, including af
       assert.match((await service.command('arm')).error,/starting/);
       assert.deepEqual(await service.command('status'),{});
       assert.deepEqual(await service.command('capture-position'),{sequence:0});
+      assert.match((await service.command('shack-key-access')).error,/Input Monitoring/);
+      assert.match((await service.command('shack-keys',{source:'keyboard',dit:'z',dah:'x',epoch:1})).error,/Input Monitoring/);
+      assert.deepEqual(await service.command('shack-keys',null),{});
       assert.equal(service.status.source,'off');
       assert.deepEqual(await service.command('input','vband'),{});
       const usbEpoch=service.status.epoch;
@@ -58,6 +62,44 @@ test('isolated native helper persists volume and never arms typing, including af
       assert.equal(await readFile(original,'utf8'),fixture);
     }
   } finally { await service?.stop(); await rm(dir,{recursive:true,force:true}); }
+});
+
+test('background paddle keys arm only on air and release across focus, lock, helper restart and departure',()=>{
+  const commands=[],notices=[],throttling=[];
+  const radio=new ShackBackground({command:async(op,keys)=>{commands.push([op,keys]);return {};},
+    notify:e=>notices.push(e),throttle:x=>throttling.push(x)});
+  const keys={source:'keyboard',dit:'z',dah:'x'};
+  radio.available=true;
+  radio.configure({listening:false,keys:null,generation:0});
+  radio.configure(null);
+  assert.deepEqual(throttling,[]);
+  radio.configure({listening:true,keys:null,generation:1});
+  radio.focused=false; radio.refresh();
+  assert.deepEqual(commands,[]);
+  radio.configure({listening:true,keys:{...keys,dah:'z'},generation:2});
+  assert.deepEqual(commands,[]);
+  radio.configure({listening:true,keys,generation:3});
+  const first=radio.epoch;
+  assert.deepEqual(commands.at(-1),['shack-keys',{...keys,epoch:first}]);
+  radio.contact({epoch:first,mask:1,at:51,unrelated:'never forwarded'});
+  assert.equal(notices.at(-1).mask,1);
+  assert.equal('unrelated' in notices.at(-1),false);
+  for (const [flag,off,on] of [['focused',true,false],['locked',true,false],['sleeping',true,false],['available',false,true]]) {
+    const epoch=radio.epoch;
+    radio[flag]=off; radio.refresh();
+    assert.deepEqual(notices.at(-1),{generation:3,reset:true});
+    const count=notices.length; radio.contact({epoch,mask:3,at:52});
+    assert.equal(notices.length,count);
+    radio[flag]=on; radio.refresh();
+    assert.ok(radio.epoch>epoch);
+    assert.deepEqual(commands.at(-1),['shack-keys',{...keys,epoch:radio.epoch}]);
+  }
+  const beforeLeave=radio.epoch;
+  radio.configure({listening:false,keys:null,generation:4});
+  assert.equal(throttling.at(-1),true);
+  assert.deepEqual(commands.at(-1),['shack-keys',null]);
+  const count=notices.length; radio.contact({epoch:beforeLeave,mask:2,at:56});
+  assert.equal(notices.length,count);
 });
 
 test('lost helper and stale sidetone acknowledgements require a new mute acknowledgement',async()=>{

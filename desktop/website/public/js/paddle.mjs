@@ -23,10 +23,12 @@ export class PaddleKeyer {
   reset() {
     this.dit = this.dah = false;
     this.memory = { dit: false, dah: false };
+    this.slides = [];
     this.contactHistory = []; this.contactAt = -1;
     this.phase = 'idle'; this.due = Infinity; this.last = 'dah'; this.extra = ''; this.squeezed = false; this.clock = -1;
   }
   choose() {
+    if (this.slides.length) return this.slides.shift();
     const dit = this.dit || this.memory.dit, dah = this.dah || this.memory.dah;
     if (dit && dah) return this.last === 'dit' ? 'dah' : 'dit';
     if (dit || dah) return dit ? 'dit' : 'dah';
@@ -38,7 +40,7 @@ export class PaddleKeyer {
     this.memory[symbol] = false;
     this.extra = '';
     this.last = symbol; this.phase = 'mark'; this.due = at + this.unit * (symbol === 'dit' ? 1 : 3);
-    this.onEdge({ down: true, at });
+    this.onEdge({ down: true, at }, this.due - at);
   }
   advance(to) {
     if (!Number.isFinite(to) || to < this.clock) return;
@@ -51,7 +53,7 @@ export class PaddleKeyer {
     }
     this.clock = to;
   }
-  contacts(dit, dah, at) {
+  contacts(dit, dah, at, slide = false) {
     if (typeof dit !== 'boolean' || typeof dah !== 'boolean' || !Number.isFinite(at) || at < (this.onReplay ? this.contactAt : this.clock)) return false;
     if (this.onReplay) {
       const previous = this.contactHistory.at(-1);
@@ -64,8 +66,15 @@ export class PaddleKeyer {
       if (at < this.clock) return true; // A late unchanged snapshot needs no correction.
     }
     this.advance(at);
-    if (dit && !this.dit) this.memory.dit = true;
-    if (dah && !this.dah) this.memory.dah = true;
+    if (slide) {
+      // A finger can cross several times during one dah. Play each crossing once in order.
+      if (this.slides.length >= 64) return false;
+      this.slides.push(dit ? 'dit' : 'dah');
+    } else {
+      if (dit && dah) this.slides.length = 0;
+      if (dit && !this.dit) this.memory.dit = true;
+      if (dah && !this.dah) this.memory.dah = true;
+    }
     this.dit = dit; this.dah = dah;
     if (dit && dah) this.squeezed = true;
     if (!dit && !dah && this.squeezed) {
@@ -110,6 +119,11 @@ export class PaddleConnection {
     if (this.enabled && this.wanted) this.open();
     else if (!this.enabled) { this.close(); this.onStatus('off', 'Morse Paddle paused outside Send'); }
   }
+  setLiveKeying(enabled) {
+    if (!!this.liveKeying===enabled) return;
+    this.liveKeying=enabled;
+    this.queue=[]; this.anchor=null; this.heldSince=null;
+  }
   open() {
     this.close();
     if (!this.enabled || !this.wanted) return;
@@ -139,18 +153,19 @@ export class PaddleConnection {
     // A bounded playout buffer lets close contact changes retain their native
     // timestamps rather than stretching marks with event-loop/network jitter.
     const arrived = this.now();
-    if (!this.anchor) this.anchor = { remote: row.timeMs, local: arrived };
+    if (!this.anchor || this.liveKeying) this.anchor = { remote: row.timeMs, local: arrived };
     const cursor = this.remoteNow();
     if (row.timeMs < cursor - 5 || this.queue.length > 512) {
       this.queue = []; this.anchor = { remote: row.timeMs, local: arrived }; this.onReset();
       this.onStatus('ready', 'Paddle timing paused. Try that answer again.');
     } else this.onStatus('ready', 'Morse Paddle connected · Mac sidetone');
-    this.queue.push(row);
+    if (this.liveKeying) this.onContacts(row.dit,row.dah,row.timeMs);
+    else this.queue.push(row);
     this.lastArrival = arrived;
     if (row.dit || row.dah) this.heldSince ??= arrived;
     else this.heldSince = null;
   }
-  remoteNow() { return this.anchor ? this.anchor.remote + this.now() - this.anchor.local - 100 : -Infinity; }
+  remoteNow() { return this.anchor ? this.anchor.remote + this.now() - this.anchor.local - (this.liveKeying ? 16 : 100) : -Infinity; }
   tick() {
     if (!this.anchor) return;
     if (this.heldSince != null && this.now() - this.heldSince > 10000) { this.fail('Paddle held too long. Release both contacts and reconnect.'); return; }

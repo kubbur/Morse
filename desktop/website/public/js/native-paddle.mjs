@@ -27,7 +27,8 @@ export class NativeElements {
     if (!this.neutral) return;
     if ((row.kind === 1) === this.down) { this.reset(); this.interrupt(); return; }
     this.down = row.kind === 1;
-    this.edge({ down: this.down, at });
+    const duration = this.down && Number.isSafeInteger(row.frames) && row.frames > 0 ? row.frames * 1000 / row.rate : undefined;
+    this.edge({ down: this.down, at }, duration);
   }
 }
 
@@ -37,9 +38,13 @@ export class BuiltInPaddle {
     this.input = null;
     this.stream = new NativeElements({
       interrupt: () => this.interrupt(),
-      edge: edge => {
+      edge: (edge, duration) => {
         if (!this.active || !this.connected || !this.configured || this.status?.typing || this.ui.migrationPending) return;
-        const eligible = ui.usable() && document.hasFocus() && !ui.listenHeld;
+        const eligible = ui.usable() && (document.hasFocus() || ui.backgroundInput) && !ui.listenHeld;
+        if (ui.keyTarget) {
+          if (eligible) ui.edge(edge, false, duration);
+          return;
+        }
         if (this.command || !eligible || !ui.heard || ui.result?.valid || ui.getProfile().sending.pendingLevel) {
           // A held paddle can generate many dits. Only a single complete dit
           // followed by a neutral watermark is a playback command.
@@ -54,6 +59,7 @@ export class BuiltInPaddle {
         const command = this.command;
         this.command = null;
         if (!this.active || !this.connected || !this.configured || ui.migrationPending || this.status?.typing || !ui.usable() || !document.hasFocus()) return;
+        if (ui.keyTarget) return;
         if (command) {
           if (command.single && command.dit && (!ui.heard || ui.result?.valid || ui.getProfile().sending.pendingLevel)) ui.playPrompt();
           return;

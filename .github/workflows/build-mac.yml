@@ -3,8 +3,8 @@ name: Build Morse for Mac
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    tags: ['morse-v*']
+    branches: [main, dev]
+    tags: ['morse-v*', '!morse-v*-dev.*']
     paths: ['desktop/**', 'Source/**', '.github/workflows/build-mac.yml']
   pull_request:
     paths: ['desktop/**', 'Source/**', '.github/workflows/build-mac.yml']
@@ -37,14 +37,22 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
+      - name: Set the version for this Dev build
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          version=$(node --input-type=commonjs -p 'const [major,minor,patch] = require("./package.json").version.split(".").map(Number); [major,minor,patch + 1].join(".") + "-dev." + process.env.GITHUB_RUN_NUMBER')
+          npm version "$version" --no-git-tag-version --ignore-scripts
+          echo "MORSE_UPDATE_PUBLIC_KEY_FILE=$PWD/assets/sparkle-public-key.txt" >> "$GITHUB_ENV"
       - run: npm test
       - run: npm run test:native
       - name: Install a signed Sparkle update and relaunch with saved progress
-        run: node tests/sparkle-upgrade.mjs
+        run: |
+          node tests/sparkle-upgrade.mjs
+          node tests/sparkle-upgrade.mjs --dev-channel
       - name: Package an ad-hoc test build
         run: node scripts/package.mjs darwin ${{ matrix.architecture }}
       - name: Check the Mac code signature
-        run: codesign --verify --deep --strict --verbose=2 build/packages/Morse-darwin-${{ matrix.architecture }}/Morse.app
+        run: codesign --verify --deep --strict --verbose=2 build/packages/*-darwin-${{ matrix.architecture }}/*.app
       - name: Test the packaged app
         run: npm run test:smoke
       - name: Create the source download

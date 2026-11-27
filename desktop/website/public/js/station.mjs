@@ -1,6 +1,9 @@
+import { equipmentSnapshot, mergeShack } from './shack-model.mjs';
+import { operatorAchievements } from './operator-achievements.mjs';
 import { DeviceSync } from './device-sync.mjs';
+import { ShackFeed } from './shack-feed.mjs';
 import { newProfile, STORAGE_KEY } from './progress.mjs';
-import { publicSnapshot, scoreSnapshot } from './practice-storage.mjs';
+import { publicReceiptKey, publicSnapshot, scoreSnapshot } from './practice-storage.mjs';
 import { syncProfile, syncChanged, hasLocalChanges, playbackOnDevice } from './sync-data.mjs';
 
 export class Station extends DeviceSync {
@@ -14,36 +17,116 @@ export class Station extends DeviceSync {
     this.privateEnabled=false;
   }
   async exchange(action, body={}) {
-    const scope=this.getProfile().id;
+    const learner=this.getProfile().id;
+    const scope=action.startsWith('shack/') ? 'band' : learner;
     let result;
     if (this.requestImpl) return this.requestImpl(action,{scope,body});
+    if (!this.mac && action==='shack/leave') this.shackFeed?.close(body.token);
     if (this.mac) result=await this.mac.exchange(action,{scope,body});
+    else if (action==='shack/poll' && body.live) result=await (this.shackFeed ??= new ShackFeed()).next(body);
     else {
       const response=await fetch('/api/v2/'+action,{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'error',
         headers:{'Content-Type':'application/json','X-Morse-Sync':'2'},body:JSON.stringify({scope,body}),signal:AbortSignal.timeout(10000)});
       const data=await response.json().catch(()=>({error:'Service unavailable. Practice is saved here.'}));
       result={status:response.status,...data};
     }
-    if (scope!==this.getProfile().id) throw new Error('Learner changed.');
+    if (this.disposed || learner!==this.getProfile()?.id) throw new Error('Learner changed.');
     if (result.status>=400) throw Object.assign(new Error(result.error || 'Saved locally. Waiting to reconnect.'),{status:result.status});
     return result;
   }
   request(action,body={}) {
     if (action==='leaderboard') return this.exchange('scores/leaderboard');
     if (action==='start' || action==='join') body={...body,foundation:this.storage.row().foundation || syncProfile(newProfile())};
-    return this.exchange('private/'+action,body);
+    return this.exchange('private/'+action,{...body, profileVersion:2});
   }
-  changed() {
+  changed(profileChanged = true) {
     super.changed();
+    if (profileChanged && this.status.synced && this.confirmedMeta) {
+      try {
+        if (hasLocalChanges(this.confirmedMeta,syncProfile(this.getProfile()))) this.report({message:'Changes waiting to upload'});
+      } catch (error) { this.report({message:error.message,error:true}); }
+    }
     const row=this.storage.row();
     if (this.hasScores(row)) this.queueScores();
   }
+  equipmentChange(row) {
+    const p=this.getProfile(), listing=row.listings?.[p.callsign];
+    if (!p.leaderboard || !p.callsign || (row.listings && !listing?.visible) || row.visibilityQueue?.length) return null;
+    const station=equipmentSnapshot(p.shack);
+    if (!station) return null;
+    const body={callsign:p.callsign,generation:row.generation,revision:listing?.revision || 0,station};
+    return JSON.stringify(body)===row.postedEquipment ? null : body;
+  }
+  achievementChange(row) {
+    const p = this.getProfile(), listing = row.listings?.[p.callsign];
+    if (!p.leaderboard || !listing?.visible || row.visibilityQueue?.length ||
+        row.private && !this.status.synced || this.achievementsRetryAt > Date.now()) return null;
+    const body = {callsign:p.callsign,generation:row.generation,revision:listing.revision,achievements:operatorAchievements(p)};
+    const acked = new Set(listing.postedCards || []);
+    const cards = (p.shack?.qslReceipts || Object.keys(p.shack?.cards || {})).filter(id=>!acked.has(id)).slice(0,64);
+    return cards.length || JSON.stringify(body) !== row.postedAchievements ? {body,cards} : null;
+  }
+  async publishAchievements(row) {
+    const change = this.achievementChange(row);
+    if (!change) return;
+    const {body,cards} = change;
+    try {
+      const keys = await Promise.all(cards.map(id=>publicReceiptKey('morse-qsl',body.callsign,id)));
+      if (this.disposed || this.storage.row().generation !== body.generation) return;
+      const receipt = await this.exchange('scores/achievements',keys.length ? {...body,qslReceipts:keys} : body);
+      if (JSON.stringify(receipt.achievements) !== JSON.stringify(body.achievements)) throw Error('The website did not confirm the achievements.');
+      if (keys.length && JSON.stringify(receipt.qslReceipts) !== JSON.stringify(keys)) throw Error('The website did not confirm the QSL cards.');
+      if (this.storage.failed || this.storage.row().generation !== body.generation) return;
+      this.storage.atomic(() => {
+        const current = this.storage.row();
+        current.postedAchievements = JSON.stringify(body);
+        const listing = current.listings?.[body.callsign];
+        if (listing && Number.isSafeInteger(receipt.qslCards) && receipt.qslCards > 0)
+          listing.qslCards = Math.max(listing.qslCards || 0,receipt.qslCards);
+        if (listing && cards.length) listing.postedCards = [...new Set([...(listing.postedCards || []),...cards])];
+      });
+      this.onScoresPublished?.();
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      this.achievementsRetryAt = Date.now()+60000;
+    }
+  }
+  acceptEquipment(remote) {
+    if (!remote) return;
+    const p=this.getProfile(), merged=mergeShack(p.shack,remote);
+    if (JSON.stringify(equipmentSnapshot(p.shack))===JSON.stringify(equipmentSnapshot(merged))) return;
+    const state=JSON.parse(this.storage.getItem(STORAGE_KEY));
+    const saved=state.profiles.find(learner=>learner.id===p.id);
+    if (!saved) return;
+    saved.shack=merged;
+    this.storage.setItem(STORAGE_KEY,JSON.stringify(state));
+    p.shack=merged;
+  }
+  async publishEquipment() {
+    const row=this.storage.row(), body=this.equipmentChange(row);
+    if (!body || (this.gearRetryAt || 0)>Date.now()) return;
+    let receipt;
+    try { receipt=await this.exchange('scores/station',body); }
+    catch(error) {
+      if (error.status!==404) throw error;
+      this.gearRetryAt=Date.now()+60000;
+      return;
+    }
+    const p=this.getProfile();
+    if (!p.leaderboard || p.callsign!==body.callsign || row.generation!==body.generation || this.storage.failed) return;
+    if (!receipt.station) throw Error('The website did not acknowledge the station.');
+    this.storage.atomic(()=>{
+      this.acceptEquipment(receipt.station);
+      row.postedEquipment=JSON.stringify(body);
+    });
+    this.onScoresPublished?.();
+  }
   hasScores(row) {
-    if (row.visibilityQueue?.length) return true;
+    if (row.visibilityQueue?.length || (this.gearRetryAt || 0)<=Date.now() && this.equipmentChange(row)) return true;
     if (!row.listings) return row.needsConsent || row.scores.length || row.history?.decision === 'queued';
     const p = this.getProfile(), listing = row.listings[p.callsign];
     if (!p.leaderboard || !listing?.visible) return false;
-    return row.scores.length || JSON.stringify(scoreSnapshot(p,row)) !== JSON.stringify(listing.local);
+    return row.scores.length || JSON.stringify(scoreSnapshot(p,row)) !== JSON.stringify(listing.local) || !!this.achievementChange(row);
   }
   rememberListing(call, receipt, snapshot, intent, keys = {}, accepted) {
     const row = this.storage.row(), p = this.getProfile();
@@ -57,6 +140,7 @@ export class Station extends DeviceSync {
       const last = row.listings[call] || {};
       if (receipt.revision < (last.revision || 0)) return;
       row.listings[call] = { ...last, revision:receipt.revision, visible:receipt.visible === true,
+        ...(Number.isSafeInteger(receipt.qslCards) && receipt.qslCards > 0 ? {qslCards:Math.max(last.qslCards || 0,receipt.qslCards)} : {}),
         xp:Math.max(last.xp || 0,receipt.xp), ...(snapshot && (receipt.visible || last.sentEarned == null) ? {sentEarned:snapshot.earned || 0} : {}),
         ...(receipt.absoluteOnly ? {absoluteOnly:true} : {}), ...(snapshot ? {local:snapshot,ackXP:Math.max(receipt.xp,snapshot.xp),
           covered:Object.fromEntries(Object.entries(snapshot.marks).map(([id,n])=>[id,receipt.covered?.[keys[id]] ?? n]))} : {}) };
@@ -80,7 +164,9 @@ export class Station extends DeviceSync {
     const receipt = await this.exchange('scores/listing',{callsign:call});
     if (this.getProfile().callsign !== call || this.storage.row().generation !== generation || this.storage.failed) return;
     const last = this.storage.row().listings[call];
-    if (receipt.revision < last.revision || receipt.revision === last.revision && receipt.xp <= last.xp) return;
+    if (receipt.revision < last.revision) return;
+    if (receipt.visible && p.leaderboard && receipt.station) this.acceptEquipment(receipt.station);
+    if (receipt.revision === last.revision && receipt.xp <= last.xp && (receipt.qslCards || 0) <= (last.qslCards || 0)) return;
     this.rememberListing(call,receipt,null);
     this.changedScoresOnReconnect();
     this.onStatus(this.status);
@@ -142,7 +228,7 @@ export class Station extends DeviceSync {
     if (!p.leaderboard || !listing?.visible) return;
     const snapshot = scoreSnapshot(p,row), results = row.scores.slice(0,25);
     const keys = {};
-    const total = { ...snapshot, xp:this.storage.scoreTotal(p) };
+    const total = { ...snapshot, xp:this.storage.practiceScore(p) };
     const body = {callsign,generation,revision:listing.revision,results,...await publicSnapshot(callsign,total,keys,row)};
     if (!current()) return;
     let receipt;
@@ -194,6 +280,8 @@ export class Station extends DeviceSync {
       if (!this.hasScores(row)) return;
       if (row.listings) {
         await this.flushListing();
+        await this.publishEquipment();
+        await this.publishAchievements(row);
         this.scoreError = null;
         return;
       }
@@ -223,6 +311,7 @@ export class Station extends DeviceSync {
           this.onScoresPublished?.();
         }
       }
+      if (current()) await this.publishEquipment();
       this.scoreError=null;
     } catch(error) {
       this.scoreError = error.status === 404 && this.storage.row().listings
@@ -230,15 +319,17 @@ export class Station extends DeviceSync {
     }
     finally {
       this.publishing=false;
-      const row=this.storage.row();
-      if (this.hasScores(row)) this.queueScores(this.scoreError?15000:50);
-      this.onStatus(this.status);
+      if (!this.disposed) {
+        const row=this.storage.row();
+        if (this.hasScores(row)) this.queueScores(this.scoreError?15000:50);
+        this.onStatus(this.status);
+      }
     }
   }
   async tick() {
     // Only an explicit link or restore starts private network traffic.
     if (this.canSync() && this.meta()) await super.tick();
-    this.changedScoresOnReconnect();
+    if (!this.disposed) this.changedScoresOnReconnect();
   }
   changedScoresOnReconnect() {
     const row=this.storage.row();
@@ -256,6 +347,7 @@ export class Station extends DeviceSync {
     return applied;
   }
   report(changes, meta) {
+    if (changes.message || changes.error) changes.synced = false;
     if (changes.message === 'Synced' && meta?.base) {
       const local = syncProfile(this.getProfile());
       const remote = meta.remote || meta.base;
@@ -264,7 +356,11 @@ export class Station extends DeviceSync {
       if (changes.waiting || (changes.waiting === undefined && this.status.waiting)) changes.message = 'Waiting for approval';
       else if (meta.pending || meta.replacement) changes.message = 'Changes waiting to upload';
       else if (meta.force || (meta.remote && syncChanged(playbackOnDevice(meta.base, local.sending.settings), playbackOnDevice(meta.remote, local.sending.settings)))) changes.message = 'Applying website progress';
-      else changes.message = hasLocalChanges(meta, local) ? 'Changes waiting to upload' : 'Progress synced';
+      else {
+        changes.synced = !hasLocalChanges(meta, local);
+        this.confirmedMeta = changes.synced ? meta : null;
+        changes.message = changes.synced ? 'Progress synced' : 'Changes waiting to upload';
+      }
     }
     super.report(changes);
   }
@@ -277,7 +373,7 @@ export class Station extends DeviceSync {
       if (hasLocalChanges(meta,syncProfile(this.getProfile()))) {
         this.schedule(0); return meta;
       }
-      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,legacySendingSessions:meta.legacySendingSessions,legacySendActivity:meta.legacySendActivity};
+      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,localSendWpm:meta.localSendWpm,legacySendingSessions:meta.legacySendingSessions,legacySendActivity:meta.legacySendActivity,legacyShack:meta.legacyShack};
       const received=super.receive(result,meta);
       if (received?.force) {received.previous=previous;this.save(received);}
       return received;

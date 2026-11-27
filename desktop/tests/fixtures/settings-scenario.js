@@ -48,6 +48,11 @@
     expect(get('update-notes').open && get('update-notes-text').textContent.includes('<em>') && !get('update-notes-text').children.length,'Release notes presentation');
     get('update-auto').click(); expect(get('update-auto').checked,'Automatic update choice');
     get('update-install').click(); expect(window.testInstallRequested,'Install action');
+    expect(get('mac-updates').contains(get('update-channel')) && get('update-channel').value==='stable','Stable channel beside installed version');
+    get('update-channel').value='dev'; get('update-channel').dispatchEvent(new Event('change'));
+    await wait(()=>get('update-status').textContent.includes('2.0.1-dev.10'),'Dev build in the Updates bar');
+    get('update-channel').value='stable'; get('update-channel').dispatchEvent(new Event('change'));
+    await wait(()=>get('update-install').hidden,'Return to Stable updates');
   } else expect(!get('mac-updates'),'Mac updater in browser');
   if(mac) await wait(()=>get('sound-choices').textContent.includes('Use Paddle'),'Native migration unavailable');
   const button=Array.from(get('sound-choices').children).find(b=>b.textContent.startsWith(mac?'Use Paddle':'Use Send'));
@@ -80,20 +85,23 @@
   change('send-wpm',32);
   tab('practice');
   expect(get('view-send').contains(quick) && get('summary-tone').textContent==='1150 Hz','Listening did not use the sending controls');
-  tab('lab'); change('lab-curve','exponential'); change('lab-rise',8); change('lab-fall',11);
+  const oldListenSpeed = current().settings.wpm;
+  expect(get('summary-wpm').textContent===oldListenSpeed+' WPM' && oldListenSpeed !== 32,'Sending speed changed listening playback');
+  tab('lab'); change('lab-listen-wpm',36); change('lab-curve','exponential'); change('lab-rise',8); change('lab-fall',11);
   expect(current().settings.curve==='exponential' && current().sending.settings.wpm===32,'Shared settings were not saved');
   if(mac) await wait(()=>{const n=testSound();return n?.pitch===1150 && n.volume===64 && n.curve===2 && n.rise===8 && n.fall===11 && n.wpm===32 && n.farnsworth===32;},'Helper missed shared settings');
   get('reset-audio').click();
-  expect(current().settings.tone===1150 && current().settings.wpm===32 && current().settings.curve==='smooth','Reset envelope also changed quick controls');
+  expect(current().settings.tone===1150 && current().settings.wpm===36 && current().sending.settings.wpm===32 && current().settings.curve==='smooth','Independent speeds after resetting the envelope');
   tab('journey');
   if(fixture.mode==='mac-local') expect(get('leaderboard-message').textContent==='Offline practice' && !testRequests.includes('scores/leaderboard'),'Live leaderboard claimed locally');
   else {
     await wait(()=>testRequests.includes('scores/leaderboard'),'Public ranking read');
     if(fixture.mode==='mac-staging') expect(get('leaderboard-title').textContent==='Local test leaderboard','Test board source missing');
+    if(fixture.mode==='mac-dev') expect(get('leaderboard-title').textContent==='Dev leaderboard','Dev board source missing');
   }
   expect(get('copying-styles').textContent.includes('No answers recorded') && !get('copying-styles').textContent.includes('Ready'),'Copying status');
   get('progress-send').click();
-  expect(get('listen-progress-panels').hidden && !get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-ATTEMPT ACCURACY') && get('stats-grid').children.length===3, 'Sending dashboard metrics');
+  expect(get('listen-progress-panels').hidden && !get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-ATTEMPT ACCURACY') && get('stats-grid').querySelectorAll('article').length===3 && get('stats-grid').querySelector('button[data-view="shack"]'), 'Sending dashboard metrics');
   expect(get('send-badge-grid').children.length>=get('badge-grid').children.length && get('send-weak-characters').textContent.includes('No recent'), 'Sending badges and weak sounds');
   get('progress-listen').click();
   expect(!get('listen-progress-panels').hidden && get('send-progress-panels').hidden && get('stats-grid').textContent.includes('FIRST-LISTEN'), 'Listening dashboard metrics');
@@ -127,6 +135,11 @@
   expect(current().stats.xp===70 && testState().profiles.length===2,'Cancelled import altered saved learners');
   expect(get('storage-note').textContent.includes(mac?'this Mac':'this browser'),'Wrong storage description');
   expect(get('station-recovery').disabled,'Recovery enabled while unlinked');
+  expect(!get('open-progress').dataset.sync && !get('delete-all-data').hidden,'Unlinked save controls');
+  get('delete-all-data').click();
+  expect(!get('delete-data-confirmation').hidden && document.activeElement===get('cancel-delete-data'),'Missing delete confirmation');
+  get('cancel-delete-data').click();
+  expect(get('delete-data-confirmation').hidden && !testRequests.includes('private/erase'),'Cancel deleted progress');
   expect(!testRequests.includes('private/start'),'Setup implicitly linked');
   get('reset-progress').click();
   expect(get('confirm-reset-progress').textContent==='Reset listening levels','Listening reset label');
@@ -141,10 +154,38 @@
     expect(get('pair-devices').textContent==='Enable private sync','Initial private link action');
     get('pair-devices').click();
     await wait(()=>!get('station-recovery').disabled,'Link did not enable code generation');
+    await wait(()=>!get('recovery-later').hidden && document.activeElement===get('recovery-heading'),'Missing recovery prompt');
+    expect(!testRequests.includes('private/recovery-code'),'Enabling sync rotated the code before confirmation');
+    await wait(()=>get('open-progress').dataset.sync==='synced','Confirmed private backup did not light up');
     expect(get('pair-offer').hidden && get('pair-devices').textContent==='Pair another device','Private sync opened an invitation');
+    if (fixture.mode === 'mac-dev') {
+      get('pair-devices').click();
+      await wait(()=>!get('pair-offer').hidden,'Dev pairing link missing');
+      expect(get('pair-link').value === 'https://morse-dev.kubbur.digital/#pair=' + 'i'.repeat(43),'Wrong Dev pairing hostname');
+    }
     get('station-recovery').click();
     await wait(()=>!get('recovery-issued').hidden && get('recovery-output').textContent.length===32,'Missing code');
     expect(testRequests.includes('private/recovery-code'),'Wrong recovery path');
+    let codeName, codeFile;
+    try {
+      URL.createObjectURL=blob=>{codeFile=blob;return createURL.call(URL,blob);};
+      HTMLAnchorElement.prototype.click=function(){codeName=this.download;};
+      get('download-recovery').click();
+    } finally { URL.createObjectURL=createURL; HTMLAnchorElement.prototype.click=clickLink; }
+    const call=current().callsign?.replaceAll('/','-') || 'no-callsign';
+    expect(codeName.startsWith((fixture.mode==='mac-dev'?'Morse-Dev':'Morse')+'-recovery-'+call+'-') &&
+      /\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ\.txt$/.test(codeName) && codeFile.type.startsWith('text/plain') &&
+      (await codeFile.text()).split('\n').includes(get('recovery-output').textContent),'Recovery text file or name was incorrect');
+    Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
+    window.dispatchEvent(new Event('offline'));
+    expect(get('open-progress').dataset.sync==='pending' && get('open-progress').getAttribute('aria-label').includes('not synced'),'Offline saved-progress indicator');
+    delete navigator.onLine;
+    window.dispatchEvent(new Event('online'));
+    await wait(()=>get('open-progress').dataset.sync==='synced','Reconnect did not restore the synced light');
+    get('delete-all-data').click(); get('confirm-delete-data').click();
+    await wait(()=>get('delete-data-message').textContent.includes('unavailable'),'Failed online deletion was not reported at the confirmation');
+    expect(current().stats.xp===70 && get('progress-dialog').open,'Failed deletion discarded local progress');
+    get('cancel-delete-data').click();
     get('progress-dialog').querySelector('[data-close]').click(); await tick();
     expect(get('recovery-issued').hidden && !get('recovery-output').textContent,'Code retained after close');
   }
@@ -311,6 +352,27 @@
     expect(current().stats.xp===priorXP,'Ignored the selected 800 ms pause');
     testPaddleElement(0,4236);
     await wait(()=>heard.length===plays+1 && captureCleared() && current().stats.xp===priorXP+10,'Full R should advance once at the selected pause, even with 5 WPM spacing');
+  }
+  if (fixture.mode==='mac-dev') {
+    change('send-level',43);change('send-wpm',10);change('send-farnsworth',10);
+    await tick(); get('send-listen').click();
+    await wait(()=>get('send-feedback').textContent.includes('then pause'),'Level 43 native listening prompt');
+    expect(get('send-progress-rule').textContent.includes('240–564 ms'),'Incorrect displayed 10 WPM letter window');
+    const {timeline}=await import('/js/morse.mjs');
+    const tones=timeline(heard.at(-1),{wpm:10,farnsworth:10}).tones;
+    const clean=current().sending.clean;
+    let shift=0,end=5000,previous=0;
+    testPaddleElement(0,5000);
+    for (const tone of tones) {
+      const start=Math.round(tone.start*1000);
+      if (start-previous===360) shift+=135;
+      previous=Math.round((tone.start+tone.duration)*1000);
+      end=5100+previous+shift;
+      testPaddleElement(1,5100+start+shift);testPaddleElement(2,end);
+    }
+    expect(shift===135,'The native exercise must contain one 495 ms letter gap');
+    testPaddleElement(0,end+1);testPaddleElement(0,end+850);
+    await wait(()=>current().sending.clean===clean+1,'495 ms letter gap did not earn clean progress from the Mac paddle');
   }
   tab('journey');
   expect(get('recent-sessions').textContent.includes('Send') && get('send-badge-grid').querySelector('[data-badge="send-first"].earned'),'Sending session or badge missing from Progress');

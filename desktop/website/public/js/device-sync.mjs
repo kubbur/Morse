@@ -1,4 +1,4 @@
-import { syncProfile, mergeProgress, syncChanged, playbackOnDevice, spacingOnDevice, hasLocalChanges } from './sync-data.mjs';
+import { syncProfile, mergeProgress, syncChanged, playbackOnDevice, spacingOnDevice, sendingSpeedOnDevice, hasLocalChanges } from './sync-data.mjs';
 import { parseProgressJson } from './import-validation.mjs';
 import { mergeSendingSessions } from './sessions.mjs';
 
@@ -10,7 +10,10 @@ function rememberReceipt(meta, submitted, received) {
   const preference = { wpm, farnsworth };
   if (spacingOnDevice(received, preference) !== received) meta.spacingPreference = preference;
   else delete meta.spacingPreference;
+  if (received.settings.sendWpm === undefined && submitted.settings.sendWpm !== undefined) meta.localSendWpm = submitted.settings.sendWpm;
+  else delete meta.localSendWpm;
   meta.legacySendingSessions = !!submitted.sending.sessionHistory && !received.sending?.sessionHistory;
+  meta.legacyShack = !!submitted.shack && !received.shack;
   meta.legacySendActivity = !!submitted.sending.activity && !received.sending?.activity;
 }
 export class DeviceSync {
@@ -78,10 +81,18 @@ export class DeviceSync {
     meta.force = false;
     meta.remote = null;
     this.save(meta);
+    this.report({message:'Changes waiting to upload',error:false});
     this.schedule(0);
   }
   receive(result, meta) {
-    if (result.erased) { this.save(null); this.onErased(); this.report({ connected: false, devices: [], invite: null, waiting: null, message: 'Your data was deleted', error: false }); return null; }
+    if (result.erased) {
+      this.onErased();
+      if (!this.disposed) {
+        this.save(null);
+        this.report({connected:false, devices:[], invite:null, waiting:null, message:'Your data was deleted', error:false});
+      }
+      return null;
+    }
     if (meta && result.epoch === meta.epoch && result.revision < meta.revision) return meta;
     if (!result.connected) {
       this.save(null);
@@ -109,8 +120,9 @@ export class DeviceSync {
     const replace = meta.force;
     const local = syncProfile(this.getProfile());
     const remote = playbackOnDevice(meta.remote, local.sending.settings);
-    const preferred = spacingOnDevice(remote, meta.spacingPreference);
-    const base = spacingOnDevice(meta.base, meta.spacingPreference);
+    const spaced = spacingOnDevice(remote, meta.spacingPreference);
+    const preferred = sendingSpeedOnDevice(spaced, meta.localSendWpm);
+    const base = sendingSpeedOnDevice(spacingOnDevice(meta.base, meta.spacingPreference), meta.localSendWpm);
     let merged = replace ? preferred : mergeProgress(base, local, preferred);
     if (replace && !preferred.sending.sessionHistory && local.sending.sessionHistory &&
         preferred.sending.results?.some(r => local.sending.sessionHistory.recorded[r.id])) {
@@ -118,10 +130,12 @@ export class DeviceSync {
       merged = { ...preferred, sending: { ...preferred.sending, sessionHistory: history } };
       meta.legacySendingSessions = true;
     }
-    if (preferred === remote) delete meta.spacingPreference;
+    if (spaced === remote) delete meta.spacingPreference;
+    if (remote.settings.sendWpm !== undefined) delete meta.localSendWpm;
     if (replace && !preferred.sending.activity && local.sending.activity && meta.legacySendActivity) {
       merged = { ...merged, sending: { ...merged.sending, activity: local.sending.activity } };
     }
+    if (replace && meta.legacyShack && !preferred.shack && local.shack) merged = { ...merged, shack:local.shack };
     if (remote !== meta.remote) {
       // A push may have been followed by another edit while in flight. Remember
       // the attempted values, so the newer edit still gets its own request.
@@ -193,7 +207,7 @@ export class DeviceSync {
       else this.report({ error: true, message: navigator.onLine === false ? 'Offline · saved here, syncs when you reconnect' : error.message || 'Saved here · waiting to sync' });
     } finally {
       this.running = false;
-      if (this.meta() && !this.disposed) this.schedule(document.hidden ? 30000 : 5000);
+      if (!this.disposed && this.meta()) this.schedule(document.hidden ? 30000 : 5000);
     }
   }
   async start(label, { invite = true } = {}) {
@@ -203,6 +217,7 @@ export class DeviceSync {
       const before=syncProfile(this.getProfile());
       const result = await this.request('start', { profile: before, label, invite });
       let meta = this.meta();
+      if (result.erased) { this.receive(result, meta); return result; }
       if (!meta) {
         meta = { version: 1, base: before, epoch: result.epoch, seq: result.seq, revision: result.revision };
         rememberReceipt(meta, before, result.profile);
@@ -248,10 +263,11 @@ export class DeviceSync {
       return result;
     });
   }
-  async erase() {
+  async erase(options = {}) {
     return this.exclusive(async () => {
       // Do not discard the only local copy until shared erasure succeeds.
-      const result = await this.request('erase');
+      const result = await this.request('erase', options);
+      if (result.erased !== true) throw Error('The website did not confirm deletion. Your local data is still available.');
       this.receive(result, this.meta());
     });
   }

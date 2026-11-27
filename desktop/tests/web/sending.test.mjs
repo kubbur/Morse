@@ -16,6 +16,21 @@ function pass(s, target = sendingExercise(s, '', () => 0).target) {
   return recordSending(s, target, grade);
 }
 
+test('clean sending rewards accurate manual timing before measured on-air speed', () => {
+  function award(wpm, farnsworth=wpm, stretch=1, text='EE', assisted=false) {
+    const s=emptySending(); s.level=4;
+    const setup={wpm,farnsworth};
+    const edges=edgesFor(text,setup).map(e=>({...e,at:e.at*stretch}));
+    const grade=gradeSending(edges,'EE',setup,sendingStage(4));
+    return recordSending(s,'EE',grade,{assisted}).xp;
+  }
+  assert.deepEqual([award(15),award(20),award(30),award(60)], [16,17,18,18]);
+  assert.equal(award(30,30,1.15),12);
+  assert.equal(award(50,8),16);
+  assert.equal(award(30,30,1,'TT'),0);
+  assert.equal(award(30,30,1,'EE',true),0);
+});
+
 test('sending badges credit saved practice, announce each new milestone once and award no extra XP', () => {
   const p = newProfile(), s = p.sending;
   const grade = gradeSending(edgesFor('E'), 'E', settings);
@@ -123,7 +138,7 @@ test('old R mixed practice resumes as single-character review once without losin
   const old = { ...emptySending(), version: 2, level: 20, attempts: 15, clean: 8, characters: 19, earned: 170, settings: { wpm: 30, farnsworth: 25, keyer: 'b', reverse: true },
     records: { 19: { attempts: 3, good: 3, best: 100, mastered: true, history: [true, true, true], covered: ['R'] },
       20: { attempts: 12, good: 5, best: 100, mastered: false, history: [false, true, false], covered: ['RER', 'RM', 'MR'] } } };
-  const p = newProfile(); delete p.soundVersion; p.sending = old; p.stats.xp = 4321;
+  const p = newProfile(); delete p.soundVersion; delete p.settings.sendWpm; p.sending = old; p.stats.xp = 4321;
   const imported = importState(JSON.stringify({ version: 1, activeId: p.id, profiles: [p] })).profiles[0];
   const s = imported.sending;
   assert.equal(s.version, 3); assert.equal(s.level, 30); assert.equal(sendingExercise(s).target, 'R');
@@ -183,9 +198,10 @@ test('legacy offline progress and new focus-copy counters merge once across the 
   assert.equal(reset.sending.level, 1); assert.deepEqual(reset.sending.records, {}); assert.equal(reset.stats.xp, 500);
 });
 
-test('fresh listening and sending share their timing while saved iambic and reversal choices remain available', () => {
+test('fresh profiles listen at 30 WPM and send at 15 WPM while saved keyer choices remain available', () => {
   const p = newProfile();
-  assert.equal(p.sending.settings.wpm, p.settings.wpm); assert.equal(p.settings.wpm, 30);
+  assert.equal(p.settings.wpm, 30); assert.equal(p.settings.sendWpm, 15);
+  assert.equal(p.sending.settings.wpm, p.settings.sendWpm);
   assert.equal(p.sending.settings.farnsworth, p.settings.farnsworth); assert.equal(p.settings.farnsworth, 15);
   assert.equal(p.sending.settings.keyer, 'a');
   assert.deepEqual(sanitizeSendingSettings({ wpm: 5, farnsworth: 60, keyer: 'unsafe' }), { wpm: 5, farnsworth: 60, keyer: 'a', reverse: false, continueMode: 'timed', pauseSeconds: 2 });
@@ -197,7 +213,8 @@ test('fresh listening and sending share their timing while saved iambic and reve
 
 test('old sending defaults upgrade once while progress, custom spacing and sync deltas survive', () => {
   const p = newProfile(); pass(p.sending); p.stats.xp = 1234; p.sending.level = 8;
-  delete p.soundVersion; p.sending.version = 1; p.sending.settings.farnsworth = 15;
+  delete p.soundVersion; delete p.settings.sendWpm; p.sending.version = 1;
+  Object.assign(p.sending.settings, {wpm:30, farnsworth:15});
   const expected = structuredClone(p.sending); expected.version = 3; expected.settings.farnsworth = 30;
   const restored = sanitizeState({ version: 1, activeId: p.id, profiles: [p] }).profiles[0];
   assert.deepEqual(restored.previousTiming, {wpm:30, farnsworth:30});
@@ -327,6 +344,37 @@ test('standard letter boundaries remain readable with a slower Farnsworth spacin
   assert.equal(grade.decoded, 'EE'); assert.match(grade.issue, /Letter gap too short/);
 });
 
+test('a readable 495 ms letter gap at 10 WPM counts as clean and still measures its actual precision',()=>{
+  const stage=sendingStage(43);
+  const send=(gap,wpm=10,keyerTimed=true,target='EE')=>{
+    const dit=1200/wpm;
+    const times=[0,dit,dit+gap,2*dit+gap];
+    return gradeSending(times.map((at,i)=>({down:i%2===0,at})),target,{wpm,farnsworth:wpm},stage,{keyerTimed});
+  };
+  const sample=send(495);
+  assert.equal(sample.decoded,'EE');assert.equal(sample.passed,true);assert.equal(sample.quality,70);
+  assert.equal(sample.precision,63);
+  for(const mode of [true,false]) for(const gap of [240,360,495,564]) assert.ok(send(gap,10,mode).passed);
+  assert.equal(send(239).correct,false);
+  assert.equal(send(565).passed,false);
+  assert.equal(send(600).decoded,'E E');
+  assert.equal(send(600).passed,false);
+  assert.equal(send(495,10,true,'E E').passed,false);
+  assert.equal(send(840,10,true,'E E').passed,true);
+  assert.equal(send(520,10,true,'E E').passed,false);
+  assert.equal(send(280,20).passed,false);
+  assert.equal(send(365,15).passed,false);
+  assert.equal(send(350,15).passed,true);
+  assert.equal(send(1100,5).passed,true);
+  const progress=emptySending();progress.level=43;
+  const slow={wpm:10,farnsworth:10};
+  const exercise=edgesFor('EL',slow).map((edge,i)=>({...edge,at:edge.at+(i>=2 ? 135 : 0)}));
+  const grade=gradeSending(exercise,'EL',slow,stage,{keyerTimed:true});
+  assert.ok(grade.passed);
+  recordSending(progress,'EL',grade);
+  assert.equal(progress.records[43].history.at(-1),true);
+});
+
 test('readable but mistimed marks receive specific feedback without passing mastery', () => {
   const grade = gradeSending([{ down: true, at: 0 }, { down: false, at: 190 }], 'T', settings, sendingStage(197));
   assert.equal(grade.correct, true); assert.equal(grade.passed, false); assert.match(grade.issue, /Dash too long/);
@@ -424,6 +472,21 @@ test('paddle keyer repeats held dots and dashes at the selected speed', () => {
     const edges = []; const keyer = new PaddleKeyer({ wpm: 30, onEdge: e => edges.push(e) });
     keyer.contacts(dit, dah, 0); keyer.contacts(false, false, dit ? 210 : 290); keyer.advance(500);
     assert.deepEqual(edges.map(e => e.at), expected);
+  }
+});
+
+test('a one-finger slide remembers each crossing during a dah and releases cleanly in both iambic modes', () => {
+  for (const mode of ['a','b']) {
+    const marks=[];
+    const keyer=new PaddleKeyer({wpm:12,mode,onEdge:(edge,duration)=>{ if (edge.down) marks.push([edge.at,duration]); }});
+    keyer.contacts(false,true,0,true);
+    keyer.contacts(true,false,40,true);
+    keyer.contacts(false,true,70,true);
+    keyer.contacts(true,false,90,true);
+    keyer.contacts(false,false,95);
+    keyer.advance(2500);
+    assert.deepEqual(marks,[[0,300],[400,100],[600,300],[1000,100]]);
+    assert.equal(keyer.busy,false);
   }
 });
 

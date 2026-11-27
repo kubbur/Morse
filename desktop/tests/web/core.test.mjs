@@ -463,6 +463,22 @@ test('mixed review uses its own progress and persists different answer lengths a
   }
 });
 
+test('listening pays for the character speed heard, with full credit for Farnsworth spacing and a bounded quick bonus', () => {
+  function award(heardWpm, farnsworth, assisted = false) {
+    const p = newProfile();
+    Object.assign(p.settings, {wpm:50, farnsworth});
+    return cleanRound(p, true, {heardWpm, assisted, responseTimes:[]}).awarded;
+  }
+  assert.deepEqual([award(15,10), award(20,10), award(30,10), award(30,30), award(60,30), award(30,15,true)], [16,18,20,20,20,8]);
+  const p = newProfile();
+  p.settings.level = 6;
+  const result = cleanRound(p);
+  assert.equal(p.round.quickCharacters, 6);
+  assert.equal(result.speedBonus, 8);
+  assert.equal(result.awarded, 28);
+  assert.equal(cleanRound(p, false).awarded, 0);
+});
+
 test('quick letters earn bonus XP, but slow correct copies cannot trigger advancement', () => {
   const p = newProfile();
   p.settings.timingMode = 'fixed';

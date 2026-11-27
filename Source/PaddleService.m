@@ -3,6 +3,7 @@
 #import "MorseEngine.h"
 #import "TypingKeys.h"
 #import "VBandTarget.h"
+#import "ShackKeys.h"
 #include <signal.h>
 #include <unistd.h>
 
@@ -22,6 +23,8 @@ static void emit(NSDictionary *message) {
 @property (copy) NSString *typingIssue;
 @property (copy) NSString *source;
 @property (strong) VBandTarget *vbandTarget;
+@property (strong) ShackKeys *shackKeys;
+@property BOOL shackVBand;
 @property NSTimeInterval controlSince;
 @property (strong) NSTimer *eventTimer;
 @property pid_t target;
@@ -41,6 +44,35 @@ static void emit(NSDictionary *message) {
     _vbandTarget=nil;
     _awaitRelease=YES;
     [self usbContacts:0];
+}
+- (void)stopShackKeys {
+    [_shackKeys stop]; _shackKeys=nil;
+    if (_shackVBand) { [self usbContacts:0]; [_engine interruptInput]; _shackVBand=NO; }
+}
+- (NSDictionary *)startShackKeys:(NSDictionary *)choice {
+    [self stopShackKeys];
+    if (!choice) return @{};
+    if (_isolated || _typingEnabled || !CGPreflightListenEventAccess())
+        return @{@"error":@"Background paddle keys need Input Monitoring with external typing off."};
+    NSNumber *epoch=choice[@"epoch"];
+    BOOL vband=[choice[@"source"] isEqual:@"vband"];
+    if ((vband && ![_source isEqual:@"vband"]) || (!vband && ![_source isEqual:@"off"]))
+        return @{@"error":@"The selected paddle input changed."};
+    __weak PaddleService *weak=self;
+    _shackKeys=[[ShackKeys alloc] initWithChoice:choice contact:^(unsigned mask,double at) {
+        PaddleService *host=weak;
+        if (vband) [host usbContacts:mask];
+        else emit(@{@"type":@"shack-contact",@"epoch":epoch,@"mask":@(mask),@"at":@(at)});
+    } interrupted:^{
+        [weak stopShackKeys];
+        emit(@{@"type":@"shack-contact",@"epoch":epoch,@"error":@"Background key input was interrupted. Bring Morse forward and release the paddles before trying again."});
+    }];
+    if (![_shackKeys start]) {
+        [self stopShackKeys];
+        return @{@"error":@"Check the paddle bindings for this keyboard layout and allow Morse in Input Monitoring."};
+    }
+    _shackVBand=vband;
+    return @{};
 }
 - (void)disarm {
     if (_typingEnabled) {
@@ -140,7 +172,7 @@ static void emit(NSDictionary *message) {
     ElementEvent e;
     while ([_engine takeElement:&e]) {
         if (e.epoch!=epoch || epoch!=_engine.elementEpoch) continue;
-        emit(@{@"type":@"element",@"epoch":@(epoch),@"seq":@(++_sequence),@"kind":@(e.kind),@"frame":@(e.frame),@"rate":@(e.rate)});
+        emit(@{@"type":@"element",@"epoch":@(epoch),@"seq":@(++_sequence),@"kind":@(e.kind),@"frame":@(e.frame),@"rate":@(e.rate),@"frames":@(e.frames)});
     }
     if (!_typingEnabled) return;
     if (![self canArm] || ![self hasTypingAccess]) { [self disarm]; [self status]; return; }
@@ -166,10 +198,15 @@ static void emit(NSDictionary *message) {
 }
 - (NSDictionary *)command:(NSDictionary *)m {
     NSString *op=m[@"op"]; id value=m[@"value"];
-    if ([op isEqual:@"input"]) {
+    if ([op isEqual:@"shack-key-access"]) {
+        if (!_isolated && (CGPreflightListenEventAccess() || CGRequestListenEventAccess())) return @{};
+        return @{@"error":@"Allow Morse in System Settings → Privacy & Security → Input Monitoring, then enable background paddle keys here."};
+    } else if ([op isEqual:@"shack-keys"]) {
+        return [self startShackKeys:value==NSNull.null ? nil : value];
+    } else if ([op isEqual:@"input"]) {
         if (![@[@"paddle",@"vband",@"off"] containsObject:value]) return @{@"error":@"Unknown input."};
         if (![_source isEqual:value]) {
-            [self disarm]; [self usbContacts:0]; _source=[value copy]; [self reconcileInput];
+            [self stopShackKeys]; [self disarm]; [self usbContacts:0]; _source=[value copy]; [self reconcileInput];
             if ([_source isEqual:@"off"]) { _phase=@"waiting"; _detail=@"Hardware paddle input is off."; }
         }
     } else if ([op isEqual:@"vband"]) {
@@ -190,11 +227,11 @@ static void emit(NSDictionary *message) {
             CGRequestPostEventAccess();
             return @{@"error":@"Allow Morse in Privacy & Security → Accessibility, then enable typing again."};
         }
-        [self clearTypingTarget];
+        [self stopShackKeys]; [self clearTypingTarget];
         [_engine interruptInput]; [self tick];
         _typingIssue=nil; _typingEnabled=YES; _engine.sidetoneMuted=NO;
     } else if ([op isEqual:@"interrupt"]) {
-        [self disarm]; [self usbContacts:0]; [_engine interruptInput]; _engine.sidetoneMuted=NO;
+        [self stopShackKeys]; [self disarm]; [self usbContacts:0]; [_engine interruptInput]; _engine.sidetoneMuted=NO;
     } else if ([op isEqual:@"mute"]) { [self tick]; _engine.sidetoneMuted=[value boolValue] && !_typingEnabled; }
     else if ([op isEqual:@"keyer"] || [op isEqual:@"sound"]) {
         ToneSettings t=_engine.toneSettings;

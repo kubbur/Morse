@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { alphabet, sanitizeShack } from '../website/public/js/shack-model.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -15,6 +16,7 @@ import { envelopeAt, rampGain } from '../website/public/js/morse.mjs';
 function oldSave() {
   const state=newState(), p=state.profiles[0];
   delete p.soundVersion;
+  delete p.settings.sendWpm;
   p.settings={...p.settings,courseLevel:20,tone:574};
   Object.assign(p.sending.settings,{wpm:24,farnsworth:18,keyer:'b'});
   p.sending.level=9; p.stats.xp=70; p.guidance.welcomed=true;
@@ -49,12 +51,12 @@ test('the original learner data survives a failed pre-migration backup and is ba
   store.setItem(STORAGE_KEY,migrated); assert.equal(values.get(STORAGE_KEY+'.before-shared-sound'),backup);
 });
 
-test('keyboard sidetone uses the selected envelope and releases from the level reached on a short tap',async t=>{
-  const events=[];
+test('keyboard sidetone uses the selected pitch and envelope and releases from the level reached on a short tap',async t=>{
+  const events=[], pitches=[];
   class Context {
     currentTime=0; destination={};
     async resume(){} async suspend(){}
-    createOscillator(){return {frequency:{},connect(x){return x;},start(){},stop(){},disconnect(){}};}
+    createOscillator(){const frequency={};pitches.push(frequency);return {frequency,connect(x){return x;},start(){},stop(){},disconnect(){}};}
     createGain(){return {connect(){},disconnect(){},gain:{cancelScheduledValues(){},setValueAtTime(value,at){events.push({value,at});},
       linearRampToValueAtTime(value,at){events.push({value,at});}}};}
   }
@@ -63,7 +65,8 @@ test('keyboard sidetone uses the selected envelope and releases from the level r
   t.after(()=>saved ? Object.defineProperty(globalThis,'AudioContext',saved) : delete globalThis.AudioContext);
   for(const curve of ['smooth','linear','exponential']) {
     const note=new KeyTone(), settings={curve,rise:12,fall:6,volume:50,tone:800};
-    await note.set(true,settings); note.context.currentTime=.003; events.length=0;
+    await note.set(true,settings); assert.equal(pitches.at(-1).value,settings.tone);
+    note.context.currentTime=.003; events.length=0;
     await note.set(false,settings);
     const amplitude=.115*rampGain(.25,curve);
     assert.ok(Math.abs(events[0].value-amplitude)<1e-10);
@@ -81,19 +84,27 @@ test('Mac and browser settings, course reset and recovery controls in an offline
     execFileSync('xcrun',['clang','-fobjc-arc','-Wno-deprecated-declarations','-framework','WebKit','-framework','AppKit','-framework','Foundation',join(fixtures,'settings-view.m'),'-o',binary]);
     const staged=await stageApp(join(dir,'staged')), setup=await readFile(join(fixtures,'settings-bootstrap.js'),'utf8');
     const cases = [
-      ...['browser','mac-local','mac-staging','mac-website'].map(mode => [mode, 'settings-scenario.js']),
+      ...['browser','mac-local','mac-staging','mac-website','mac-dev'].map(mode => [mode, 'settings-scenario.js']),
       ...['browser','mac-website'].map(mode => [mode, 'sending-controls-scenario.js']),
       ['mac-website', 'sending-resume-scenario.js'],
       ['browser','sending-feedback-scenario.js'],
       ['browser','leaderboard-visibility-scenario.js'],
+      ['browser','shack-scenario.js'],
+      ['browser','shack-audio-scenario.js'],
+      ['mac-website','shack-scenario.js'],
     ];
     for(const [mode, scenario] of cases) await t.test(mode+' '+scenario,async()=>{
       const bootstrap=join(dir,mode+'.js');
       const state=oldSave(), listing=scenario==='leaderboard-visibility-scenario.js';
+      if (scenario==='shack-scenario.js') {state.profiles[0].stats.xp=13333;state.profiles[0].callsign='TF3KBR';state.profiles[0].shack=sanitizeShack({copied:alphabet,sent:alphabet.replace('E','')});}
+      if (scenario==='sending-controls-scenario.js') state.profiles[0].stats.xp=4990;
       if (listing) Object.assign(state.profiles[0],{callsign:'TEST1',leaderboard:true});
-      await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state,listing})+';\n'+setup);
+      const savedInput=mode==='browser' && scenario==='shack-scenario.js'
+        ? "localStorage.setItem('morse.send-input.v1','keyboard');localStorage.setItem('morse.keyboard-paddles.v1',JSON.stringify({dit:'z',dah:'x',showButtons:true}));\n" : '';
+      await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state,listing})+';\n'+savedInput+setup);
       const base=mode==='browser' ? root : staged;
-      execFileSync(binary,[join(base,'website/public'),bootstrap,join(fixtures,scenario)],{timeout:60000,stdio:'pipe'});
+      const viewport=mode==='browser' && scenario==='shack-scenario.js' ? ['390'] : [];
+      execFileSync(binary,[join(base,'website/public'),bootstrap,join(fixtures,scenario),...viewport],{timeout:60000,stdio:'pipe'});
     });
   } finally {await rm(dir,{recursive:true,force:true});}
 });

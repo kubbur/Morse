@@ -9,24 +9,26 @@ import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { root, stageApp } from './stage.mjs';
+import { macIdentity } from '../src/updates.mjs';
 
 const platform = process.argv[2] || 'darwin';
 const architectures = (process.argv[3] || 'arm64,x64').split(',');
 if (!['darwin', 'linux'].includes(platform) || architectures.some(arch => !['arm64', 'x64'].includes(arch))) throw new Error('Unsupported build target.');
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const identity = macIdentity(platform === 'darwin' ? pkg.version : '');
 const out = join(root, 'build/packages');
 const dist = join(root, 'dist'); await mkdir(dist, { recursive: true });
 const input = await stageApp(join(root, `build/app-${platform}`)), results = [];
 for (const arch of architectures) {
   const [directory] = await packager({
-    dir: input, out, platform, arch, name: 'Morse', executableName: 'Morse',
-    appBundleId: 'digital.kubbur.morse', appCategoryType: 'public.app-category.education',
+    dir: input, out, platform, arch, name: identity.name, executableName: identity.name,
+    appBundleId: identity.id, appCategoryType: 'public.app-category.education',
     appVersion: pkg.version, buildVersion: bundleVersion(pkg.version), electronVersion: pkg.devDependencies.electron,
     overwrite: true, prune: false, asar: true, icon: join(root, 'assets/icon.icns'),
     extendInfo: { NSMicrophoneUsageDescription: 'Read the two paddle contacts through the wired headset adapter.' },
     download: { cacheRoot: process.env.ELECTRON_CACHE || join(root, 'build/downloads') },
   });
-  const bundle = platform === 'darwin' ? join(directory, 'Morse.app') : join(directory, 'Morse');
+  const bundle = platform === 'darwin' ? join(directory, identity.name + '.app') : join(directory, 'Morse');
   if (platform === 'darwin') {
     buildNative(join(bundle,'Contents/Helpers/MorseKeyer'),[arch==='x64'?'x86_64':'arm64']);
     // Keep the download to the app and install note. Required runtime notices
@@ -61,7 +63,7 @@ for (const arch of architectures) {
       }
     } else if (process.env.MORSE_RCODESIGN) {
       const entitlements = join(root, 'assets/entitlements.plist');
-      const helpers = ['Morse Helper', 'Morse Helper (Renderer)', 'Morse Helper (GPU)', 'Morse Helper (Plugin)'];
+      const helpers = ['', ' (Renderer)', ' (GPU)', ' (Plugin)'].map(suffix => identity.name + ' Helper' + suffix);
       const scopes = helpers.flatMap(helper => ['--entitlements-xml-file', `Contents/Frameworks/${helper}.app:${entitlements}`]);
       execFileSync(process.env.MORSE_RCODESIGN, ['sign', '--timestamp-url', 'none', '--entitlements-xml-file', entitlements, ...scopes, bundle], { stdio: 'inherit' });
       signing = 'ad-hoc';
@@ -71,7 +73,7 @@ for (const arch of architectures) {
     results.push({ architecture: arch, file: name, sha256: createHash('sha256').update(await readFile(path)).digest('hex'), signing, fuses: await getCurrentFuseWire(bundle) });
   } else results.push({ architecture: arch, executable: `build/packages/Morse-${platform}-${arch}/Morse`, fuses: await getCurrentFuseWire(bundle) });
 }
-const report = { name: 'Morse', version: pkg.version, electron: pkg.devDependencies.electron, platform, createdAt: new Date().toISOString(), builds: results };
+const report = { name: identity.name, version: pkg.version, electron: pkg.devDependencies.electron, platform, createdAt: new Date().toISOString(), builds: results };
 const reportDirectory = platform === 'darwin' ? dist : join(root, 'build/test-results');
 await mkdir(reportDirectory, { recursive: true });
 await writeFile(join(reportDirectory, `${platform}-build.json`), JSON.stringify(report, null, 2) + '\n');

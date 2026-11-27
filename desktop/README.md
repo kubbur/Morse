@@ -11,9 +11,13 @@ npm ci
 npm start
 ```
 
-`npm start` uses a separate development profile and the running website at `https://morse.kubbur.digital`. For loopback testing, run `npm run staging` and `npm start -- --staging` in separate terminals. Development launches disable physical hardware. Packaged practice stays available offline.
+`npm start` and installed Dev builds use `https://morse-dev.kubbur.digital`. Installed Stable builds use `https://morse.kubbur.digital`. The installed build determines the host for rankings, private sync, pairing links and live CW. The update channel in Settings selects the next build from GitHub. For loopback testing, run `npm run staging` and `npm start -- --staging` in separate terminals. Development launches disable physical hardware. Packaged practice stays available offline.
 
 The web server takes its proxy and edge addresses from `MORSE_TRUSTED_PROXY_IP` and `MORSE_EDGE_IP`. Configure a previous HTTPS origin through `MORSE_LEGACY_ORIGINS` when moving browser saves. If multiple origins are listed, select the source with `MORSE_MOVE_FROM_ORIGIN`.
+
+To package the Dev website, run `python3 scripts/website-package.py /path/to/deployed-website --dev`. The image sets `MORSE_PUBLIC_ORIGIN=https://morse-dev.kubbur.digital`. Use the Dev container's own persistent data volume and database. Profiles, recovery codes, the leaderboard and live CW rooms belong to that deployment. Configure its reverse proxy to stream room feeds without buffering.
+
+The first Mac Dev build using this hostname starts with a fresh local profile in `Morse Development/morse-dev.kubbur.digital`. Earlier Dev builds keep their saves in the parent directory. To restore existing Dev progress, use a pairing link or recovery code from the Dev service.
 
 ```sh
 npm test
@@ -39,6 +43,10 @@ The default macOS build signs ad hoc. For a Developer ID build, configure a Deve
 Practice assets and course data are bundled. The renderer uses a sandbox and context isolation. Local progress and pending requests share a SQLite transaction. Progress exports contain learner data and exclude device credentials. Paddle settings and calibration stay on the Mac.
 
 Morse checks GitHub for the matching product and architecture. The first build that uses Sparkle must be installed manually over 1.1.0. For subsequent updates, Sparkle checks the archive’s Ed25519 signature against the public key embedded in the installed app. An unconfigured development build offers **Download update**. Closing the last window leaves Morse running.
+
+Choose **Settings → Updates → Channel** beside the installed version. **Morse.app** follows Stable releases from `main`. **Morse Dev.app** follows signed prereleases from `dev`. Selecting the other channel offers its ZIP for your Mac. Both apps can run together and each updates its own installation. To move from an older Dev build named Morse.app, install Morse Dev.app from the ZIP once. It opens the existing Dev practice profile.
+
+Every Mac workflow run on `dev` builds the next patch version with a numbered `-dev.N` suffix for Apple Silicon and Intel. After both jobs pass, run `node scripts/publish-dev.mjs RUN_ID` from `desktop/` on the publishing Mac. It downloads that run’s archives, verifies their hashes and versions, signs their update feeds with the existing Keychain key, and publishes a GitHub prerelease pinned to the tested commit. Testers receive the build once publication succeeds.
 
 Stable builds embed the release public key in `assets/sparkle-public-key.txt`. The development and test builds can use `MORSE_UPDATE_PUBLIC_KEY_FILE` for a separate key. The optional `MORSE_SPARKLE_ARCHIVE` selects an offline copy of the pinned SDK.
 

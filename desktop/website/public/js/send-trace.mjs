@@ -1,5 +1,5 @@
 import { timeline, timing } from './morse.mjs';
-import { sendingGapType } from './sending.mjs';
+import { sendingGapType, letterGapWindow, fitsLetterGap } from './sending.mjs';
 
 // Both series use milliseconds since the first key-down. Native marks arrive
 // with audio-frame timestamps; this view never drives audio or grading.
@@ -28,6 +28,7 @@ function precise(value, ideal) {
 // previous release, so one late letter does not spoil every later hit.
 export function markFeedback({ expected, actual, dit, time, keyerTimed, tolerance }) {
   if (!expected.length) return [];
+  const letters = letterGapWindow(time,tolerance);
   const hits = [];
   let streak = 0;
   for (const [i, mark] of actual.entries()) {
@@ -47,8 +48,9 @@ export function markFeedback({ expected, actual, dit, time, keyerTimed, toleranc
       const gapError = timedGap ? Math.abs(gap / idealGap - 1) : 0;
       const lengthError = keyerTimed ? 0 : Math.abs(length / ideal - 1);
       const limit = tolerance + 1e-6;
+      const gapMissed = timedGap && (boundary === 'letter' ? !fitsLetterGap(gap,letters) : gapError > limit);
       if (!correctSymbol) label = 'Expected a ' + symbol.toLowerCase();
-      else if (wrongBoundary || (gapError > limit && gapError >= lengthError)) {
+      else if (wrongBoundary || (gapMissed && (lengthError <= limit || gapError >= lengthError))) {
         label = Math.round(Math.abs(gap - idealGap)) + ' ms ' + (gap < idealGap ? 'early' : 'late');
       } else if (lengthError > limit) {
         label = Math.round(Math.abs(length - ideal)) + ' ms ' + (length < ideal ? 'short' : 'long');

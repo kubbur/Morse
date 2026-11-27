@@ -366,7 +366,7 @@ static float nextKeyerSample(Keyer *k, uint64_t frame, bool sound) {
         double unit=k->rate*1.2/tone.wpm;
         if (k->unitFrames!=unit) { k->unitFrames=unit; k->carry=0; }
         k->markLength = k->markLeft = timedFrames(k,k->last==1 ? 1 : 3);
-        emitElement(k->stream,k->epoch,1,frame,k->rate);
+        emitElement(k->stream,k->epoch,1,frame,k->rate,k->markLength);
         if (sound) {
             k->phaseStep=2*M_PI*tone.pitchHz/k->rate;
             k->ramps=fitToneRamps(tone,k->rate,k->markLength);
@@ -389,7 +389,7 @@ static float nextKeyerSample(Keyer *k, uint64_t frame, bool sound) {
     }
     if (--k->markLeft==0) {
         k->gapLeft=timedFrames(k,1);
-        emitElement(k->stream,k->epoch,2,frame+1,k->rate);
+        emitElement(k->stream,k->epoch,2,frame+1,k->rate,0);
     }
     return sample;
 }
@@ -407,7 +407,7 @@ static bool renderKeyer(Keyer *k, UInt32 frames, float *output) {
     }
     k->frame+=frames;
     if (silent && !k->waitNeutral && k->frame>=k->nextWatermark) {
-        emitElement(k->stream,k->epoch,0,k->frame,k->rate);
+        emitElement(k->stream,k->epoch,0,k->frame,k->rate,0);
         k->nextWatermark=k->frame+(uint64_t)(k->rate*.04);
     }
     if (k->decoder.armed) advanceTyping(&k->decoder,k->typing,k->frame);

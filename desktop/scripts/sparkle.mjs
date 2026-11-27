@@ -48,7 +48,7 @@ export async function addSparkle(bundle, arch, {publicKey, feedURL} = {}) {
   const includes = process.env.NODE_INCLUDE_DIR || resolve(dirname(process.execPath), '../include/node');
   execFileSync('/usr/bin/xcrun', ['clang','-O2','-fobjc-arc','-mmacosx-version-min=13.0','-arch',arch==='x64'?'x86_64':'arm64',
     '-I',includes,'-F',frameworks,'-bundle','-undefined','dynamic_lookup','-Wl,-rpath,@loader_path/../Frameworks',
-    '-framework','Cocoa','-framework','Sparkle',join(nativeSource,'MorseUpdater.m'),'-o',join(resources,'MorseUpdater.node')]);
+    '-framework','Cocoa','-framework','Sparkle',join(nativeSource,'MorseUpdater.m'),join(nativeSource,'MorseUpdateFeed.m'),'-o',join(resources,'MorseUpdater.node')]);
   const plist = join(bundle,'Contents','Info.plist');
   const settings = {
     SUPublicEDKey: ['string', publicKey],

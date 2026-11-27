@@ -34,6 +34,12 @@ export class MorseAudio {
   active = null;
   #holdSource = null;
   #idleTimer = null;
+  #listening = false;
+
+  setListening(enabled) {
+    this.#listening=enabled;
+    this.#releaseAfterIdle();
+  }
 
   #cancelRelease() {
     clearTimeout(this.#idleTimer);
@@ -54,7 +60,7 @@ export class MorseAudio {
 
   #releaseAfterIdle() {
     this.#cancelRelease();
-    if (!this.#holdSource || this.active) return;
+    if (!this.#holdSource || this.active || this.#listening) return;
     this.#idleTimer = setTimeout(() => {
       this.#idleTimer = null;
       if (!this.active) this.release();
@@ -141,6 +147,7 @@ export class MorseAudio {
   }
 
   release() {
+    this.#listening=false;
     this.stop();
     this.#cancelRelease();
     if (this.#holdSource) {

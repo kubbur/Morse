@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { APP_ORIGIN, allowedRequest, allowedPermission, appDocument, progressExport } from '../src/policy.mjs';
+import { APP_ORIGIN, allowedRequest, allowedPermission, appDocument, channelForBuild, websiteProfileDirectory, progressExport } from '../src/policy.mjs';
 import { bundledTrainer } from '../src/bundled-trainer.mjs';
 import { stageApp, stage } from '../scripts/stage.mjs';
 import { LESSONS, COURSE_LEVELS, courseStage } from '../website/public/js/lessons.mjs';
@@ -11,14 +11,25 @@ import { availableUpdate } from '../src/updates.mjs';
 import { validCommand } from '../src/paddle-service.mjs';
 
 test('sandbox exposes only bundled documents and explicitly needed permissions',()=>{
-  assert.ok(appDocument(APP_ORIGIN+'/#send')); assert.ok(progressExport('blob:'+APP_ORIGIN+'/progress'));
-  for(const url of ['file:///tmp/x','http://127.0.0.1:17373/events','http://127.0.0.1:38764/api/v2/','https://morse.kubbur.digital/','https://github.com/']) assert.equal(allowedRequest(url),false);
+  assert.ok(appDocument(APP_ORIGIN+'/#send')); assert.ok(progressExport('blob:'+APP_ORIGIN+'/progress','morse-progress-2026-11-27.json'));
+  assert.ok(progressExport('blob:'+APP_ORIGIN+'/code','Morse-Dev-recovery-TF3KBR-P-2026-11-27T20-30-06Z.txt'));
+  assert.equal(progressExport('blob:'+APP_ORIGIN+'/code','arbitrary.txt'),false);
+  for(const url of ['file:///tmp/x','http://127.0.0.1:17373/events','http://127.0.0.1:38764/api/v2/','https://morse.kubbur.digital/','https://morse-dev.kubbur.digital/','https://github.com/']) assert.equal(allowedRequest(url),false);
   assert.ok(allowedRequest(APP_ORIGIN+'/js/app.mjs'));
   assert.equal(allowedRequest(APP_ORIGIN+'/api/sync/start','POST'),false);
   for(const p of ['microphone','geolocation','media','accessibility','loopback-network']) assert.equal(allowedPermission(p,APP_ORIGIN,APP_ORIGIN),false);
   assert.ok(allowedPermission('screen-wake-lock',APP_ORIGIN,APP_ORIGIN));
   assert.equal(validCommand('keyer',{wpm:300,farnsworth:5,keyer:'a'}),false);
   assert.equal(validCommand('type','arbitrary text'),false);
+});
+test('the installed build selects the service and keeps earlier Dev queues outside the new profile', () => {
+  assert.equal(channelForBuild('1.1.5', true), 'stable');
+  assert.equal(channelForBuild('1.1.6-dev.27', true), 'dev');
+  assert.equal(channelForBuild('1.1.5', false), 'dev');
+  assert.equal(websiteProfileDirectory('/profiles/Morse Development', 'website', 'dev'),
+    '/profiles/Morse Development/morse-dev.kubbur.digital');
+  assert.equal(websiteProfileDirectory('/profiles/Morse', 'website', 'stable'), '/profiles/Morse');
+  for (const mode of ['staging', 'offline']) assert.equal(websiteProfileDirectory('/test', mode, 'dev'), '/test');
 });
 test('every lesson and its static dependency closure is bundled on a fresh offline installation',async()=>{
   await stageApp();

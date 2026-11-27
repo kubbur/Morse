@@ -1,7 +1,7 @@
 import { MorseAudio } from './audio.mjs';
 import { timing, timeline, rampGain } from './morse.mjs';
 import { SENDING_LEVELS, SENDING_CHAPTERS, sendingStage, sendingExercise, sendingTokens } from './sending-course.mjs';
-import { DEFAULT_SENDING_SETTINGS, decodeSending, gradeSending, matchesSendingTarget, sendingMastery, recordSending, advanceSending, sanitizeSendingSettings } from './sending.mjs';
+import { DEFAULT_SENDING_SETTINGS, decodeSending, gradeSending, letterGapWindow, matchesSendingTarget, sendingMastery, recordSending, advanceSending, sanitizeSendingSettings } from './sending.mjs';
 import { BuiltInPaddle, NativeSidetone } from './native-paddle.mjs';
 import { VBandKeys, loadInput, saveInput } from './vband.mjs';
 import { keyLabel, loadKeyboardPaddles, paddleCharacter, saveKeyboardPaddles } from './keyboard-paddles.mjs';
@@ -78,9 +78,26 @@ export class SendingUI {
     this.edges = []; this.source = loadInput(); $('send-source').value = this.source; this.contacts = { dit: false, dah: false };
     this.keyboardPaddles = loadKeyboardPaddles();
     this.heldCodes = new Map();
+    this.pointerHolds = new Map();
+    this.paddleTouches = new Map();
     this.contactHolds = { dit: new Set(), dah: new Set() };
     this.wake = new ScreenWake({ onState: state => { this.wakeState = state; this.renderInput(); } });
     this.native = globalThis.morseMac;
+    this.shackGeneration=0;
+    try { this.shackKeys=localStorage.getItem('morse.shack.backgroundKeys')==='1'; } catch { /* Device preference. */ }
+    const backgroundKeys=$('shack-background-keys');
+    backgroundKeys.addEventListener('change',async()=>{
+      const wanted=backgroundKeys.checked;
+      backgroundKeys.disabled=true;
+      try {
+        const reply=wanted ? await this.native.requestShackKeys() : {};
+        this.shackKeys=wanted && !reply.error;
+        this.shackKeyError=reply.error || '';
+        try { localStorage.setItem('morse.shack.backgroundKeys',this.shackKeys?'1':'0'); } catch { /* Session choice. */ }
+      } catch { this.shackKeys=false; this.shackKeyError='Mac paddle key input is unavailable.'; }
+      finally { backgroundKeys.disabled=false; this.setShackRadio(!!this.shackListening); this.renderInput(); }
+    });
+    this.native?.onShackKeys?.(row=>this.backgroundContact(row));
     this.vband = new VBandKeys((mask, contact, down) => {
       if (this.native) this.connection.vbandContacts(mask);
       else this.keyboardContact(contact, down);
@@ -146,8 +163,17 @@ export class SendingUI {
       if (this.native && event.target.id === 'send-reverse') void this.native.paddle('reverse', s.settings.reverse);
       this.persist(); this.render();
     });
+    const savedNotice = $('paddle-keys-saved');
+    let savedTimer;
+    const clearSaved = () => {
+      clearTimeout(savedTimer);
+      savedNotice.textContent = '';
+    };
+    $('input-settings').addEventListener('input', clearSaved);
+    $('shack-input-dialog').addEventListener('close', clearSaved);
     $('paddle-bindings').addEventListener('submit', e => {
       e.preventDefault();
+      clearSaved();
       const read = id => {
         const value = $(id).value;
         return value.toLowerCase() === 'space' ? ' ' : paddleCharacter(value);
@@ -162,7 +188,12 @@ export class SendingUI {
       const saved = saveKeyboardPaddles(this.keyboardPaddles);
       this.bindingLabels = null;
       this.renderInput();
-      $('paddle-key-message').textContent = saved ? 'Paddle keys saved.' : 'Keys set for this session. Device storage is unavailable.';
+      if (saved) {
+        savedNotice.textContent = 'Saved';
+        savedTimer = setTimeout(clearSaved, 2000);
+      } else {
+        $('paddle-key-message').textContent = 'Keys set for this session. Device storage is unavailable.';
+      }
     });
     for (const id of ['paddle-dot-key', 'paddle-dash-key']) $(id).addEventListener('focus', () => $(id).select());
     $('show-paddle-buttons').addEventListener('change', () => {
@@ -180,22 +211,21 @@ export class SendingUI {
     $('send-help').addEventListener('click', () => { this.revealed = true; if (!this.stage.guided) this.assisted = true; this.renderExercise(); $('send-feedback').textContent = 'Pattern shown. This attempt is practice; use the next exercise for mastery.'; });
     $('send-retry').addEventListener('click', () => { this.clearAnswer(); this.focusKey(); });
     this.bindHold($('send-key'), (down, at) => this.straight(down, at));
-    for (const contact of ['dit', 'dah']) this.bindHold($('send-' + contact), down => {
-      if (this.source !== 'keyboard' || !this.keyboardPaddles.showButtons) return;
-      const side = this.settings.reverse ? (contact === 'dit' ? 'dah' : 'dit') : contact;
-      this.keyboardContact(side, down, 'screen-' + contact);
-    });
+    for (const contact of ['dit', 'dah']) this.bindPaddle($('send-' + contact), contact);
     document.addEventListener('keydown', e => this.key(e, true), true);
     document.addEventListener('keyup', e => this.key(e, false), true);
     window.addEventListener('blur', () => {
       this.suspended = true;
       this.updateActivity();
-      this.pauseInput();
+      if (!(this.backgroundInput && this.source==='paddle')) this.pauseInput();
     });
-    window.addEventListener('focus', () => { this.suspended = false; this.updateActivity(); this.updateMute(); this.renderExercise(); this.wake.refresh(); });
+    window.addEventListener('focus', () => {
+      if (this.suspended && this.shackKeys && this.keyTarget?.live && this.source!=='paddle') this.pauseInput();
+      this.suspended = false; this.updateActivity(); this.updateMute(); this.renderExercise(); this.wake.refresh();
+    });
     document.addEventListener('visibilitychange', () => {
       this.updateActivity();
-      if (document.hidden) this.pauseInput();
+      if (document.hidden && !this.backgroundInput) this.pauseInput();
       else { this.updateMute(); this.wake.refresh(); }
     });
     window.addEventListener('pagehide', () => { this.pageHidden = true; this.updateActivity(); this.pauseInput(); });
@@ -203,22 +233,117 @@ export class SendingUI {
   }
 
   bindHold(button, callback) {
-    const held = new Set();
     button.addEventListener('pointerdown', e => {
-      if (e.button !== 0 || held.size) return;
-      e.preventDefault(); button.focus({ preventScroll: true }); button.setPointerCapture(e.pointerId); held.add(e.pointerId); callback(true, e.timeStamp);
+      if (e.button !== 0 || this.pointerHolds.has(button)) return;
+      e.preventDefault(); button.focus({ preventScroll: true }); button.setPointerCapture(e.pointerId);
+      this.pointerHolds.set(button,e.pointerId); callback(true, e.timeStamp);
     });
-    const release = e => { if (held.delete(e.pointerId)) callback(false, e.timeStamp); };
-    button.addEventListener('pointerup', release);
-    for (const name of ['pointercancel', 'lostpointercapture']) button.addEventListener(name, e => { if (held.delete(e.pointerId)) this.abort('Touch input paused. Try the answer again.'); });
+    button.addEventListener('pointerup', e => {
+      if (this.pointerHolds.get(button) !== e.pointerId) return;
+      this.pointerHolds.delete(button); callback(false, e.timeStamp);
+    });
+    for (const name of ['pointercancel', 'lostpointercapture']) button.addEventListener(name, e => {
+      if (this.pointerHolds.get(button) === e.pointerId) this.abort('Touch input paused. Try the answer again.');
+    });
     button.addEventListener('contextmenu', e => e.preventDefault());
   }
 
+  bindPaddle(button, contact) {
+    const pair = button.parentElement;
+    button.dataset.contact = contact;
+    const change = (touch, next) => {
+      const old = touch.button;
+      if (old === next) return;
+      const side = pad => {
+        const value = pad?.dataset.contact;
+        return value && this.settings.reverse ? (value === 'dit' ? 'dah' : 'dit') : value;
+      };
+      touch.button = next;
+      if (old && ![...this.paddleTouches.values()].some(other => other.button === old)) old.removeAttribute('data-held');
+      if (next) next.setAttribute('data-held', '');
+      this.changeContact(touch.id, side(old), side(next));
+    };
+    button.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || button.disabled || this.paddleTouches.has(e.pointerId) ||
+          this.source !== 'keyboard' || !this.keyboardPaddles.showButtons) return;
+      e.preventDefault();
+      button.focus({preventScroll:true});
+      button.setPointerCapture(e.pointerId);
+      const touch = {id:e.pointerId, origin:button, button:null};
+      this.paddleTouches.set(e.pointerId, touch);
+      change(touch, button);
+    });
+    button.addEventListener('pointermove', e => {
+      const touch = this.paddleTouches.get(e.pointerId);
+      if (touch?.origin !== button) return;
+      for (const point of [...(e.getCoalescedEvents?.() || []), e]) {
+        const hit = document.elementFromPoint(point.clientX, point.clientY);
+        if (hit === pair) continue; // Keep contact across the narrow gutter.
+        const pad = hit?.closest('button[data-contact]');
+        change(touch, pad?.parentElement === pair && !pad.disabled ? pad : null);
+      }
+    });
+    button.addEventListener('pointerup', e => {
+      const touch = this.paddleTouches.get(e.pointerId);
+      if (touch?.origin !== button) return;
+      change(touch, null);
+      this.paddleTouches.delete(e.pointerId);
+    });
+    for (const name of ['pointercancel', 'lostpointercapture']) button.addEventListener(name, e => {
+      if (this.paddleTouches.get(e.pointerId)?.origin === button) this.abort('Touch input paused. Try the answer again.');
+    });
+    button.addEventListener('contextmenu', e => e.preventDefault());
+  }
+
+  releasePaddlesIn(panel) {
+    if ([...this.paddleTouches.values()].some(touch => panel.contains(touch.origin))) this.abort();
+  }
+
   get stage() { return sendingStage(this.getProfile().sending.level); }
-  get settings() { return { ...DEFAULT_SENDING_SETTINGS, ...this.getProfile().sending.settings, ...this.getProfile().settings }; }
+  get settings() {
+    const profile = this.getProfile();
+    const settings = { ...DEFAULT_SENDING_SETTINGS, ...profile.sending.settings, ...profile.settings };
+    const preferred = settings.sendWpm ?? settings.wpm;
+    const wpm = this.keyTarget?.limitWpm?.(preferred) ?? preferred;
+    return { ...settings, wpm };
+  }
   get usesPaddleSidetone() { return this.source === 'paddle' || (this.source === 'vband' && !!this.native); }
   get busy() { return this.down || this.playing || this.edges.length > 0 && !this.result; }
-  usable() { return this.active() && !this.suspended && !document.hidden && !this.pageHidden && !document.querySelector('dialog[open]') && !this.playing; }
+  blockingDialog() {
+    if (!this.keyTarget?.dialog?.open) return !!document.querySelector('dialog[open]');
+    return [...document.querySelectorAll('dialog[open]')].some(dialog=>dialog!==this.keyTarget.dialog);
+  }
+  get backgroundInput() { return !!this.native?.setShackRadio && this.shackListening && this.keyTarget?.live && (this.source==='paddle' || this.shackKeys); }
+  get inputAvailable() { return !this.pageHidden && (this.backgroundInput || !this.suspended && !document.hidden); }
+  usable() { return this.active() && this.inputAvailable && !this.blockingDialog() && !this.playing; }
+
+  setShackRadio(listening) {
+    if (!this.native?.setShackRadio) return;
+    this.shackListening=listening;
+    const keys=this.backgroundInput && this.source!=='paddle' ? {source:this.source,dit:this.keyboardPaddles.dit,dah:this.keyboardPaddles.dah} : null;
+    const state=JSON.stringify([listening,keys]);
+    if (this.shackState===state) return;
+    this.shackState=state;
+    this.backgroundMask=0; this.backgroundClock=null;
+    this.native.setShackRadio({listening,keys,generation:++this.shackGeneration});
+    this.updateActivity();
+  }
+  backgroundContact(row) {
+    if (row.generation!==this.shackGeneration || !this.backgroundInput) return;
+    if (row.error) { this.shackKeyError=row.error; this.pauseInput(); this.renderInput(); return; }
+    if (row.reset) { this.pauseInput(); return; }
+    if (document.hasFocus() || !this.usable() || !Number.isInteger(row.mask) || row.mask<0 || row.mask>3 || !Number.isFinite(row.at)) return;
+    const now=performance.now();
+    this.backgroundClock ??= now-row.at;
+    const at=Math.min(now,row.at+this.backgroundClock), previous=this.backgroundMask;
+    this.backgroundMask=row.mask;
+    if (this.source==='straight' && row.mask!==previous) this.straight(!!row.mask,at);
+    if (this.source==='keyboard') {
+      for (const [bit,contact] of [[1,'dit'],[2,'dah']]) {
+        if ((row.mask^previous)&bit) this.changeContact('background-'+contact,row.mask&bit?null:contact,row.mask&bit?contact:null,at);
+      }
+    }
+  }
   inputHeld() { if (this.source === 'vband') return !!this.vband.mask; return this.source === 'paddle' ? this.contacts.dit || this.contacts.dah : this.source === 'keyboard' ? this.contactHolds.dit.size > 0 || this.contactHolds.dah.size > 0 : this.straightHeld; }
 
   render() {
@@ -254,7 +379,9 @@ export class SendingUI {
     const meter = $('send-progress-meter');
     meter.setAttribute('aria-valuemax', mastery.required); meter.setAttribute('aria-valuenow', mastery.good);
     meter.firstElementChild.style.width = `${100 * mastery.good / mastery.required}%`;
-    $('send-progress-rule').textContent = `${stage.required} clean transmissions in the last ${stage.window} attempts${stage.distinct > 1 ? `, covering ${stage.distinct} different exercises` : ''}${stage.focusCopies ? `; at least ${stage.focusCopies} clean singles of ${stage.focus}` : ''}. ${this.source === 'straight' ? 'Timing' : 'Spacing'} score ${stage.qualityGoal}% or higher; at least 80% of ${this.source === 'straight' ? 'marks and gaps' : 'letter and word gaps'} within ±${Math.round(stage.tolerance * 100)}%. No response deadline.`;
+    const letters = letterGapWindow(timing(wpm,farnsworth),stage.tolerance);
+    const lastLetterMs = Math.min(Math.floor(letters.max + 1e-6), Math.ceil(letters.wordBoundary - 1e-6) - 1);
+    $('send-progress-rule').textContent = `${stage.required} clean transmissions in the last ${stage.window} attempts${stage.distinct > 1 ? `, covering ${stage.distinct} different exercises` : ''}${stage.focusCopies ? `, including ${stage.focusCopies} clean singles of ${stage.focus}` : ''}. ${this.source === 'straight' ? 'Timing' : 'Spacing'} score ${stage.qualityGoal}% or higher with at least 80% in range. Aim for ${Math.round(letters.target)} ms between letters. Gaps of ${Math.ceil(letters.min-1e-6)}–${lastLetterMs} ms count as clean letter spacing. ${this.source === 'straight' ? 'Other marks and gaps' : 'Word gaps'} allow ±${Math.round(stage.tolerance * 100)}%. No response deadline.`;
     this.renderExercise(); this.renderInput(); this.renderJourney(); this.updateActivity();
   }
 
@@ -305,6 +432,10 @@ export class SendingUI {
     const { dit, dah, showButtons } = this.keyboardPaddles;
     const dotKey = keyLabel(this.settings.reverse ? dah : dit), dashKey = keyLabel(this.settings.reverse ? dit : dah);
     const labels = JSON.stringify([dotKey, dashKey]);
+    $('shack-background-options').hidden=!this.native?.setShackRadio || converter;
+    $('shack-background-keys').checked=!!this.shackKeys;
+    const bindings=usb?'Left and Right Control':keyboard?dotKey+' and '+dashKey:'Space';
+    $('shack-background-hint').textContent=this.shackKeyError || ('On air only. '+bindings+' can transmit while you use another app. That app also receives those keys.');
     if (this.bindingLabels !== labels) {
       this.bindingLabels = labels;
       $('paddle-dot-key').value = dotKey; $('paddle-dash-key').value = dashKey;
@@ -343,14 +474,25 @@ export class SendingUI {
   updateWake() {
     this.wake.setActive(this.active() && !document.hidden && !this.pageHidden && (this.source === 'vband' && !this.native || this.usesPaddleSidetone && !!this.connection?.connected));
   }
+  setKeyTarget(target) {
+    if ((this.keyTarget || null) === target) return;
+    this.abort();
+    this.connection.resetStream?.();
+    this.connection.setLiveKeying?.(target?.live===true);
+    if (target?.live && (this.contacts.dit || this.contacts.dah)) this.neutral=false;
+    this.keyTarget = target;
+    if (this.native && !this.migrationPending) this.connection.configure(this.settings);
+    this.updateActivity();
+    this.updateMute();
+  }
   updateActivity() {
     const active = this.active() || (!this.native && this.inputSettingsOpen());
-    this.connection.setActive(active && !this.suspended && !document.hidden && !this.pageHidden && this.usesPaddleSidetone);
+    this.connection.setActive(active && this.inputAvailable && this.usesPaddleSidetone);
     this.updateWake();
   }
 
   updateMute() {
-    const mute = this.usesPaddleSidetone && this.active() && !this.suspended && !document.hidden && !this.pageHidden && (!this.heard || this.playing && !this.audioFinished || this.listenHeld || !!this.result?.valid || this.getProfile().sending.pendingLevel != null || !!document.querySelector('dialog[open]'));
+    const mute = this.usesPaddleSidetone && this.active() && !this.suspended && !document.hidden && !this.pageHidden && (!this.keyTarget && (!this.heard || this.playing && !this.audioFinished || this.listenHeld || !!this.result?.valid || this.getProfile().sending.pendingLevel != null) || this.blockingDialog());
     return this.sidetone.setMuted(!!mute);
   }
 
@@ -392,14 +534,19 @@ export class SendingUI {
   }
 
   abort(message = '', { preservePaddles = false, keepGraded = false } = {}) {
+    this.keyTarget?.reset();
     clearTimeout(this.checkTimer); clearTimeout(this.holdTimer);
     this.checkTimer = this.holdTimer = null;
     cancelAnimationFrame(this.keyerFrame); this.keyerFrame = null;
+    clearTimeout(this.backgroundKeyerTimer); this.backgroundKeyerTimer=null;
     this.audio.stop(); this.playing = false; this.audioFinished = false; this.playGeneration = (this.playGeneration || 0) + 1;
     this.tone.set(false, this.settings);
     this.keyer?.reset(); this.keyer = null;
     this.down = false;
     if (!preservePaddles) {
+      this.pointerHolds.clear();
+      for (const touch of this.paddleTouches.values()) touch.button?.removeAttribute('data-held');
+      this.paddleTouches.clear();
       if (this.vband?.cancel() && this.native && this.source === 'vband') void this.native.paddle('vband-release');
       this.contactHolds.dit.clear(); this.contactHolds.dah.clear();
       this.heldCodes.clear();
@@ -431,6 +578,7 @@ export class SendingUI {
     this.pauseInput('');
   }
   pauseInput(message = 'Input paused. Send the answer again.') {
+    this.backgroundMask=0; this.backgroundClock=null;
     let feedback = '';
     if (this.playing && !this.audioFinished) feedback = 'Playback paused. Hear the signal again.';
     else if (this.busy && !this.playing) feedback = message;
@@ -472,14 +620,25 @@ export class SendingUI {
 
   ready() {
     if (!this.usable()) return false;
+    if (this.keyTarget) return !this.usesPaddleSidetone || !this.sidetone.supported || this.sidetone.confirmed === false;
     if (this.result?.valid || this.getProfile().sending.pendingLevel) return false;
     if (!this.heard) { $('send-feedback').textContent = 'Listen first, then send your answer.'; return false; }
     if (this.usesPaddleSidetone && this.sidetone.supported && this.sidetone.confirmed !== false) return false;
     return true;
   }
 
-  edge({ down, at }, local = false) {
+  edge(event, local = false, duration) {
+    const {down, at} = event;
     if (!this.ready()) return;
+    if (this.keyTarget) {
+      if (down === this.down) return;
+      this.down = down;
+      if (local) this.tone.set(down, this.settings);
+      clearTimeout(this.holdTimer);
+      if (down) this.holdTimer = setTimeout(() => this.abort(), 10000);
+      this.keyTarget.edge(duration === undefined ? event : {...event, duration});
+      return;
+    }
     if (this.result) { this.edges = []; this.originAt = null; this.result = null; $('send-capture').removeAttribute('data-result'); }
     if (down === this.down) return;
     if (this.originAt == null) {
@@ -511,8 +670,10 @@ export class SendingUI {
     if (this.patternComplete) return 500;
     const { wpm, farnsworth } = this.settings;
     const time = timing(wpm, farnsworth), target = this.item.target;
-    const gap = target.includes(' ') ? time.wordGap : sendingTokens(target).length > 1 ? time.letterGap : time.elementGap;
-    return Math.max(500, gap * 1000 * (1 + this.stage.tolerance) + 180);
+    const tolerance = this.stage.tolerance;
+    const allowed = target.includes(' ') ? time.wordGap * 1000 * (1 + tolerance) : sendingTokens(target).length > 1 ?
+      letterGapWindow(time,tolerance).max : time.elementGap * 1000 * (1 + tolerance);
+    return Math.max(500, allowed + 180);
   }
   idleDelay() {
     const { continueMode, pauseSeconds } = this.settings;
@@ -561,8 +722,8 @@ export class SendingUI {
 
   makeKeyer(local) {
     return new PaddleKeyer({ wpm: this.settings.wpm, mode: this.settings.keyer,
-      onEdge: edge => this.edge(edge, local),
-      onReplay: local ? null : edges => this.replacePaddleCapture(edges),
+      onEdge: (edge, duration) => this.edge(edge, local, duration),
+      onReplay: local || this.keyTarget ? null : edges => this.replacePaddleCapture(edges),
     });
   }
 
@@ -576,6 +737,7 @@ export class SendingUI {
   }
 
   listenContact(dit, dah, pressed) {
+    if (this.keyTarget) return false;
     if (!dit && !dah && this.listenHeld) { this.listenHeld = false; this.updateMute(); this.renderExercise(); }
     if (this.playing) {
       this.listenHeld = dit || dah;
@@ -603,44 +765,57 @@ export class SendingUI {
     const contacts = this.contacts;
     if (this.listenContact(this.settings.reverse ? contacts.dah : contacts.dit, this.settings.reverse ? contacts.dit : contacts.dah, dit != null && released) || !this.ready()) return;
     this.keyer ||= this.makeKeyer(false);
-    if (dit == null) this.keyer.advance(at);
-    else if (!this.keyer.contacts(this.settings.reverse ? dah : dit, this.settings.reverse ? dit : dah, at)) {
+    if (dit == null) this.keyer.advance(this.keyTarget && !this.keyTarget.live ? Math.max(0,at - 180) : at);
+    else if (!this.keyer.contacts(this.settings.reverse ? dah : dit, this.settings.reverse ? dit : dah, this.keyTarget ? Math.max(at,this.keyer.clock) : at)) {
       this.heard = false;
       this.abort('Paddle timing was interrupted. Tap dit (E) to listen and try again.');
       this.updateMute();
     }
-    if (!this.keyer?.busy) this.showReleasedMatch();
+    if (!this.keyTarget && !this.keyer?.busy) this.showReleasedMatch();
   }
 
   keyboardContact(contact, down, owner = contact) {
+    this.changeContact(owner, down ? null : contact, down ? contact : null);
+  }
+
+  changeContact(owner, from, to, at=performance.now()) {
     if (this.source !== 'keyboard' && !(this.source === 'vband' && !this.native)) return;
-    const holds = this.contactHolds[contact];
-    const released = !this.contactHolds.dit.size && !this.contactHolds.dah.size;
-    const before = holds.size > 0;
-    if (down) holds.add(owner); else holds.delete(owner);
-    if (before === (holds.size > 0)) return;
+    const wasDit = this.contactHolds.dit.size > 0, wasDah = this.contactHolds.dah.size > 0;
+    if (from) this.contactHolds[from].delete(owner);
+    if (to) this.contactHolds[to].add(owner);
     const dit = this.contactHolds.dit.size > 0, dah = this.contactHolds.dah.size > 0;
-    if (this.listenContact(this.settings.reverse ? dah : dit, this.settings.reverse ? dit : dah, down && released) || !this.ready()) return;
+    if (dit === wasDit && dah === wasDah) return;
+    const left = this.settings.reverse ? dah : dit, right = this.settings.reverse ? dit : dah;
+    if (this.listenContact(left, right, !wasDit && !wasDah) || !this.ready()) return;
     this.keyer ||= this.makeKeyer(true);
-    if (!this.keyer.contacts(this.settings.reverse ? dah : dit, this.settings.reverse ? dit : dah, performance.now())) {
+    const singleTouch = typeof owner === 'number' && !!to && dit !== dah &&
+      (!wasDit && !wasDah || !!from && wasDit !== wasDah);
+    if (!this.keyer.contacts(left, right, Math.max(at,this.keyer.clock), singleTouch)) {
       this.heard = false; this.abort('Paddle timing was interrupted. Hear the signal again.'); this.updateMute(); return;
     }
-    if (!this.keyerFrame) this.keyerFrame = requestAnimationFrame(() => this.tickKeyer());
+    this.scheduleKeyer();
+  }
+
+  scheduleKeyer() {
+    if (this.keyerFrame!=null || this.backgroundKeyerTimer!=null) return;
+    if (this.backgroundInput && this.suspended) this.backgroundKeyerTimer=setTimeout(()=>this.tickKeyer(),8);
+    else this.keyerFrame=requestAnimationFrame(()=>this.tickKeyer());
   }
 
   tickKeyer() {
-    this.keyerFrame = null;
+    this.keyerFrame=null; this.backgroundKeyerTimer=null;
     if (!this.usable() || !this.keyer) return;
     this.keyer.advance(performance.now());
-    if (this.keyer.busy) this.keyerFrame = requestAnimationFrame(() => this.tickKeyer());
-    else this.showReleasedMatch();
+    if (this.keyer.busy) this.scheduleKeyer();
+    else if (!this.keyTarget) this.showReleasedMatch();
   }
 
   key(event, down) {
     const soundSlider = event.target?.type === 'range' && event.target.closest?.('#send-setup');
-    const editing = !soundSlider && event.target?.closest?.('input, textarea, select, summary, [contenteditable]:not([contenteditable="false"])');
+    const target = event.composedPath?.()[0] || event.target;
+    const editing = !soundSlider && target?.closest?.('input, textarea, select, summary, [contenteditable]:not([contenteditable="false"])');
     if (this.source === 'vband') {
-      const enabled = this.active() && !this.suspended && !document.hidden && !document.querySelector('dialog[open]') &&
+      const enabled = this.active() && !this.suspended && !document.hidden && !this.blockingDialog() &&
         !editing && (!this.native || this.connection.acceptsVBand);
       if (this.vband.handle(event, down, enabled)) return;
     } else if (!down) {
@@ -657,11 +832,12 @@ export class SendingUI {
       else if (held !== 'continue') this.keyboardContact(held, false, code);
       return;
     }
-    if (!this.active() || this.suspended || document.hidden || document.querySelector('dialog[open]') ||
+    if (!this.active() || this.suspended || document.hidden || this.blockingDialog() ||
         event.ctrlKey || event.altKey || event.metaKey || event.isComposing ||
         editing || event.target?.isContentEditable) return;
     let action;
-    if (char === 'e' && !this.playing && (this.result?.valid || this.getProfile().sending.pendingLevel)) action = 'continue';
+    if (this.keyTarget && event.code === 'Space' && target?.closest?.('button, a[href]')) return;
+    if (!this.keyTarget && char === 'e' && !this.playing && (this.result?.valid || this.getProfile().sending.pendingLevel)) action = 'continue';
     else if (this.source === 'straight' && (event.code === 'Space' || char === ' ')) action = 'straight';
     else if (this.source === 'keyboard' && char === this.keyboardPaddles.dit) action = 'dit';
     else if (this.source === 'keyboard' && char === this.keyboardPaddles.dah) action = 'dah';
@@ -672,7 +848,7 @@ export class SendingUI {
       if (action === 'continue') { if (!this.inputHeld()) this.playPrompt(); }
       else if (action === 'straight') this.straight(true, event.timeStamp);
       else this.keyboardContact(action, true, code);
-    } else if (event.key === 'Escape' && !soundSlider) { event.preventDefault(); this.clearAnswer(); }
+    } else if (!this.keyTarget && event.key === 'Escape' && !soundSlider) { event.preventDefault(); this.clearAnswer(); }
   }
 
   finish() {
@@ -692,7 +868,7 @@ export class SendingUI {
     if (grade.correct) $('send-decoded').textContent = this.item.target;
     $('send-feedback').textContent = grade.passed ? this.assisted ? 'Correct. Assisted practice; try the next exercise without the pattern.' : `Correct · ${grade.keyerTimed ? grade.assessed.length ? `spacing ${grade.quality}%` : 'keyer timed' : `timing ${grade.quality}%`} · +${award.xp} XP` : grade.issue;
     $('send-metrics').hidden = false;
-    const score = type => { const rows = grade.parts?.filter(p => type === 'marks' ? !p.type.includes('gap') : p.type.includes('gap')) || []; return rows.length ? `${Math.round(100 * rows.reduce((sum, p) => sum + Math.max(0, 1 - p.error), 0) / rows.length)}%` : '—'; };
+    const score = type => { const rows = grade.parts?.filter(p => type === 'marks' ? !p.type.includes('gap') : p.type.includes('gap') && (!grade.keyerTimed || p.type !== 'element gap')) || []; return rows.length ? `${Math.round(100 * rows.reduce((sum, p) => sum + p.score, 0) / rows.length)}%` : '—'; };
     $('send-metrics').replaceChildren(make('span', '', `Marks ${score('marks')}${this.source === 'straight' ? '' : ' · keyer timed'}`), make('span', '', `Spacing ${score('gaps')}`));
     if (award.levelUp || award.badges.length) {
       const milestone = award.levelUp && sendingBadges(s).find(c => c.end === this.stage.level);
