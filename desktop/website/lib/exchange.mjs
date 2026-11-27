@@ -72,6 +72,13 @@ export class Exchange {
       const result=route==='scores/session' ? { ready:true,...(!token ? {setToken:randomBytes(32).toString('base64url')} : {}) }
         : route==='private/adopt' ? this.private.adopt(token,legacy)
         : kind==='scores' ? this.scores.request(action,token,owner || legacy,body) : this.private.request(action,token,body);
+      // Stable compares its entire saved profile with this acknowledgement.
+      // Return the fields it understands while keeping the full save in the database.
+      if (kind === 'private' && result.profile && body.profileVersion !== 2) {
+        delete result.profile.shack;
+        delete result.profile.settings.sendWpm;
+        result.profile.sending.settings.wpm = result.profile.settings.wpm;
+      }
       if (Object.hasOwn(result,'setToken')) {
         const value=result.setToken;
         res.setHeader('Set-Cookie',names[kind]+'='+value+'; Path=/api/v2/; HttpOnly; SameSite=Strict; Max-Age='+(value?31536000:0)+(req.headers['x-forwarded-proto']==='https'?'; Secure':''));

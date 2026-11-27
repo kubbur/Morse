@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { SyncStore, SyncError } from './sync-store.mjs';
 import { digest } from './score-store.mjs';
 import { syncProfile, mergeProgress } from '../public/js/sync-data.mjs';
+import { mergeShack } from '../public/js/shack-model.mjs';
 import { resetLearnerProgress, resetListeningProgress, resetSendingProgress } from '../public/js/progress.mjs';
 import { pairedProgress } from '../public/js/initial-merge.mjs';
 
@@ -116,6 +117,18 @@ export class PrivateStore extends SyncStore {
       return { ...this.snapshot(this.device(next)), setToken: next };
     });
     if (action==='identity' || action==='leaderboard' || action==='erase') throw new SyncError(404,'This action is separate from private sync.');
+    // Joining replaces the unpaired device's current save with its submitted
+    // snapshot. Stable can only submit the portion it received.
+    if (action === 'join' && body.profileVersion !== 2 && body.profile?.settings) {
+      const device = this.device(token);
+      if (device) {
+        const saved = JSON.parse(this.save(device).profile);
+        const profile = {...body.profile, settings:{...body.profile.settings}};
+        if (saved.settings.sendWpm !== undefined) profile.settings.sendWpm = saved.settings.sendWpm;
+        if (saved.shack) profile.shack = mergeShack(saved.shack, profile.shack);
+        body = {...body, profile};
+      }
+    }
     this.initialFoundation=body.foundation;
     try { return super.request(action,token,body); } finally { this.initialFoundation=null; }
   }

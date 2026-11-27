@@ -10,7 +10,7 @@ import { PaddleConnection } from '../website/public/js/paddle.mjs';
 
 const f=7025;
 const open=(band,call,frequency=f,live=true,equipped=['0-0','1-0','2-0'])=>
-  band.request('open',{call,f:frequency,qualified:true,equipped,live});
+  band.request('open',{call,f:frequency,qualified:true,equipped,live,lifetimeXP:5000});
 const key=(edge,offset,stream='cw')=>({edge,offset,stream});
 
 test('a key-down wakes the tuned feed before release; overlapping uploads play once and old radios hear completed marks',async()=>{
@@ -124,7 +124,7 @@ test('a steady sender can start the next transmission with a smaller buffer',()=
 test('silent probes only reach opted-in stations on the frequency, including receive-only stations',()=>{
   let now=10000;
   const band=new ShackBand(()=>now), station=(call,gear,frequency=f)=>band.request('open',{
-    call,f:frequency,equipped:gear,invested:300,qualified:true,live:true,probes:true,
+    call,f:frequency,equipped:gear,invested:5000,lifetimeXP:5000,qualified:true,live:true,probes:true,
   });
   const a=station('PROBE1'), b=station('PROBE2',[null,'1-0','2-0']), old=open(band,'OLD1'), elsewhere=station('OTHER',undefined,7035);
   const sample=sent=>band.request('probe',{token:a.token,f,sent});

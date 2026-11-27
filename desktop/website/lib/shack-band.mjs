@@ -1,6 +1,6 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { SyncError } from './sync-store.mjs';
-import { validFrequency, canTransmit, validRhythm, equipment } from '../public/js/shack-model.mjs';
+import { validFrequency, canTransmit, validRhythm, equipment, shackUnlocked, SHACK_UNLOCK_XP, maxStationPrice } from '../public/js/shack-model.mjs';
 
 const fail = (code, message) => { throw new SyncError(code,message); };
 const lease = 45000;
@@ -92,6 +92,7 @@ export class ShackBand {
     this.sweep(now);
     if (!body || typeof body !== 'object') fail(400,'Invalid station.');
     if (action === 'open') {
+      if (!shackUnlocked(body.lifetimeXP)) fail(403,`The Shack unlocks at ${SHACK_UNLOCK_XP.toLocaleString()} lifetime XP.`);
       let value=body.invested, keyed=true;
       if (body.equipped!==undefined) {
         const gear=body.equipped;
@@ -101,7 +102,8 @@ export class ShackBand {
         value=gear.reduce((sum,id)=>sum+(equipment(id)?.price || 0),0);
         keyed=!!gear[0];
       }
-      if (!validFrequency(body.f) || !/^[A-Z0-9/]{2,16}$/.test(body.call || '') || !Number.isSafeInteger(value) || value<(keyed?300:250) || value>100000)
+      const minimum = keyed ? SHACK_UNLOCK_XP : SHACK_UNLOCK_XP - equipment('0-0').price;
+      if (!validFrequency(body.f) || !/^[A-Z0-9/]{2,16}$/.test(body.call || '') || !Number.isSafeInteger(value) || value<minimum || value>maxStationPrice)
         fail(400,'Invalid station.');
       if (this.sessions.size >= 120) fail(503,'The band is full. Try again shortly.');
       const token = randomBytes(32).toString('base64url'), id = randomUUID();

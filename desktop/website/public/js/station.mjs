@@ -36,7 +36,7 @@ export class Station extends DeviceSync {
   request(action,body={}) {
     if (action==='leaderboard') return this.exchange('scores/leaderboard');
     if (action==='start' || action==='join') body={...body,foundation:this.storage.row().foundation || syncProfile(newProfile())};
-    return this.exchange('private/'+action,body);
+    return this.exchange('private/'+action,{...body, profileVersion:2});
   }
   changed() {
     super.changed();
@@ -324,7 +324,7 @@ export class Station extends DeviceSync {
       if (hasLocalChanges(meta,syncProfile(this.getProfile()))) {
         this.schedule(0); return meta;
       }
-      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,legacySendingSessions:meta.legacySendingSessions,legacySendActivity:meta.legacySendActivity,legacyShack:meta.legacyShack};
+      const previous={base:meta.base,epoch:meta.epoch,seq:meta.seq,revision:meta.revision,localPlayback:meta.localPlayback,spacingPreference:meta.spacingPreference,localSendWpm:meta.localSendWpm,legacySendingSessions:meta.legacySendingSessions,legacySendActivity:meta.legacySendActivity,legacyShack:meta.legacyShack};
       const received=super.receive(result,meta);
       if (received?.force) {received.previous=previous;this.save(received);}
       return received;

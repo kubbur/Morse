@@ -11,9 +11,13 @@ npm ci
 npm start
 ```
 
-`npm start` uses a separate development profile and the running website at `https://morse.kubbur.digital`. For loopback testing, run `npm run staging` and `npm start -- --staging` in separate terminals. Development launches disable physical hardware. Packaged practice stays available offline.
+`npm start` and installed Dev builds use `https://morse-dev.kubbur.digital`. Installed Stable builds use `https://morse.kubbur.digital`. The installed build determines the host for rankings, private sync, pairing links and live CW. The update channel in Settings selects the next build from GitHub. For loopback testing, run `npm run staging` and `npm start -- --staging` in separate terminals. Development launches disable physical hardware. Packaged practice stays available offline.
 
 The web server takes its proxy and edge addresses from `MORSE_TRUSTED_PROXY_IP` and `MORSE_EDGE_IP`. Configure a previous HTTPS origin through `MORSE_LEGACY_ORIGINS` when moving browser saves. If multiple origins are listed, select the source with `MORSE_MOVE_FROM_ORIGIN`.
+
+To package the Dev website, run `python3 scripts/website-package.py /path/to/deployed-website --dev`. The image sets `MORSE_PUBLIC_ORIGIN=https://morse-dev.kubbur.digital`. Use the Dev container's own persistent data volume and database. Profiles, recovery codes, the leaderboard and live CW rooms belong to that deployment. Configure its reverse proxy to stream room feeds without buffering.
+
+The first Mac Dev build using this hostname starts with a fresh local profile in `Morse Development/morse-dev.kubbur.digital`. Earlier Dev builds keep their saves in the parent directory. To restore existing Dev progress, use a pairing link or recovery code from the Dev service.
 
 ```sh
 npm test

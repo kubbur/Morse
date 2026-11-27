@@ -68,12 +68,14 @@ export function playbackOnDevice(profile, fallback = DEFAULT_SENDING_SETTINGS) {
   return { ...profile, sending: { ...profile.sending, settings: { ...rest, continueMode, pauseSeconds } } };
 }
 
-// Older sites acknowledge a spacing speed above the sending speed as equal
-// to it. Remember the selected value only for that exact acknowledged pair.
+// Older sites clamp shared spacing to character speed. Some mirror that
+// result into Send, while others clamp Send to its own character speed.
 export function spacingOnDevice(profile, preference) {
   if (!preference || preference.farnsworth <= preference.wpm) return profile;
-  const clamped = settings => settings?.wpm === preference.wpm && settings.farnsworth === preference.wpm;
-  if (!clamped(profile.settings) || !clamped(profile.sending?.settings)) return profile;
+  const listen = profile.settings, send = profile.sending?.settings;
+  if (listen.wpm !== preference.wpm || listen.farnsworth !== listen.wpm ||
+      send?.wpm !== (listen.sendWpm ?? listen.wpm)) return profile;
+  if (send.farnsworth !== listen.farnsworth && send.farnsworth !== Math.min(preference.farnsworth, send.wpm)) return profile;
   const farnsworth = preference.farnsworth;
   return { ...profile, settings: { ...profile.settings, farnsworth },
     sending: { ...profile.sending, settings: { ...profile.sending.settings, farnsworth } } };
@@ -81,6 +83,7 @@ export function spacingOnDevice(profile, preference) {
 
 export function hasLocalChanges(meta, local) {
   let base = spacingOnDevice(playbackOnDevice(meta.base, meta.localPlayback), meta.spacingPreference);
+  base = sendingSpeedOnDevice(base, meta.localSendWpm);
   // Older sites retain the timestamped results but omit the session summaries.
   // The same result is sent once. Keep the full sessions on this installation.
   if (!base.sending.sessionHistory && local.sending.sessionHistory && meta.legacySendingSessions) {
@@ -96,6 +99,13 @@ export function hasLocalChanges(meta, local) {
   return syncChanged(base, local);
 }
 
+// Stable servers predating independent speeds return their listening WPM in both fields.
+export function sendingSpeedOnDevice(profile, wpm) {
+  if (!Number.isSafeInteger(wpm) || wpm < 5 || wpm > 80 || profile.settings.sendWpm !== undefined) return profile;
+  return { ...profile, settings:{...profile.settings, sendWpm:wpm},
+    sending:{...profile.sending, settings:{...profile.sending.settings, wpm}} };
+}
+
 // A three-way merge applies only work performed since this device's acknowledged
 // snapshot. Requests carry a persistent sequence number, so retrying a lost
 // response cannot apply this delta twice. Resets/imports use a separate epoch.
@@ -106,6 +116,7 @@ export function mergeProgress(baseInput, localInput, remoteInput) {
   result.sending = mergeSending(base.sending, local.sending, remote.sending);
   for (const key of ['callsign', 'leaderboard']) if (!same(base[key], local[key])) result[key] = local[key];
   for (const key of keys(base.settings, local.settings)) {
+    if (key === 'sendWpm' && local.settings.sendWpm === undefined) continue;
     if (!same(base.settings[key], local.settings[key])) result.settings[key] = local.settings[key];
   }
   for (const key of ['xp', 'total', 'solved', 'clean', 'focusCompletions']) result.stats[key] = plus(base.stats[key], local.stats[key], remote.stats[key]);

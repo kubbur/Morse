@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { siteOrigin, websiteClient } from '../src/website-client.mjs';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { newProfile, newState, importState, resetListeningProgress, resetSendingProgress, sanitizeSettings, STORAGE_KEY } from '../website/public/js/progress.mjs';
+import { newProfile, newState, importState, mirrorSendingSpeed, resetListeningProgress, resetSendingProgress, sanitizeSettings, STORAGE_KEY } from '../website/public/js/progress.mjs';
 import { PracticeStorage } from '../website/public/js/practice-storage.mjs';
 import { Station } from '../website/public/js/station.mjs';
 import { pairedProgress } from '../website/public/js/initial-merge.mjs';
@@ -231,6 +231,73 @@ test('old websites can acknowledge Send results without erasing the fuller sessi
   assert.equal(mac.p.sending.sessionHistory.fragments[0].answers, 2);
   assert.deepEqual(practiceSessions(mac.p).map(r => r.answers), [2]);
   assert.equal(mac.station.status.message, 'Progress synced');
+});
+
+test('independent sending speed survives a shared-speed server and follows explicit changes after upgrade', async t => {
+  const server = new Exchange(':memory:');
+  t.after(() => server.close());
+  let legacy = true, pushes = 0;
+  const mac = fixture(server, (action, payload, next) => {
+    if (action === 'private/push') pushes++;
+    if (!legacy) return next(action, payload);
+    const copy = structuredClone(payload);
+    for (const profile of [copy.body.profile, copy.body.base, copy.body.foundation]) {
+      if (!profile) continue;
+      delete profile.settings.sendWpm;
+      profile.sending.settings.wpm = profile.settings.wpm;
+    }
+    return next(action, copy);
+  });
+  Object.assign(mac.p.settings, {wpm:34, sendWpm:18});
+  mirrorSendingSpeed(mac.p);
+  await mac.station.start('Mac');
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(mac.p.settings.sendWpm, 18);
+  assert.equal(mac.station.meta().base.sending.settings.wpm, 34);
+  assert.equal(pushes, 0);
+  mac.p.settings.sendWpm = 21;
+  mirrorSendingSpeed(mac.p);
+  await mac.station.flush(); await mac.station.flush();
+  assert.equal(mac.station.status.message, 'Progress synced');
+  assert.equal(mac.p.sending.settings.wpm, 21);
+  assert.equal(pushes, 1);
+
+  const browser = fixture(server);
+  const { code } = await mac.station.request('recovery-code');
+  await browser.station.recover(code);
+  assert.equal(browser.p.sending.settings.wpm, 34, 'recover the speed actually stored by the old website');
+  legacy = false;
+  browser.p.settings.sendWpm = 26;
+  mirrorSendingSpeed(browser.p);
+  await browser.station.flush(); await mac.station.flush(); await mac.station.flush();
+  assert.equal(mac.p.settings.wpm, 34);
+  assert.equal(mac.p.sending.settings.wpm, 26);
+  assert.equal(mac.station.meta().localSendWpm, undefined);
+  assert.equal(pushes, 1);
+});
+
+test('the shared leaderboard counts scaled Send and Listen awards once after a lost acknowledgement', async t => {
+  const server = new Exchange(':memory:');
+  t.after(() => server.close());
+  let loseAck = true;
+  const mac = fixture(server, async (action, payload, next) => {
+    const result = await next(action, payload);
+    if (action === 'scores/submit' && loseAck) {
+      loseAck = false;
+      throw Error('Response lost after commit');
+    }
+    return result;
+  });
+  mac.share(true);
+  mac.earn(16);
+  mac.p.stats.xp += 17;
+  mac.storage.result(mac.p, 'send', 17);
+  mac.storage.setItem(STORAGE_KEY, JSON.stringify(mac.state));
+  await mac.station.flushScores();
+  assert.equal(mac.storage.row().scores.length, 2);
+  await mac.station.flushScores(); await mac.station.flushScores();
+  assert.equal(mac.storage.row().scores.length, 0);
+  assert.equal(server.scores.request('leaderboard', null, null, {}).entries[0].xp, 33);
 });
 
 test('enabling sharing publishes the next clean Send once and leaves earlier private XP out of the leaderboard', async t => {
@@ -761,15 +828,15 @@ test('checkout lowers the published rank and profiles show only equipped gear ac
     return receipt;
   });
   const second=fixture(exchange);
-  f.p.stats.xp=800;second.p.stats.xp=600;
+  f.p.stats.xp=5500;second.p.stats.xp=600;
   chooseVisibility(f,true,'TEST1');chooseVisibility(second,true,'TEST2');
   await f.station.flushScores();await second.station.flushScores();
-  assert.deepEqual(ranks(exchange).map(r=>r.xp),[800,600]);
+  assert.deepEqual(ranks(exchange).map(r=>r.xp),[5500,600]);
   const s=f.p.shack=sanitizeShack();
-  purchase(s,['0-0','1-0','2-0'],10,800);equip(s,'1-0',1,11);
+  purchase(s,['0-0','1-0','2-0'],10,5500);equip(s,'1-0',1,11);
   await f.station.flushScores();await f.station.flushScores();
   const entry=ranks(exchange)[1];
-  assert.deepEqual(entry,{callsign:'TEST1',xp:500,lifetimeXP:800,equipped:[null,'1-0',null],rank:2,streak:0});
+  assert.deepEqual(entry,{callsign:'TEST1',xp:500,lifetimeXP:5500,equipped:[null,'1-0',null],rank:2,streak:0});
   assert.equal(f.station.hasScores(f.storage.row()),false);
   const old=structuredClone(equipmentSnapshot(s));equip(s,'2-0',2,20);
   await f.station.flushScores();

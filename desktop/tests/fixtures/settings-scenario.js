@@ -85,16 +85,19 @@
   change('send-wpm',32);
   tab('practice');
   expect(get('view-send').contains(quick) && get('summary-tone').textContent==='1150 Hz','Listening did not use the sending controls');
-  tab('lab'); change('lab-curve','exponential'); change('lab-rise',8); change('lab-fall',11);
+  const oldListenSpeed = current().settings.wpm;
+  expect(get('summary-wpm').textContent===oldListenSpeed+' WPM' && oldListenSpeed !== 32,'Sending speed changed listening playback');
+  tab('lab'); change('lab-listen-wpm',36); change('lab-curve','exponential'); change('lab-rise',8); change('lab-fall',11);
   expect(current().settings.curve==='exponential' && current().sending.settings.wpm===32,'Shared settings were not saved');
   if(mac) await wait(()=>{const n=testSound();return n?.pitch===1150 && n.volume===64 && n.curve===2 && n.rise===8 && n.fall===11 && n.wpm===32 && n.farnsworth===32;},'Helper missed shared settings');
   get('reset-audio').click();
-  expect(current().settings.tone===1150 && current().settings.wpm===32 && current().settings.curve==='smooth','Reset envelope also changed quick controls');
+  expect(current().settings.tone===1150 && current().settings.wpm===36 && current().sending.settings.wpm===32 && current().settings.curve==='smooth','Independent speeds after resetting the envelope');
   tab('journey');
   if(fixture.mode==='mac-local') expect(get('leaderboard-message').textContent==='Offline practice' && !testRequests.includes('scores/leaderboard'),'Live leaderboard claimed locally');
   else {
     await wait(()=>testRequests.includes('scores/leaderboard'),'Public ranking read');
     if(fixture.mode==='mac-staging') expect(get('leaderboard-title').textContent==='Local test leaderboard','Test board source missing');
+    if(fixture.mode==='mac-dev') expect(get('leaderboard-title').textContent==='Dev leaderboard','Dev board source missing');
   }
   expect(get('copying-styles').textContent.includes('No answers recorded') && !get('copying-styles').textContent.includes('Ready'),'Copying status');
   get('progress-send').click();
@@ -147,6 +150,11 @@
     get('pair-devices').click();
     await wait(()=>!get('station-recovery').disabled,'Link did not enable code generation');
     expect(get('pair-offer').hidden && get('pair-devices').textContent==='Pair another device','Private sync opened an invitation');
+    if (fixture.mode === 'mac-dev') {
+      get('pair-devices').click();
+      await wait(()=>!get('pair-offer').hidden,'Dev pairing link missing');
+      expect(get('pair-link').value === 'https://morse-dev.kubbur.digital/#pair=' + 'i'.repeat(43),'Wrong Dev pairing hostname');
+    }
     get('station-recovery').click();
     await wait(()=>!get('recovery-issued').hidden && get('recovery-output').textContent.length===32,'Missing code');
     expect(testRequests.includes('private/recovery-code'),'Wrong recovery path');

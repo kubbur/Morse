@@ -228,12 +228,35 @@ export function advanceSending(sending) {
   return true;
 }
 
+const masteryXP = 30;
+const sendBaseXP = characters => 10 + 2 * Math.min(characters - 1, 10);
+const sendAwards = new Set([10, 10 + masteryXP]);
+for (let characters = 2; characters <= 11; characters++) {
+  for (const bonus of [0, 4, 5, 6]) {
+    const xp = sendBaseXP(characters) + bonus;
+    sendAwards.add(xp);
+    sendAwards.add(xp + masteryXP);
+  }
+}
+export const validSendingXP = xp => sendAwards.has(xp);
+
+function cleanSendingXP(target, grade, characters) {
+  const base = sendBaseXP(characters);
+  if (characters < 2 || !grade.assessed?.length || grade.quality < 90) return base;
+  // Compare complete transmissions, including the gaps the operator actually sent.
+  const referenceWpm = 30;
+  const referenceMs = timeline(target, {wpm:referenceWpm, farnsworth:referenceWpm}).duration * 1000;
+  const measuredWpm = Math.round(referenceWpm * referenceMs / grade.duration * 10) / 10;
+  return base + 4 + (measuredWpm >= 20 ? 1 : 0) + (measuredWpm >= 30 ? 1 : 0);
+}
+
 export function recordSending(sending, target, grade, { assisted = false, sessionId, stream, firstAttempt, day } = {}) {
   const stage = sendingStage(sending.level);
   if (!stage.items.some(item => item.target === target) || !grade.valid || !grade.complete) return { xp: 0, levelUp: false, badges: [] };
   const previousBadges = new Set(earnedSendBadges(sending));
   const record = sending.records[stage.level] ||= { attempts: 0, good: 0, best: 0, mastered: false, turn: 0, focusHistory: [], history: [], covered: [] };
   const passed = grade.passed && !assisted;
+  const characters = sendingTokens(target).length;
   if (stream && day) {
     const activity = sending.activity ||= {};
     const row = activity[stream] ||= { first: 0, clean: 0, days: [] };
@@ -246,7 +269,7 @@ export function recordSending(sending, target, grade, { assisted = false, sessio
   record.focusHistory = [...(record.focusHistory || []), passed && target === stage.focus].slice(-8);
   if (passed) {
     sending.clean++; record.good++;
-    sending.characters += sendingTokens(target).length;
+    sending.characters += characters;
     if (!record.covered.includes(target)) record.covered.push(target);
     if (stage.kind === 'reply') record.turn++;
   }
@@ -261,7 +284,7 @@ export function recordSending(sending, target, grade, { assisted = false, sessio
     record.mastered = true;
     sending.pendingLevel = stage.level < SENDING_LEVELS ? stage.level + 1 : null;
   }
-  const xp = (passed ? 10 : 0) + (levelUp ? 30 : 0);
+  const xp = (passed ? cleanSendingXP(target, grade, characters) : 0) + (levelUp ? masteryXP : 0);
   sending.earned = Math.min(1e9, sending.earned + xp);
   const result = { id: crypto.randomUUID(), at: Date.now(), xp };
   sending.results = [...sending.results, result].slice(-300);

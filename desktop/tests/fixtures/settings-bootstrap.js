@@ -16,7 +16,10 @@ function snapshot() { return { connected:true, profile:serverProfile, seq:0, rev
 const listing = { visible:null, revision:0, xp:30 };
 function exchange(action,body) {
   requests.push(action);
-  if (action==='capabilities') return {status:200, privateSync:config.mode==='mac-staging', scores:config.mode==='mac-staging', leaderboard:config.mode!=='mac-local'};
+  if (action==='capabilities') {
+    const v2 = ['mac-staging','mac-dev'].includes(config.mode);
+    return {status:200, privateSync:v2, scores:v2, leaderboard:config.mode!=='mac-local'};
+  }
   if (config.listing && action.startsWith('scores/')) {
     if (action==='scores/leaderboard') return {entries:listing.visible===false ? [] : [{rank:1,callsign:'TEST1',xp:listing.xp,streak:1}],me:null};
     if (action==='scores/session') return {ready:true};
@@ -45,7 +48,8 @@ if (config.mode.startsWith('mac')) {
     channel:'stable',automatic:false,automaticSupported:true,available:'',notes:'',installable:false,ready:false,phase:'idle',message:''};
   let updateChanged;
   window.morseMac = {
-    syncMode: config.mode==='mac-staging' ? 'staging' : config.mode==='mac-website' ? 'website' : 'offline', onUpdate(fn){updateChanged=fn;},
+    buildChannel: config.mode==='mac-dev' ? 'dev' : 'stable',
+    syncMode: config.mode==='mac-staging' ? 'staging' : ['mac-website','mac-dev'].includes(config.mode) ? 'website' : 'offline', onUpdate(fn){updateChanged=fn;},
     async update(action,value){
       if (action==='check') Object.assign(update,{available:'2.0.0',phase:'checked',installable:true,notes:'New timing display\n<em>Release text</em>'});
       if (action==='automatic') update.automatic=value;

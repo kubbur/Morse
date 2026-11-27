@@ -141,6 +141,7 @@ h2 { font-size: 1.25rem; letter-spacing: -.035em; } h3 { font-size: 1.05rem; }
 .shack-dialog-bar {display:flex;justify-content:flex-end;margin-bottom:.5rem}
 #shack-input-dialog,#shack-check-dialog,#operator-profile-dialog {width:min(92vw,36rem);max-height:86vh;overflow:auto}
 #shack-input-dialog .input-settings {padding:0;border:0;box-shadow:none}
+#shack-input-dialog .send-lesson-setting {display:none}
 #shack-check-dialog .card {border:0;padding:0;background:transparent}
 #shack-check-dialog [data-check-status]:empty {display:none}
 #shack-station .profile-call {display:block;margin-left:auto;font:650 1.1rem var(--mono);color:var(--ink)}

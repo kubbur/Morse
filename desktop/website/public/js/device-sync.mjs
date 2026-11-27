@@ -1,4 +1,4 @@
-import { syncProfile, mergeProgress, syncChanged, playbackOnDevice, spacingOnDevice, hasLocalChanges } from './sync-data.mjs';
+import { syncProfile, mergeProgress, syncChanged, playbackOnDevice, spacingOnDevice, sendingSpeedOnDevice, hasLocalChanges } from './sync-data.mjs';
 import { parseProgressJson } from './import-validation.mjs';
 import { mergeSendingSessions } from './sessions.mjs';
 
@@ -10,6 +10,8 @@ function rememberReceipt(meta, submitted, received) {
   const preference = { wpm, farnsworth };
   if (spacingOnDevice(received, preference) !== received) meta.spacingPreference = preference;
   else delete meta.spacingPreference;
+  if (received.settings.sendWpm === undefined && submitted.settings.sendWpm !== undefined) meta.localSendWpm = submitted.settings.sendWpm;
+  else delete meta.localSendWpm;
   meta.legacySendingSessions = !!submitted.sending.sessionHistory && !received.sending?.sessionHistory;
   meta.legacyShack = !!submitted.shack && !received.shack;
   meta.legacySendActivity = !!submitted.sending.activity && !received.sending?.activity;
@@ -110,8 +112,9 @@ export class DeviceSync {
     const replace = meta.force;
     const local = syncProfile(this.getProfile());
     const remote = playbackOnDevice(meta.remote, local.sending.settings);
-    const preferred = spacingOnDevice(remote, meta.spacingPreference);
-    const base = spacingOnDevice(meta.base, meta.spacingPreference);
+    const spaced = spacingOnDevice(remote, meta.spacingPreference);
+    const preferred = sendingSpeedOnDevice(spaced, meta.localSendWpm);
+    const base = sendingSpeedOnDevice(spacingOnDevice(meta.base, meta.spacingPreference), meta.localSendWpm);
     let merged = replace ? preferred : mergeProgress(base, local, preferred);
     if (replace && !preferred.sending.sessionHistory && local.sending.sessionHistory &&
         preferred.sending.results?.some(r => local.sending.sessionHistory.recorded[r.id])) {
@@ -119,7 +122,8 @@ export class DeviceSync {
       merged = { ...preferred, sending: { ...preferred.sending, sessionHistory: history } };
       meta.legacySendingSessions = true;
     }
-    if (preferred === remote) delete meta.spacingPreference;
+    if (spaced === remote) delete meta.spacingPreference;
+    if (remote.settings.sendWpm !== undefined) delete meta.localSendWpm;
     if (replace && !preferred.sending.activity && local.sending.activity && meta.legacySendActivity) {
       merged = { ...merged, sending: { ...merged.sending, activity: local.sending.activity } };
     }

@@ -1,6 +1,7 @@
 import { pairedProgress } from './initial-merge.mjs';
+import { devOrigin, invitationFromLink, serviceOrigin } from './service-origin.mjs';
 import { ShackUI } from './shack-ui.mjs';
-import { balances, certify } from './shack-model.mjs';
+import { balances, certify, SHACK_UNLOCK_XP, shackUnlocked } from './shack-model.mjs';
 import { operatorProfile } from './shack-views.mjs';
 import { drawGear } from './shack-gear.mjs';
 import { syncProfile, mergeProgress } from './sync-data.mjs';
@@ -98,7 +99,8 @@ const learnerStations = new Map();
 let sender = null;
 let choicesKey = '';
 let acceptedSound = false;
-const soundFields = ['wpm','farnsworth','tone','volume','rise','fall','curve'];
+const sharedSoundFields = ['farnsworth','tone','volume','rise','fall','curve'];
+const soundFields = ['wpm','sendWpm', ...sharedSoundFields];
 let pairingInvitation = /^#pair=([A-Za-z0-9_-]{43})$/.exec(location.hash)?.[1] || null;
 let pairingOffer = null;
 let pairingDevicesKey = '';
@@ -108,7 +110,7 @@ let leaderboardLoading = false;
 let leaderboardRefreshDue = false;
 let leaderboardUpdated = 0;
 const mac = window.morseMac;
-const pairingOrigin = mac ? (mac.syncMode === 'staging' ? 'http://127.0.0.1:38764' : 'https://morse.kubbur.digital') : location.origin;
+const websiteOrigin = mac ? serviceOrigin(mac.syncMode, mac.buildChannel) : location.origin;
 let service = {privateSync: !mac, scores: !mac, leaderboard: !mac};
 async function refreshService() {
   if (!mac) return;
@@ -413,6 +415,7 @@ function completeListening(p, options) {
 
 function persist() {
   const success = saveState(storage, state, cookie => { document.cookie = cookie; }, location.protocol === 'https:');
+  updateShackTab();
   if (!success) {
     $('saved-status').textContent = 'Not saved — export to keep your progress';
     $('storage-warning').textContent = 'Local storage is unavailable or full. Export your progress from Saved progress before leaving.';
@@ -700,7 +703,14 @@ function characterChips(characters) {
   return [...characters].map(c => `<button type="button" class="character-chip${auditionCharacter === c ? ' is-auditioning' : ''}" data-character="${escape(c)}" aria-label="Listen to ${escape(c)}"><strong>${escape(c)}</strong><small>${patternFor(c).replaceAll('.', '·').replaceAll('-', '−')}</small></button>`).join('');
 }
 
+function canOpenShack() {
+  return shackUnlocked(storage.scoreTotal(profile()));
+}
+function updateShackTab() {
+  $('nav-shack').hidden = !canOpenShack();
+}
 function renderHeader() {
+  updateShackTab();
   document.documentElement.dataset.theme = state.theme;
   document.body.dataset.activeView = view;
   $('theme-toggle').innerHTML = icon(state.theme === 'dark' ? 'sun' : 'moon');
@@ -717,7 +727,7 @@ function renderHeader() {
 }
 
 function renderControls() {
-  const settings = { ...profile().settings, recallSeconds: responseGoal(profile()) };
+  const p = profile(), settings = { ...p.settings, sendWpm:p.settings.sendWpm ?? p.settings.wpm, recallSeconds:responseGoal(p) };
   const stage = isGrowingCourse(settings) ? courseStage(settings.courseLevel) : null;
   $('lab-course').min = stage?.audioAlphabet ? '2' : '4';
   $$('[data-setting]').forEach(control => {
@@ -726,12 +736,12 @@ function renderControls() {
     if (control.type === 'checkbox') control.checked = settings[key];
     else if (document.activeElement !== control || control.type === 'range') control.value = settings[key];
     if (control.type === 'range') {
-      control.setAttribute('aria-valuetext', `${control.value}${['wpm', 'farnsworth'].includes(key) ? ' words per minute' : key === 'tone' ? ' hertz' : ['rise', 'fall'].includes(key) ? ' milliseconds' : key === 'volume' ? ' percent' : key === 'recallSeconds' ? ' seconds per character' : ''}`);
+      control.setAttribute('aria-valuetext', `${control.value}${['wpm', 'sendWpm', 'farnsworth'].includes(key) ? ' words per minute' : key === 'tone' ? ' hertz' : ['rise', 'fall'].includes(key) ? ' milliseconds' : key === 'volume' ? ' percent' : key === 'recallSeconds' ? ' seconds per character' : ''}`);
     }
   });
   $$('[data-value]').forEach(output => { output.textContent = settings[output.dataset.value]; });
-  $('send-speed-hint').textContent = settings.farnsworth > settings.wpm
-    ? `Standard spacing at ${settings.wpm} WPM is in use. Your spacing setting is ${settings.farnsworth} WPM.`
+  $('send-speed-hint').textContent = settings.farnsworth > settings.sendWpm
+    ? `Standard spacing at ${settings.sendWpm} WPM is in use. Your spacing setting is ${settings.farnsworth} WPM.`
     : 'Lower the spacing speed for longer gaps between letters and words.';
   $('summary-wpm').textContent = `${settings.wpm} WPM`;
   $('summary-farnsworth').textContent = settings.farnsworth >= settings.wpm ? 'Standard spacing' : `${settings.farnsworth} Farnsworth`;
@@ -950,7 +960,7 @@ function renderPractice() {
       else if (focused) $('answer-feedback').textContent = round.focusComplete ? `Focus complete Back to level ${settings.courseLevel}…` : 'Correct. Next signal…';
       $('answer-feedback').classList.add('success');
       if (round.clean && copyResponses(round).some(ms => ms !== null && ms > responseGoal(p) * 1000)) $('answer-feedback').classList.add('slower');
-      $('result-copy').innerHTML = `<span class="answer-reveal">✓ ${answer}</span><span>· +${round.awarded} XP</span>${round.speedBonus ? `<span class="quick-bonus" aria-label="${round.speedBonus} quick-copy bonus">· +${round.speedBonus} quick</span>` : ''}`;
+      $('result-copy').innerHTML = `<span class="answer-reveal">✓ ${answer}</span><span>· +${round.awarded} XP</span>${round.speedBonus ? `<span class="quick-bonus">(${round.speedBonus} for quick copy)</span>` : ''}`;
     } else {
       $('answer-feedback').textContent = 'Answer shown. Enter starts the next signal.';
       $('result-copy').innerHTML = `<span>The signal was</span><span class="answer-reveal">${answer}</span><span>· No points lost</span>`;
@@ -1117,6 +1127,9 @@ function renderJourney() {
   $('progress-listen').setAttribute('aria-pressed', String(!send));
   $('progress-send').setAttribute('aria-pressed', String(send));
   $('progress-total').textContent = `${governingXP(p).toLocaleString()} total XP · ${badges.size} badges`;
+  const unlocked = canOpenShack(), lockMessage = `The Shack unlocks at ${SHACK_UNLOCK_XP.toLocaleString()} lifetime XP`;
+  $('progress-total').disabled = !unlocked;
+  $('progress-total').title = unlocked ? 'Open The Shack' : lockMessage;
   const first = { total: 0, clean: 0 }, sendDays = {};
   for (const row of Object.values(p.sending.activity || {})) {
     first.total += row.first; first.clean += row.clean;
@@ -1141,9 +1154,10 @@ function renderJourney() {
   $('send-weak-characters').innerHTML = weakSend.length ? '<div class="weak-chips">' + weakSend.map(([c, row]) =>
     `<span class="weak-item"><strong>${escape(c)}</strong><small>${row.recent.filter(Boolean).length}/${row.recent.length} correct</small></span>`).join('') + '</div>' : '<p class="empty-note">No recent missed patterns.</p>';
   const back = $('progress-return');
+  if (progressReturn === 'shack' && !unlocked) progressReturn = 'practice';
   back.dataset.view = progressReturn;
   back.textContent = '← Back to ' + ({practice:'Listen',send:'Send',shack:'The Shack',lab:'Settings'}[progressReturn] || 'Listen');
-  $('stats-grid').innerHTML = cards.map(([label, value, caption]) => `<article class="card stat-card"><span class="eyebrow">${label}</span><strong>${value}</strong><p>${caption}</p></article>`).join('') + `<button type="button" class="card stat-card shack-xp" data-view="shack"><span class="eyebrow">TOTAL XP</span><strong>${governingXP(p).toLocaleString()} XP</strong><span>Open The Shack →</span></button>`;
+  $('stats-grid').innerHTML = cards.map(([label, value, caption]) => `<article class="card stat-card"><span class="eyebrow">${label}</span><strong>${value}</strong><p>${caption}</p></article>`).join('') + `<button type="button" class="card stat-card shack-xp" data-view="shack" ${unlocked ? '' : 'disabled'}><span class="eyebrow">TOTAL XP</span><strong>${governingXP(p).toLocaleString()} XP</strong><span>${unlocked ? 'Open The Shack →' : lockMessage}</span></button>`;
   const days = Array.from({ length: 7 }, (_, index) => { const date = new Date(); date.setDate(date.getDate() - 6 + index); return { date, count: stats.days[localDay(date)] || 0 }; });
   const max = Math.max(5, ...days.map(d => d.count));
   $('weekly-chart').innerHTML = days.map(({ date, count }, index) => `<div class="week-day${index === 6 ? ' today' : ''}"><strong>${count}</strong><div class="week-bar" data-count="${count}"></div><span>${date.toLocaleDateString(undefined, { weekday: 'short' })}</span></div>`).join('');
@@ -1182,12 +1196,17 @@ $('leaderboard-rows').addEventListener('click',event=>{
   showOperator(publicOperators.get(button.dataset.operator));
 });
 const inputCard=$('input-settings'), inputHome=inputCard.parentNode, nextInputCard=inputCard.nextElementSibling;
+const sendSpeedControl = $('send-wpm').closest('.lab-control');
+const sendSpeedHome = sendSpeedControl.parentElement;
 function showShackInputs() {
   $('shack-input-body').append(inputCard);
+  inputCard.querySelector('.section-heading').after(sendSpeedControl);
   openDialog('shack-input-dialog');
   sender.updateActivity(); sender.renderInput();
 }
 $('shack-input-dialog').addEventListener('close',()=>{
+  if ($('shack-input-dialog').open) return;
+  sendSpeedHome.prepend(sendSpeedControl);
   inputHome.insertBefore(inputCard,nextInputCard);
   sender.updateActivity(); sender.renderInput();
 });
@@ -1257,6 +1276,7 @@ function renderListingStatus() {
 }
 async function refreshLeaderboard(force = false) {
   if (mac?.syncMode === 'staging') $('leaderboard-title').textContent = 'Local test leaderboard';
+  else if (websiteOrigin === devOrigin) $('leaderboard-title').textContent = 'Dev leaderboard';
   if (mac?.syncMode === 'offline') {
     $('leaderboard-message').textContent = 'Offline practice';
     return;
@@ -1446,7 +1466,7 @@ function renderSoundChoice(native) {
         const p = profile();
         if (choicesKey !== key) return;
         const prior = p.settings, previousTiming = p.previousTiming;
-        p.settings = sanitizeSettings({ ...prior, ...settings }); delete p.previousTiming;
+        p.settings = sanitizeSettings({ ...prior, ...settings, sendWpm:settings.wpm }); delete p.previousTiming;
         mirrorSendingSpeed(p);
         if (!persist()) {
           p.settings = prior; if (previousTiming) p.previousTiming = previousTiming;
@@ -1463,6 +1483,11 @@ function renderSoundChoice(native) {
 }
 
 function render() {
+  if (view === 'shack' && !canOpenShack()) {
+    history.replaceState({progressReturn:'practice'}, '', '#journey');
+    changeView('journey');
+    return;
+  }
   if (sender) {
     const pending = renderSoundChoice(sender.connection?.status);
     if (sender.native && sender.connection?.status) sender.migrationPending = pending;
@@ -1519,6 +1544,7 @@ async function playSound(text, settings, kind, character = '') {
     const spoken = kind === 'round' && currentRound?.focus ? text : kind === 'character' && Object.hasOwn(PROSIGNS, text) ? `<${text}>` : ['round', 'review', 'guidance', 'example'].includes(kind) ? transmissionText(text, settings) : text;
     const result = await audio.play(spoken, settings, { onSchedule(plan, startsAt, elapsed) {
       if (kind === 'round' && !currentRound.completed) {
+        currentRound.heardWpm = settings.wpm;
         const session = createCopySession(plan, startsAt);
         session.text = normalizeText(currentRound.draft).replaceAll(' ', '');
         session.responses = Array(session.text.length).fill(null);
@@ -1666,6 +1692,7 @@ function openChart() {
 
 function changeView(next) {
   if (!views.includes(next)) return;
+  if (next === 'shack' && !canOpenShack()) next = 'journey';
   const shackNavigation = view === 'shack' || next === 'shack';
   if (next === 'journey' && view !== next) progressReturn = view;
   if (view === 'shack' && next !== view) {
@@ -1691,7 +1718,8 @@ function changeView(next) {
 }
 
 function changeSettings(updates) {
-  stopPlayback();
+  const sendSpeedOnly = Object.keys(updates).length === 1 && Object.hasOwn(updates, 'sendWpm');
+  if (!sendSpeedOnly) stopPlayback();
   const p = profile();
   if ($('activity-dialog').open && $('listen-activity').value === 'custom' && p.settings.lesson === 'starter' && updates.content === 'groups') {
     updates = { ...updates, lesson:'custom', custom:alphabetFor(p.settings) };
@@ -1701,6 +1729,7 @@ function changeSettings(updates) {
   if (Object.hasOwn(updates, 'courseLevel') || Object.hasOwn(updates, 'courseCount')) updates = { ...updates, track: 'course' };
   const oldKey = practiceKey(p.settings);
   const previousSettings = p.settings;
+  if (Object.hasOwn(updates,'wpm') && p.settings.sendWpm === undefined) updates = {sendWpm:p.settings.wpm, ...updates};
   const previous = p.round?.target || '';
   const courseChanged = Object.hasOwn(updates, 'courseCount') && Number(updates.courseCount) !== p.settings.courseCount;
   // Moving the quick copy slider sets a manual goal. Keep that goal when the
@@ -1710,8 +1739,13 @@ function changeSettings(updates) {
   const audioAlphabet = isGrowingCourse(p.settings) && courseStage(p.settings.courseLevel).audioAlphabet;
   p.settings = sanitizeSettings({ ...p.settings, ...updates, ...(courseChanged ? { courseLevel: audioAlphabet ? earCourseLevelFor(Number(updates.courseCount)) : courseLevelFor(Number(updates.courseCount), 1) } : {}) });
   mirrorSendingSpeed(p);
-  if (sender?.busy && !sender.playing && soundFields.some(key => p.settings[key] !== previousSettings[key])) {
+  const oldSendSpeed = previousSettings.sendWpm ?? previousSettings.wpm;
+  if (sender?.busy && !sender.playing && (p.sending.settings.wpm !== oldSendSpeed ||
+      sharedSoundFields.some(key => p.settings[key] !== previousSettings[key]))) {
     sender.pauseInput('Sound settings changed. Send the answer again.');
+  }
+  if (sendSpeedOnly) {
+    persist(); render(); return;
   }
   const hadFocus = !!p.focus?.active;
   p.focus = sanitizeFocus(p.focus, p.settings);
@@ -1868,7 +1902,7 @@ document.addEventListener('input', event => {
       document.querySelector(`[data-value="${name}"]`).textContent = value;
       control.setAttribute('aria-valuetext', `${value} ${unit}`);
     };
-    preview(key,control.value,({wpm:'words per minute',farnsworth:'words per minute',tone:'hertz',volume:'percent'})[key] || 'milliseconds');
+    preview(key,control.value,({wpm:'words per minute',sendWpm:'words per minute',farnsworth:'words per minute',tone:'hertz',volume:'percent'})[key] || 'milliseconds');
     return;
   }
   if (key === 'custom') return; // Apply a custom alphabet on change, after typing.
@@ -2340,6 +2374,8 @@ function stationFor(id) {
     onStatus: status => { if (state.activeId === id) renderDeviceSync(status); },
     onScoresPublished: () => {
       if (state.activeId !== id) return;
+      updateShackTab();
+      if (view === 'shack' && !canOpenShack()) render();
       leaderboardUpdated = 0;
       if (view === 'journey') { renderJourney(); void refreshLeaderboard(true); }
       if ($('progress-dialog').open) renderSavedProgress();
@@ -2439,7 +2475,7 @@ $('pair-devices').addEventListener('click', event => pairingAction(event.current
     return;
   }
   pairingOffer = result.invitation;
-  const link = `${pairingOrigin}/#pair=${pairingOffer}`;
+  const link = `${websiteOrigin}/#pair=${pairingOffer}`;
   $('pair-link').value = link; showPairQr(link);
   $('pair-offer').hidden = false;
   renderDeviceSync(deviceSync.status);
@@ -2500,9 +2536,9 @@ $('recover-replace').onclick=e=>pairingAction(e.currentTarget,async()=>{
 });
 $('station-redeem').onclick=e=>pairingAction(e.currentTarget,async()=>{
   const value=$('station-code').value.trim();
-  const invite = value.startsWith(pairingOrigin+'/#pair=') ? /^([A-Za-z0-9_-]{43})$/.exec(value.slice((pairingOrigin+'/#pair=').length)) : null;
+  const invite = invitationFromLink(value, websiteOrigin);
   $('station-code').value='';
-  if (invite) { pairingInvitation=invite[1]; renderDeviceSync(deviceSync.status); }
+  if (invite) { pairingInvitation=invite; renderDeviceSync(deviceSync.status); }
   else if (/^[A-Za-z0-9_-]{32}$/.test(value)) {
     pendingRecovery=null; $('recovery-replacement').hidden=true;
     const devices=await deviceSync.recover(value);

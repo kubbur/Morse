@@ -2,12 +2,13 @@ import { app, BrowserWindow, Menu, dialog, session, shell, ipcMain, powerMonitor
 import { fileURLToPath } from 'node:url';
 import { join, isAbsolute, resolve } from 'node:path';
 import { mkdirSync, realpathSync } from 'node:fs';
-import { APP_ORIGIN, WEBSITE, appDocument, allowedRequest, allowedPermission, progressExport } from './policy.mjs';
+import { APP_ORIGIN, appDocument, allowedRequest, allowedPermission, channelForBuild, websiteProfileDirectory, progressExport } from './policy.mjs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { bundledTrainer } from './bundled-trainer.mjs';
 import { PaddleService } from './paddle-service.mjs';
 import { LearnerDB } from './learner-db.mjs';
 import { websiteClient } from './website-client.mjs';
+import { serviceOrigin } from '../website/public/js/service-origin.mjs';
 import { checkUpdate } from './updates.mjs';
 import { channelPreference, macInstaller, UpdateManager } from './update-manager.mjs';
 
@@ -17,7 +18,10 @@ const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url));
 let window, db, paddle, updates, updateTimer, exchange, closing = false, stopping = false;
 const isolated = app.commandLine.hasSwitch('morse-isolated');
 const staged = app.commandLine.hasSwitch('morse-staging');
+const version = app.getVersion();
+const buildChannel = channelForBuild(version, app.isPackaged);
 const syncMode = staged ? 'staging' : isolated && !app.commandLine.hasSwitch('morse-website') ? 'offline' : 'website';
+let profileDirectory;
 if (isolated || staged) {
   const path = app.commandLine.getSwitchValue('user-data-dir');
   const personal = resolve(app.getPath('appData'), 'Morse');
@@ -26,9 +30,15 @@ if (isolated || staged) {
   const directory = realpathSync(path);
   const inPersonal = directory === personal || directory.startsWith(personal+'/');
   if (inPersonal) throw new Error('Select a test directory outside the personal Morse profile.');
-  app.setPath('userData',directory);
-} else if (app.getVersion().includes('-dev.')) {
-  app.setPath('userData', join(app.getPath('appData'),'Morse Development'));
+  profileDirectory = directory;
+} else if (buildChannel === 'dev') {
+  profileDirectory = join(app.getPath('appData'), 'Morse Development');
+}
+if (profileDirectory) {
+  const directory = websiteProfileDirectory(profileDirectory, syncMode, buildChannel);
+  mkdirSync(directory, {recursive:true, mode:0o700});
+  app.setPath('userData', directory);
+  app.setPath('sessionData', directory);
 }
 function publish(channel, data) {
   const wc=window?.webContents;
@@ -94,7 +104,7 @@ function createWindow() {
     webPreferences: {
       preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), partition: 'persist:morse', sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false,
-      devTools: !app.isPackaged, additionalArguments: ['--morse-sync='+syncMode],
+      devTools: !app.isPackaged, additionalArguments: ['--morse-sync='+syncMode, '--morse-build='+buildChannel],
     },
   });
   const contents = window.webContents;
@@ -152,7 +162,7 @@ function menu() {
     { role: 'windowMenu' },
     { role: 'help', submenu: [
       { label: 'Paddle settings', click: () => openPageControl("document.querySelector('.main-nav [data-view=lab]').click(); document.getElementById('send-source').focus()") },
-      { label: 'Open website', click: () => shell.openExternal(WEBSITE) },
+      { label: 'Open website', click: () => shell.openExternal(serviceOrigin(syncMode, buildChannel) + '/') },
     ] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -185,17 +195,15 @@ else {
     const dir=app.getPath('userData');
     await mkdir(dir,{recursive:true,mode:0o700});
     db=new LearnerDB(join(dir,'morse-learners-v2.sqlite'));
-    const version = app.getVersion();
     const notes = await readFile(new URL('../assets/release-notes.json', import.meta.url), 'utf8').then(JSON.parse).catch(() => ({}));
     const updateEnabled = app.isPackaged && process.platform === 'darwin' && !isolated && !staged;
     const preference = channelPreference(join(app.getPath('appData'), 'Morse'));
-    const defaultChannel = version.includes('-dev.') ? 'dev' : 'stable';
     updates = new UpdateManager({ version, installedNotes: notes?.[version] || '', enabled: updateEnabled,
       automatic: db.automaticUpdates, storeAutomatic: value => { db.automaticUpdates = value; },
-      channel: updateEnabled ? preference.read(defaultChannel) : defaultChannel, storeChannel: value => preference.write(value),
+      channel: updateEnabled ? preference.read(buildChannel) : buildChannel, storeChannel: value => preference.write(value),
       lookup: channel => checkUpdate(version, process.arch, fetch, channel), installer: updateEnabled ? await macInstaller(process.resourcesPath).catch(() => null) : null,
       changed: state => publish('update-state', state) });
-    exchange=websiteClient(db.db,safeStorage,syncMode);
+    exchange=websiteClient(db.db,safeStorage,syncMode,fetch,buildChannel);
     const browserSession=session.fromPartition('persist:morse');
     browserSession.protocol.handle('http',await bundledTrainer(join(app.getAppPath(),'website/public')));
     installSessionPolicy(); registerIPC();

@@ -24,6 +24,10 @@
   Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => true });
   window.dispatchEvent(new Event('focus'));
+  check(el('nav-shack').hidden && el('progress-total').disabled,'The Shack is open below the XP threshold');
+  location.hash='shack';
+  await wait(()=>location.hash==='#journey' && !el('view-journey').hidden,'Locked Shack link did not return to Progress');
+  check(document.querySelector('.shack-xp').disabled && !el('shack-station').children.length,'Locked Progress entry or station mounted');
   const { MorseAudio } = await import('/js/audio.mjs');
   const { KeyTone } = await import('/js/send-ui.mjs');
   const { loadKeyboardPaddles } = await import('/js/keyboard-paddles.mjs');
@@ -71,6 +75,7 @@
   check(heard[1] === heard[0] && !el('send-decoded').textContent && current().sending.attempts === attempts + 1, 'Command entered the retry');
   key('keydown','Ö','Semicolon',{shiftKey:true}); key('keyup','ö','Semicolon');
   await wait(() => el('send-capture').dataset.result === 'good', 'Layout-aware dot was graded');
+  check(current().stats.xp>=5000 && !el('nav-shack').hidden,'Sending across the threshold did not reveal the tab');
   const xp = current().sending.earned;
   await waitMs(1300);
   check(heard.length === 2 && el('send-instruction').textContent.includes('Press E'), 'Manual result did not wait');

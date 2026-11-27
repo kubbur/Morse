@@ -1,4 +1,4 @@
-import { sanitizeShack, items, equipment, cost, equip, purchase, sellBadge, assembled, installed, receiving, minimumStation, qualified, canTransmit, alphabet, coverage, frequency, validFrequency, validRhythm, rooms, hunt } from './shack-model.mjs';
+import { sanitizeShack, items, equipment, cost, equip, purchase, sellBadge, assembled, installed, receiving, minimumStation, qualified, canTransmit, alphabet, coverage, frequency, validFrequency, validRhythm, rooms, hunt, SHACK_UNLOCK_XP } from './shack-model.mjs';
 import { timeline } from './morse.mjs';
 import { decodeSending } from './sending.mjs';
 import { BandRadio, Receiver } from './shack-radio.mjs';
@@ -58,7 +58,8 @@ export class ShackUI {
   connectBand() {
     if (!receiving(this.s)) { this.monitor=false; this.receiver.audio.setListening(false); this.receiver.stop(); this.band.close(); return; }
     const equipped=this.s.equipped.map(slot=>slot?.id || null);
-    void this.band.tune({f:this.f, call:this.call, invested:installed(this.s), qualified:qualified(this.p), equipped});
+    const lifetimeXP = Math.min(this.xp(this.p), SHACK_UNLOCK_XP);
+    void this.band.tune({f:this.f, call:this.call, invested:installed(this.s), qualified:qualified(this.p), equipped, lifetimeXP});
   }
   openCheck() {
     if (!this.needsCheck || this.checkDialog.open) return;
@@ -249,7 +250,8 @@ export class ShackUI {
   }
   async prompt() {
     if (!this.challenge) return;
-    try {await this.receiver.audio.play(this.challenge.ch,this.sender.settings);}
+    const settings = this.challenge.dir === 'copied' ? this.p.settings : this.sender.settings;
+    try {await this.receiver.audio.play(this.challenge.ch,settings);}
     catch {this.message('Audio is paused. Select Hear again to listen.');}
   }
   submit(form) {

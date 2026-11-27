@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { sanitizeCallsign, dayStreak } from '../public/js/progress.mjs';
+import { validSendingXP } from '../public/js/sending.mjs';
 import { balances, equipmentSnapshot, mergeShack, sanitizeShack } from '../public/js/shack-model.mjs';
 import { SyncError } from './sync-store.mjs';
 
@@ -41,7 +42,7 @@ export class ScoreStore {
     let newXP = 0;
     for (const r of results) {
       if (!r || !exact(r,['id','kind','xp','day']) || !uuid(r.id) || !['listen','send'].includes(r.kind) ||
-          !Number.isInteger(r.xp) || (r.kind === 'send' ? ![10,40].includes(r.xp) : !(r.xp===8 || r.xp>=20 && r.xp<=220 && r.xp%2===0)) ||
+          !Number.isInteger(r.xp) || (r.kind === 'send' ? !validSendingXP(r.xp) : !(r.xp===8 || r.xp>=16 && r.xp<=220 && r.xp%2===0)) ||
           !/^\d{4}-\d{2}-\d{2}$/.test(r.day) || !Number.isFinite(Date.parse(r.day)) ||
           new Date(r.day).toISOString().slice(0,10)!==r.day || Date.parse(r.day)>s.now()+86400000) fail(400,'Invalid practice result.');
       const old=s.get('SELECT * FROM score_results WHERE id=?',r.id);

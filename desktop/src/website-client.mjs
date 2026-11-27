@@ -1,9 +1,9 @@
 import { equipment } from '../website/public/js/shack-model.mjs';
 import { ShackFeed } from '../website/public/js/shack-feed.mjs';
+import { devOrigin, serviceOrigin } from '../website/public/js/service-origin.mjs';
 import { actions, cookieNames } from '../website/lib/exchange.mjs';
 
-export const siteOrigin = 'https://morse.kubbur.digital';
-export const testOrigin = 'http://127.0.0.1:38764';
+export { stableOrigin as siteOrigin, stagingOrigin as testOrigin } from '../website/public/js/service-origin.mjs';
 
 function publicRankings(data) {
   const validCount = n => Number.isSafeInteger(n) && n >= 0;
@@ -17,9 +17,11 @@ function publicRankings(data) {
   return {status:200,entries,me:null};
 }
 
-export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
+export function websiteClient(db, safeStorage, mode, fetcher = fetch, channel = 'stable') {
   if (!['staging','offline','website'].includes(mode)) throw Error('Unknown Morse website mode.');
-  const origin = mode === 'staging' ? testOrigin : siteOrigin;
+  const origin = serviceOrigin(mode, channel);
+  // Preserve historical Stable and loopback IDs. Each host has its own device credentials.
+  const credentialPrefix = mode === 'staging' ? '' : origin === devOrigin ? 'dev-website:' : 'website:';
   const bandFeed=new ShackFeed(fetcher,origin);
   let cached, pending;
   async function capabilities() {
@@ -77,8 +79,7 @@ export function websiteClient(db, safeStorage, mode, fetcher = fetch) {
       return publicRankings(await response.json());
     }
     const names=cookieNames(scope), kind=action.split('/')[0];
-    // Credentials from the test server must never be sent to the website.
-    const keyFor = name => mode === 'staging' ? name : 'website:'+name;
+    const keyFor = name => credentialPrefix + name;
     if (!await safeStorage.isAsyncEncryptionAvailable()) return { status:503,error:'Private credential storage is unavailable.' };
     const cookies=[];
     const required = ['scores/consent','scores/listing','scores/visibility','scores/total','scores/station'].includes(action) ? [names.scores,names.private] : [names[kind]];

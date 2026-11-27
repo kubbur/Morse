@@ -1,7 +1,17 @@
+import { join } from 'node:path';
+import { devOrigin } from '../website/public/js/service-origin.mjs';
+
 export const APP_PORT = 37473;
 export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
-export const WEBSITE = 'https://morse.kubbur.digital/';
 
+export function channelForBuild(version, packaged) {
+  return !packaged || version.includes('-dev.') ? 'dev' : 'stable';
+}
+
+// Older Dev releases used Stable. An origin-specific directory also isolates the renderer's saved data and pending uploads on rollback.
+export function websiteProfileDirectory(directory, mode, channel) {
+  return mode === 'website' && channel === 'dev' ? join(directory, new URL(devOrigin).hostname) : directory;
+}
 
 export function appDocument(value) {
   try {

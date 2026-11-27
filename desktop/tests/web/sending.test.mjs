@@ -16,6 +16,21 @@ function pass(s, target = sendingExercise(s, '', () => 0).target) {
   return recordSending(s, target, grade);
 }
 
+test('clean sending rewards accurate manual timing before measured on-air speed', () => {
+  function award(wpm, farnsworth=wpm, stretch=1, text='EE', assisted=false) {
+    const s=emptySending(); s.level=4;
+    const setup={wpm,farnsworth};
+    const edges=edgesFor(text,setup).map(e=>({...e,at:e.at*stretch}));
+    const grade=gradeSending(edges,'EE',setup,sendingStage(4));
+    return recordSending(s,'EE',grade,{assisted}).xp;
+  }
+  assert.deepEqual([award(15),award(20),award(30),award(60)], [16,17,18,18]);
+  assert.equal(award(30,30,1.15),12);
+  assert.equal(award(50,8),16);
+  assert.equal(award(30,30,1,'TT'),0);
+  assert.equal(award(30,30,1,'EE',true),0);
+});
+
 test('sending badges credit saved practice, announce each new milestone once and award no extra XP', () => {
   const p = newProfile(), s = p.sending;
   const grade = gradeSending(edgesFor('E'), 'E', settings);
@@ -123,7 +138,7 @@ test('old R mixed practice resumes as single-character review once without losin
   const old = { ...emptySending(), version: 2, level: 20, attempts: 15, clean: 8, characters: 19, earned: 170, settings: { wpm: 30, farnsworth: 25, keyer: 'b', reverse: true },
     records: { 19: { attempts: 3, good: 3, best: 100, mastered: true, history: [true, true, true], covered: ['R'] },
       20: { attempts: 12, good: 5, best: 100, mastered: false, history: [false, true, false], covered: ['RER', 'RM', 'MR'] } } };
-  const p = newProfile(); delete p.soundVersion; p.sending = old; p.stats.xp = 4321;
+  const p = newProfile(); delete p.soundVersion; delete p.settings.sendWpm; p.sending = old; p.stats.xp = 4321;
   const imported = importState(JSON.stringify({ version: 1, activeId: p.id, profiles: [p] })).profiles[0];
   const s = imported.sending;
   assert.equal(s.version, 3); assert.equal(s.level, 30); assert.equal(sendingExercise(s).target, 'R');
@@ -183,9 +198,10 @@ test('legacy offline progress and new focus-copy counters merge once across the 
   assert.equal(reset.sending.level, 1); assert.deepEqual(reset.sending.records, {}); assert.equal(reset.stats.xp, 500);
 });
 
-test('fresh listening and sending share their timing while saved iambic and reversal choices remain available', () => {
+test('fresh profiles listen at 30 WPM and send at 15 WPM while saved keyer choices remain available', () => {
   const p = newProfile();
-  assert.equal(p.sending.settings.wpm, p.settings.wpm); assert.equal(p.settings.wpm, 30);
+  assert.equal(p.settings.wpm, 30); assert.equal(p.settings.sendWpm, 15);
+  assert.equal(p.sending.settings.wpm, p.settings.sendWpm);
   assert.equal(p.sending.settings.farnsworth, p.settings.farnsworth); assert.equal(p.settings.farnsworth, 15);
   assert.equal(p.sending.settings.keyer, 'a');
   assert.deepEqual(sanitizeSendingSettings({ wpm: 5, farnsworth: 60, keyer: 'unsafe' }), { wpm: 5, farnsworth: 60, keyer: 'a', reverse: false, continueMode: 'timed', pauseSeconds: 2 });
@@ -197,7 +213,8 @@ test('fresh listening and sending share their timing while saved iambic and reve
 
 test('old sending defaults upgrade once while progress, custom spacing and sync deltas survive', () => {
   const p = newProfile(); pass(p.sending); p.stats.xp = 1234; p.sending.level = 8;
-  delete p.soundVersion; p.sending.version = 1; p.sending.settings.farnsworth = 15;
+  delete p.soundVersion; delete p.settings.sendWpm; p.sending.version = 1;
+  Object.assign(p.sending.settings, {wpm:30, farnsworth:15});
   const expected = structuredClone(p.sending); expected.version = 3; expected.settings.farnsworth = 30;
   const restored = sanitizeState({ version: 1, activeId: p.id, profiles: [p] }).profiles[0];
   assert.deepEqual(restored.previousTiming, {wpm:30, farnsworth:30});

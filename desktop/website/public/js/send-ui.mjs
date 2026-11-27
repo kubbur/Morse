@@ -215,7 +215,11 @@ export class SendingUI {
   }
 
   get stage() { return sendingStage(this.getProfile().sending.level); }
-  get settings() { return { ...DEFAULT_SENDING_SETTINGS, ...this.getProfile().sending.settings, ...this.getProfile().settings }; }
+  get settings() {
+    const profile = this.getProfile();
+    const settings = { ...DEFAULT_SENDING_SETTINGS, ...profile.sending.settings, ...profile.settings };
+    return { ...settings, wpm:settings.sendWpm ?? settings.wpm };
+  }
   get usesPaddleSidetone() { return this.source === 'paddle' || (this.source === 'vband' && !!this.native); }
   get busy() { return this.down || this.playing || this.edges.length > 0 && !this.result; }
   blockingDialog() {

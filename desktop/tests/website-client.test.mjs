@@ -8,17 +8,19 @@ import { createApp, configuration } from '../website/server.mjs';
 import { Exchange, cookieNames } from '../website/lib/exchange.mjs';
 import { SyncStore } from '../website/lib/sync-store.mjs';
 import { websiteClient, siteOrigin } from '../src/website-client.mjs';
+import { devOrigin, invitationFromLink, serviceOrigin, stagingOrigin } from '../website/public/js/service-origin.mjs';
 import { LearnerDB } from '../src/learner-db.mjs';
 import { snapshot, restore } from '../scripts/backup.mjs';
 import { newState, STORAGE_KEY } from '../website/public/js/progress.mjs';
 import { PracticeStorage } from '../website/public/js/practice-storage.mjs';
+import { purchase, sanitizeShack } from '../website/public/js/shack-model.mjs';
 
 const config=configuration({MORSE_MODE:'production',MORSE_PUBLIC_ORIGIN:siteOrigin,MORSE_TRUSTED_PROXY_IP:'192.0.2.3',MORSE_EDGE_IP:'192.0.2.2'});
 // Exercise the server's actual HTTP handler, including production proxy/origin checks, without opening a port.
-function handler(server) {
+function handler(server, origins = [siteOrigin]) {
   return async (target, options={}) => {
     const url=new URL(target);
-    assert.equal(url.origin,siteOrigin);
+    assert.ok(origins.includes(url.origin));
     assert.equal(options.redirect,'error');
     const bytes=Buffer.from(options.body || '');
     const req=Readable.from(bytes.length ? [bytes] : []);
@@ -32,6 +34,120 @@ function handler(server) {
     });
   };
 }
+
+async function postExchange(serve, origin, action, body, cookie = '') {
+  const response = await serve(origin + '/api/v2/' + action, {method:'POST', redirect:'error',
+    headers:{Origin:origin, 'X-Morse-Sync':'2', 'Content-Type':'application/json', cookie},
+    body:JSON.stringify({scope:'operator', body})});
+  assert.equal(response.status, 200, action);
+  return response;
+}
+
+test('Stable and Dev isolate the same callsign, private credentials and CW frequency', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'morse-separate-sites-'));
+  t.after(() => rm(dir, {recursive:true, force:true}));
+  const db = new LearnerDB(':memory:');
+  t.after(() => db.close());
+  const cipher = {isAsyncEncryptionAvailable:async () => true, encryptStringAsync:async value => Buffer.from(value),
+    decryptStringAsync:async bytes => ({result:bytes.toString()})};
+  async function deployment(channel, origin, otherOrigin) {
+    const settings = configuration({MORSE_PUBLIC_ORIGIN:origin, MORSE_TRUSTED_PROXY_IP:config.trustedProxyIp,
+      MORSE_EDGE_IP:config.edgeIp, MORSE_SYNC_PATH:join(dir, channel + '.sqlite')});
+    const exchange = new Exchange(settings.syncPath);
+    const server = await createApp(settings, {exchange});
+    t.after(() => { server.close(); exchange.close(); });
+    const serve = handler(server, [origin, otherOrigin]);
+    assert.equal((await serve(otherOrigin + '/api/v2/capabilities', {redirect:'error'})).status, 403);
+    const request = websiteClient(db.db, cipher, 'website', (url, options) => {
+      assert.equal(new URL(url).origin, origin);
+      if (options.method === 'POST') assert.equal(options.headers.Origin, origin);
+      return serve(url, options);
+    }, channel);
+    return (action, body = {}) => request(action, {scope:'operator', body});
+  }
+  const stable = await deployment('stable', siteOrigin, devOrigin);
+  const dev = await deployment('dev', devOrigin, siteOrigin);
+  const sharedCall = {callsign:'TEST1', generation:1, revision:0, visible:true, marks:{}};
+  for (const [call, xp] of [[stable, 350], [dev, 2700]]) {
+    assert.equal((await call('scores/session')).status, 200);
+    assert.equal((await call('scores/visibility', {...sharedCall, xp})).status, 200);
+  }
+  assert.equal((await stable('scores/leaderboard')).entries[0].xp, 350);
+  assert.equal((await dev('scores/leaderboard')).entries[0].xp, 2700);
+  const names = cookieNames('operator');
+  const stored = prefix => db.db.prepare('SELECT encrypted FROM credentials WHERE id=?').get(prefix + names.scores).encrypted;
+  assert.notDeepEqual(stored('website:'), stored('dev-website:'));
+
+  const profile = newState().profiles[0];
+  const paired = await stable('private/start', {profile, label:'Mac', profileVersion:2});
+  assert.equal(paired.status, 200);
+  const {code} = await stable('private/recovery-code');
+  assert.equal(code.length, 32);
+  assert.equal((await dev('private/status')).connected, false);
+  assert.equal((await dev('private/recover', {code})).status, 403);
+  assert.ok((await dev('private/join', {profile, label:'Mac', invitation:paired.invitation})).status >= 400);
+  const radio = {f:7025, call:'TEST1', equipped:['0-0','1-0','2-0'], lifetimeXP:5000};
+  const station = await dev('shack/open', radio);
+  assert.equal(station.activity[7025], 1);
+  assert.equal((await stable('shack/open', radio)).activity[7025], 1);
+  assert.ok((await stable('shack/poll', {token:station.token, f:7025})).status >= 400);
+});
+
+test('pairing links and the live feed stay on the installed service during a Dev outage', async () => {
+  const token = 'i'.repeat(43);
+  for (const local of [siteOrigin, devOrigin, stagingOrigin]) {
+    for (const issuer of [siteOrigin, devOrigin, stagingOrigin]) {
+      assert.equal(invitationFromLink(issuer + '/#pair=' + token, local), issuer === local ? token : null);
+    }
+  }
+  assert.equal(serviceOrigin('staging', 'dev'), stagingOrigin);
+  const requests = [];
+  const client = websiteClient(null, null, 'website', async (url, options) => {
+    assert.equal(new URL(url).origin, devOrigin);
+    requests.push(new URL(url).pathname);
+    if (url.endsWith('/shack/feed')) {
+      assert.equal(options.headers.Origin, devOrigin);
+      return new Response('{"cursor":1}\n', {headers:{'Content-Type':'application/x-ndjson'}});
+    }
+    throw Error('Dev unavailable');
+  }, 'dev');
+  assert.deepEqual(await client('shack/poll', {body:{token, live:true}}), {cursor:1});
+  client.closeBand();
+  assert.equal((await client('scores/leaderboard')).status, 503);
+  assert.deepEqual(requests, ['/api/v2/shack/feed', '/api/v2/capabilities']);
+});
+
+test('an older client can sync and pair without erasing Dev equipment or independent keyer speed', async t => {
+  const exchange = new Exchange(':memory:');
+  const server = await createApp(config, {exchange});
+  t.after(() => { server.close(); exchange.close(); });
+  const post = postExchange.bind(null, handler(server), siteOrigin);
+  const p = newState().profiles[0];
+  p.stats.xp = 5000;
+  p.shack = sanitizeShack();
+  assert.ok(purchase(p.shack, ['0-0','1-0','2-0'], 100, p.stats.xp));
+  const response = await post('private/start', {profile:p, label:'Mac', profileVersion:2, invite:false});
+  const cookie = response.headers.get('set-cookie').split(';')[0];
+  const stable = await (await post('private/status', {}, cookie)).json();
+  assert.equal(stable.profile.shack, undefined);
+  assert.equal(stable.profile.settings.sendWpm, undefined);
+  assert.equal(stable.profile.sending.settings.wpm, 30);
+  const edit = structuredClone(stable.profile);
+  edit.stats.xp += 20;
+  edit.settings.wpm = edit.sending.settings.wpm = 35;
+  await post('private/push', {base:stable.profile, profile:edit, epoch:stable.epoch, seq:stable.seq + 1}, cookie);
+  const check = async () => {
+    const {profile} = await (await post('private/status', {profileVersion:2}, cookie)).json();
+    assert.deepEqual(profile.shack.orders, p.shack.orders);
+    assert.equal(profile.settings.wpm, 35);
+    assert.equal(profile.sending.settings.wpm, 15);
+    assert.equal(profile.stats.xp, 5020);
+  };
+  await check();
+  const { invitation } = await (await post('private/start', {profile:newState().profiles[0], label:'Second device', profileVersion:2})).json();
+  await post('private/join', {profile:edit, label:'Mac', invitation}, cookie);
+  await check();
+});
 
 test('the live v1 protocol allows anonymous rankings only, regardless of requested payload',async()=>{
   const old=new SyncStore(':memory:');

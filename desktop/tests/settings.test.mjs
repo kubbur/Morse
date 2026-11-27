@@ -16,6 +16,7 @@ import { envelopeAt, rampGain } from '../website/public/js/morse.mjs';
 function oldSave() {
   const state=newState(), p=state.profiles[0];
   delete p.soundVersion;
+  delete p.settings.sendWpm;
   p.settings={...p.settings,courseLevel:20,tone:574};
   Object.assign(p.sending.settings,{wpm:24,farnsworth:18,keyer:'b'});
   p.sending.level=9; p.stats.xp=70; p.guidance.welcomed=true;
@@ -82,7 +83,7 @@ test('Mac and browser settings, course reset and recovery controls in an offline
     execFileSync('xcrun',['clang','-fobjc-arc','-Wno-deprecated-declarations','-framework','WebKit','-framework','AppKit','-framework','Foundation',join(fixtures,'settings-view.m'),'-o',binary]);
     const staged=await stageApp(join(dir,'staged')), setup=await readFile(join(fixtures,'settings-bootstrap.js'),'utf8');
     const cases = [
-      ...['browser','mac-local','mac-staging','mac-website'].map(mode => [mode, 'settings-scenario.js']),
+      ...['browser','mac-local','mac-staging','mac-website','mac-dev'].map(mode => [mode, 'settings-scenario.js']),
       ...['browser','mac-website'].map(mode => [mode, 'sending-controls-scenario.js']),
       ['mac-website', 'sending-resume-scenario.js'],
       ['browser','sending-feedback-scenario.js'],
@@ -94,7 +95,8 @@ test('Mac and browser settings, course reset and recovery controls in an offline
     for(const [mode, scenario] of cases) await t.test(mode+' '+scenario,async()=>{
       const bootstrap=join(dir,mode+'.js');
       const state=oldSave(), listing=scenario==='leaderboard-visibility-scenario.js';
-      if (scenario==='shack-scenario.js') {state.profiles[0].stats.xp=800;state.profiles[0].callsign='TF3KBR';state.profiles[0].shack=sanitizeShack({copied:alphabet,sent:alphabet.replace('E','')});}
+      if (scenario==='shack-scenario.js') {state.profiles[0].stats.xp=13333;state.profiles[0].callsign='TF3KBR';state.profiles[0].shack=sanitizeShack({copied:alphabet,sent:alphabet.replace('E','')});}
+      if (scenario==='sending-controls-scenario.js') state.profiles[0].stats.xp=4990;
       if (listing) Object.assign(state.profiles[0],{callsign:'TEST1',leaderboard:true});
       await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state,listing})+';\n'+setup);
       const base=mode==='browser' ? root : staged;

@@ -22,17 +22,19 @@
   go('lab');if(!q('#sound-choice').hidden)q('#sound-choices').firstElementChild.click();
   const mac=fixture.mode.startsWith('mac'),choice=q('#send-source');choice.value=mac?'paddle':'straight';
   choice.dispatchEvent(new Event('change',{bubbles:true}));if(mac)testPaddleReady();
+  check(!q('#nav-shack').hidden,'Returning operator has no Shack tab');
+  go('shack');check(view('shack') && q('#nav-shack').getAttribute('aria-current')==='page','Top-bar Shack navigation');
   go('journey');click('.shack-xp');check(view('shack'),'XP did not open the Shack');
   tab('log');check(q('.empty').textContent.includes('first card'),'QSL wall');
   click('[data-act="progress"]');check(view('journey') && q('#progress-return').textContent.includes('The Shack'),'Missing return from Progress');
   click('#progress-return');check(view('shack') && q('.shack-nav [aria-current]').dataset.id==='log','Return lost the logbook');
   tab('shop');click('[data-act="bundle"]');
-  check(q('.wallet strong').textContent==='500 XP','Checkout did not debit 300 XP');
-  click('[data-act="progress"]');check(q('.shack-xp strong').textContent==='500 XP','Progress balance');
-  click('#my-operator-profile');check(q('#operator-profile-dialog').open && q('.operator-xp').textContent.includes('800'),'Lifetime XP on My profile');
+  check(q('.wallet strong').textContent===(8333).toLocaleString()+' XP','Checkout did not debit 5,000 XP');
+  click('[data-act="progress"]');check(q('.shack-xp strong').textContent===(8333).toLocaleString()+' XP','Progress balance');
+  click('#my-operator-profile');check(q('#operator-profile-dialog').open && q('.operator-xp').textContent.includes((13333).toLocaleString()),'Lifetime XP on My profile');
   click('[data-close="operator-profile-dialog"]');click('#progress-return');
   const learner=()=>testState().profiles[0], startCount=learner().sending.attempts;
-  check(learner().stats.xp===800,'Checkout changed lifetime XP');
+  check(learner().stats.xp===13333,'Checkout changed lifetime XP');
   tab('bench');check(qa('[data-inventory] [data-gear]').length===3 && !q('[data-act="buy"]'),'Purchased gear did not enter inventory');
   drag('0-0','.mount[data-slot="0"]');drag('1-0','.mount[data-slot="1"]');click('[data-act="equip"][data-id="2-0"]');
   tab('shop');click('[data-act="buy"][data-id="0-1"]');tab('bench');drag('0-1','.mount[data-slot="0"]');
@@ -41,8 +43,19 @@
   tab('air');
   check(q('[data-face="mode"]').textContent==='RX' && q('[data-face="note"]').textContent.includes('equip a Morse key'),'Radio and antenna must receive without a key');
   key('keydown','Space',' ');check(q('[data-face="mode"]').textContent==='RX','Unequipped key transmitted');key('keyup','Space',' ');
+  const speed=q('#send-wpm'), lessonSettings=learner().sending.settings, listenWpm=learner().settings.wpm;
   click('[data-act="settings"]');check(q('#shack-input-dialog').open && q('#shack-input-body #send-source')===choice,'Existing input controls in popup');
+  check(q('#shack-input-body #send-wpm')===speed && speed.getClientRects().length,'Missing sending speed slider');
+  check(!q('#send-continue-mode').getClientRects().length && !q('#send-pause').getClientRects().length,'Lesson controls visible in the Shack');
+  speed.value='18';speed.dispatchEvent(new Event('input',{bubbles:true}));
+  check(q('#shack-input-body [data-value="sendWpm"]').textContent==='18','WPM readout while dragging');
+  speed.dispatchEvent(new Event('change',{bubbles:true}));
+  check(learner().settings.wpm===listenWpm && learner().sending.settings.wpm===18,'Shack keyer or listening speed after adjustment');
+  if(mac) await wait(()=>testSound()?.wpm===18,'Native paddle did not receive Shack speed');
   click('[data-close="shack-input-dialog"]');await wait(()=>q('#view-lab #send-source')===choice,'Input settings did not return home');
+  check(q('#send-setup #send-wpm')===speed && speed.value==='18','Send lost the shared speed slider');
+  go('lab');check(q('#send-continue-mode').getClientRects().length && q('#send-pause-control').hidden===(lessonSettings.continueMode!=='timed') && learner().sending.settings.pauseSeconds===lessonSettings.pauseSeconds,'Lesson settings after closing the Shack popup');
+  go('journey');click('.shack-xp');
   tab('bench');click('[data-act="equip"][data-id="0-0"]');tab('air');
   check(!/Hold to key|Call CQ/.test(q('.transmit').textContent),'Synthetic key controls');
   if(mac){
@@ -56,7 +69,9 @@
   if(mac){testPaddleElement(0,700);testPaddleElement(1,800);}else key('keydown','Space',' ');
   check(q('[data-face="mode"]').textContent==='RX','Locked frequency transmitted');
   if(mac){testPaddleElement(2,880);testPaddleElement(0,1000);}else key('keyup','Space',' ');
-  tab('shop');click('[data-act="bundle"]');tab('bench');
+  tab('shop');click('[data-act="bundle"]');
+  check(!q('#nav-shack').hidden && q('.wallet strong').textContent==='0 XP','Spending all XP relocked the Shack');
+  tab('bench');
   for(const slot of [0,1,2])click('[data-act="equip"][data-id="'+slot+'-1"]');
   tab('air');check(q('.instrument').dataset.rig==='1' && q('.facehead').textContent.includes('Club transceiver'),'Equipped radio face');
   check(!q('#shack-station .check') && !q('#shack-check-dialog').open,'Training prompt should wait for a TX attempt');
@@ -74,9 +89,9 @@
     }
   }
   await wait(()=>!q('#shack-check-dialog').open,'Completing the qualification popup');
-  check(q('[data-act="open-check"]').hidden && learner().stats.xp===1100,'Qualification completion and one-time award');
+  check(q('[data-act="open-check"]').hidden && learner().stats.xp===13633,'Qualification completion and one-time award');
   tab('bench');click('[data-act="equip"][data-id="1-0"]');tab('air');
-  check(q('.instrument').dataset.rig==='0' && q('[data-face="note"]').textContent.includes('800 XP station'),'Downgrade must change face and frequencies');
+  check(q('.instrument').dataset.rig==='0' && q('[data-face="note"]').textContent.includes((13333).toLocaleString()+' XP station'),'Downgrade must change face and frequencies');
   click('[data-act="progress"]');click('.progress-practice-actions [data-view="send"]');check(view('send'),'Practice sending route');
   go('journey');click('.progress-practice-actions [data-view="practice"]');check(view('practice'),'Practice listening route');
   window.testComplete=true;
