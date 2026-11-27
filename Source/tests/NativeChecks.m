@@ -48,7 +48,7 @@ static int vector(unsigned wpm, bool modeB, NSString *contacts, BOOL usb, BOOL r
     float pcm[128]; renderKeyer(&key,1,pcm);
     NSMutableArray *edges=[NSMutableArray array]; NSMutableString *typed=[NSMutableString string];
     NSMutableData *wave=[NSMutableData data];
-    unsigned audible=0; uint64_t cursor=0;
+    unsigned audible=0; uint64_t cursor=0, plannedEnd=0;
     NSArray *rows=[contacts componentsSeparatedByString:@","];
     uint64_t end=0;
     for (NSUInteger i=0;i<=rows.count;i++) {
@@ -61,8 +61,11 @@ static int vector(unsigned wpm, bool modeB, NSString *contacts, BOOL usb, BOOL r
             [wave appendBytes:pcm length:n*sizeof(float)];
             for (unsigned j=0;j<n;j++) if (fabs(pcm[j])>0.0001) audible++;
             cursor+=n; ElementEvent e;
-            while (takeElement(&stream,&e)) if (e.kind)
+            while (takeElement(&stream,&e)) if (e.kind) {
+                if (e.kind==1) plannedEnd=e.frame+e.frames;
+                else if (e.frame!=plannedEnd) return 3;
                 [edges addObject:@{@"down":(e.kind==1 ? @YES : @NO),@"at":@((e.frame-1)*1000.0/rate)}];
+            }
         }
         if (parts) {
             unsigned mask=(unsigned)[parts[1] intValue];

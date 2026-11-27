@@ -103,9 +103,9 @@ test('the native sample-clock feeds free keying before the first lesson prompt, 
   const delivered=[],ui=Object.create(SendingUI.prototype);
   Object.assign(ui,{active:()=>true,usable:()=>true,getProfile:()=>({sending:{}}),source:'straight',down:false,heard:false,
     keyTarget:{edge:e=>delivered.push(e),reset(){}},tone:{set(){}}});
-  const stream=new NativeElements({edge:e=>ui.edge(e),idle(){},interrupt(){}});
-  for (const [seq,kind,frame] of [[1,0,0],[2,1,4800],[3,2,9600]]) stream.receive({type:'element',epoch:1,seq,kind,rate:48000,frame});
-  assert.deepEqual(delivered,[{down:true,at:100},{down:false,at:200}]);assert.equal(ui.heard,false);assert.equal(ui.result,undefined);
+  const stream=new NativeElements({edge:(e,duration)=>ui.edge(e,false,duration),idle(){},interrupt(){}});
+  for (const [seq,kind,frame,frames] of [[1,0,0,0],[2,1,4800,4800],[3,2,9600,0]]) stream.receive({type:'element',epoch:1,seq,kind,rate:48000,frame,frames});
+  assert.deepEqual(delivered,[{down:true,at:100,duration:100},{down:false,at:200}]);assert.equal(ui.heard,false);assert.equal(ui.result,undefined);
 });
 test('recorded signatures decode against the start of the recording even hours into a native keyer session',()=>{
   const ui=Object.create(ShackUI.prototype);

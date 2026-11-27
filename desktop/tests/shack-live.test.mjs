@@ -47,16 +47,23 @@ test('a key-down wakes the tuned feed before release; overlapping uploads play o
   feed.close();
 });
 
-test('transmission publishes without waiting for a previous acknowledgement and resets an interrupted hold',async()=>{
+test('the first paddle packet contains both ends, and a straight key publishes only on release',async()=>{
   const pending=[], released=[];
-  const tx=new LiveKeySender(packet=>new Promise(resolve=>{pending.push(packet); released.push(resolve);}),()=>assert.fail('disconnected'));
+  const tx=new LiveKeySender(packet=>new Promise(resolve=>{pending.push(packet); released.push(resolve);}),()=>assert.fail('disconnected'),()=>1234);
   try {
-    tx.edge(true,900); tx.edge(false,1001); tx.edge(true,1102); tx.cancel();
-    assert.deepEqual(pending.map(p=>p.edges.map(e=>e.edge)),[['down'],['down','up'],['down','up','down']]);
-    released[2]({ack:3}); await turn();
-    assert.equal(pending[3].first,4); assert.equal(pending[3].edges[0].edge,'cancel');
-    released[3]({ack:4}); released[1]({ack:2}); released[0]({ack:1}); await turn();
-    assert.equal(tx.ack,4); assert.equal(tx.pending.length,0);
+    tx.edge(true,900,30,40);
+    const [dit,up]=pending[0].edges;
+    assert.deepEqual([dit.offset,dit.duration,dit.wpm,dit.sent,dit.measured,up.offset],[0,40,30,1234,false,40]);
+    tx.edge(false,940); tx.edge(true,980,30,120); tx.edge(false,1100);
+    tx.edge(true,1140,30);
+    assert.equal(pending.length,2);
+    tx.edge(false,1202);
+    assert.deepEqual(pending.map(p=>p.edges.length),[2,4,6]);
+    const manual=pending[2].edges[4];
+    assert.deepEqual([manual.offset,manual.duration,manual.measured],[240,62,true]);
+    tx.edge(true,1250); tx.cancel(); tx.edge(false,1300);
+    released[2]({ack:6}); released[0]({ack:2}); released[1]({ack:4}); await turn();
+    assert.equal(tx.ack,6); assert.deepEqual(tx.pending,[]); assert.equal(pending.length,3);
   } finally {tx.close();}
 });
 
@@ -73,52 +80,56 @@ function audioClock() {
   return {ctx,marks};
 }
 
-test('R keeps the sending clock through uneven arrivals, with separate clocks for simultaneous stations',()=>{
-  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock();
-  function edge(arrival,peer,type,offset){
-    ctx.currentTime=arrival/1000;
-    rx.key(ctx,{tone:650,volume:70},{peer,...key(type,offset)});
-  }
-  edge(0,'a','down',0); edge(9,'b','down',0); edge(75,'b','up',60);
-  edge(130,'a','up',101); edge(244,'a','down',202); edge(509,'a','up',502);
-  edge(630,'a','down',603); edge(729,'a','up',704);
-  const signal=[marks[0],...marks.slice(2)];
-  assert.deepEqual(signal.map(m=>Math.round((m.stop-.002-m.start)*1000)),[101,300,101]);
-  assert.deepEqual(signal.slice(1).map((m,i)=>Math.round((m.start-signal[i].stop+.002)*1000)),[101,101]);
-  assert.ok(signal[0].start<.070);
-  assert.equal(Math.round((marks[1].stop-.002-marks[1].start)*1000),60);
-  edge(855,'a','down',730); // Arrived well after its playout deadline.
-  assert.ok(marks.at(-1).start>=.855 && marks.at(-1).start<.865);
+const durationOf = mark => Math.round((mark.stop - .002 - mark.start) * 1000);
+const downMark = (offset,duration,wpm,stream='cw') => ({...key('down',offset,stream),duration,wpm,measured:false});
+
+test('a full R keeps sender spacing and individual WPM when receivers share a frequency',()=>{
+  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), settings={tone:650,volume:70,wpm:8};
+  function incoming(at,peer,event) {ctx.currentTime=at/1000;rx.key(ctx,settings,{peer,...event});}
+  incoming(0,'a',downMark(0,40,30));
+  incoming(9,'b',downMark(0,60,20));
+  incoming(101,'a',downMark(80,120,30));
+  incoming(260,'a',downMark(240,40,30));
+  assert.deepEqual(marks.map(m=>Math.round(m.start*1000)),[120,189,200,360]);
+  assert.deepEqual(marks.map(durationOf),[40,60,120,40]);
+  incoming(550,'a',key('up',280));
+  assert.deepEqual(marks.map(durationOf),[40,60,120,40]);
   rx.stop(); assert.equal(rx.peers.size,0);
 });
 
-test('a lost key-up fades out, a held straight key can renew, and a retune stops scheduled audio',()=>{
-  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock();
-  const send=edge=>rx.key(ctx,{tone:650,volume:70},{peer:'a',...key(edge,0)});
-  send('down');
-  assert.ok(marks[0].stop-marks[0].start<1.2);
-  const deadline=marks[0].stop;
-  ctx.currentTime=.4; send('hold'); assert.ok(marks[0].stop>deadline);
-  ctx.currentTime=2; send('hold'); assert.ok(marks[0].stop<2);
-  send('cancel'); assert.equal(rx.voices.size,0);
-  rx.key(ctx,{tone:650,volume:70},{peer:'b',...key('up',120)});
-  assert.equal(marks.length,1);
+test('a lost legacy release is silent; cancel and retune clear pending and scheduled marks',()=>{
+  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), settings={tone:650,volume:70};
+  const send=(peer,event)=>rx.key(ctx,settings,{peer,...event});
+  send('a',key('down',0)); ctx.currentTime=.4; send('a',key('hold',0));
+  assert.equal(marks.length,0);
+  send('a',key('cancel',0)); send('a',key('up',40));
+  assert.equal(marks.length,0);
+  send('b',downMark(0,120,30)); assert.equal(rx.voices.size,1);
+  rx.stop(); assert.equal(marks[0].stop,ctx.currentTime); assert.equal(rx.voices.size,0);
 });
 
-test('a steady sender can start the next transmission with a smaller buffer',()=>{
-  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), settings={tone:600,volume:50};
-  for (let i=0;i<80;i++) {
-    ctx.currentTime=i*.05;
-    rx.key(ctx,settings,{peer:'a',...key(i%2?'up':'down',i*50)});
-  }
-  ctx.currentTime=15;
-  rx.key(ctx,settings,{peer:'a',...key('down',0,'next')});
-  assert.ok(marks.at(-1).start>=15.025 && marks.at(-1).start<15.030);
-  ctx.currentTime=15.04;
-  rx.key(ctx,settings,{peer:'a',...key('up',40,'next')});
-  ctx.currentTime=22;
-  rx.key(ctx,settings,{peer:'a',...key('down',0,'reply'),receiveBuffer:.025});
-  assert.equal(Math.round(marks.at(-1).start*1000),22025);
+test('one sender dah is buffered once, including slow and fast keyers and speed changes',async()=>{
+  const band=new ShackBand(), a=open(band,'KEY1'), b=open(band,'KEY2');
+  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), settings={tone:600,volume:50,wpm:12};
+  let cursor=b.cursor;
+  const tx=new LiveKeySender(async packet=>{
+    const ack=band.request('edges',{token:a.token,f,...packet});
+    assert.deepEqual(band.request('edges',{token:a.token,f,...packet}),ack);
+    const batch=band.request('poll',{token:b.token,f,cursor}); cursor=batch.cursor;
+    for (const event of batch.events) rx.key(ctx,settings,event);
+    return ack;
+  },()=>assert.fail('disconnected'));
+  try {
+    let now=0;
+    for (const wpm of [5,8,20,30,80]) {
+      ctx.currentTime=now/1000;
+      tx.edge(true,now,wpm,1200/wpm); await turn();
+      assert.equal(Math.round(marks.at(-1).start*1000-now),Math.round(3600/wpm));
+      assert.equal(durationOf(marks.at(-1)),Math.round(1200/wpm));
+      tx.edge(false,now+1200/wpm); now+=2000;
+    }
+    assert.equal(marks.length,5);
+  } finally {tx.close();}
 });
 
 test('silent probes only reach opted-in stations on the frequency, including receive-only stations',()=>{
@@ -160,7 +171,7 @@ test('tuning measures each peer before keying and holds the chosen delay until t
     await turn();
   }
   const probe=(peer,sent)=>({type:'probe',peer,sent});
-  const edge=(peer,type,offset,stream='cw')=>({type:'key',peer,...key(type,offset,stream)});
+  const mark=(peer,offset,sent,wpm,stream='cw')=>({type:'key',peer,sent,...downMark(offset,1200/wpm,wpm,stream)});
   await frame(10000,[],1); assert.equal(probes.length,0);
   for (const sent of [0,400,800,1200]) {
     now=11000+sent;
@@ -170,36 +181,62 @@ test('tuning measures each peer before keying and holds the chosen delay until t
     await frame(now+(sent===400?120:0),[probe('b',sent)]);
   }
   assert.equal(probes.length,4); assert.deepEqual(heard,[]);
-  await frame(13000,[edge('a','down',0),edge('b','down',0)]);
-  assert.deepEqual(marks.map(m=>Math.round(m.start*1000)),[13025,13135]);
-  await frame(13040,[edge('a','up',40)]);
-  await frame(13160,[edge('b','up',40)]);
-  assert.deepEqual(marks.map(m=>Math.round((m.stop-.002-m.start)*1000)),[40,40]);
-  await frame(13720,[probe('a',57600)]); // Now A's measured path also varies by 120 ms.
-  await frame(14000,[edge('a','down',1000)]);
-  assert.equal(Math.round(marks.at(-1).start*1000),14025);
-  await frame(14040,[edge('a','up',1040)]);
-  await frame(21200,[edge('a','down',0,'next')]);
-  assert.equal(Math.round(marks.at(-1).start*1000),21335);
+  // A's note spent 40 ms of its 120 ms budget in transit. B starts at 20 WPM.
+  await frame(13000,[mark('a',0,56960,30),mark('b',0,2000,20)]);
+  assert.deepEqual(marks.map(m=>Math.round(m.start*1000)),[13080,13180]);
+  assert.deepEqual(marks.map(durationOf),[40,60]);
+  await frame(13720,[probe('a',57600)]);
+  await frame(14000,[mark('a',1000,57960,30)]);
+  assert.equal(Math.round(marks.at(-1).start*1000),14080);
+  await frame(21200,[mark('a',0,65200,20,'next')]);
+  assert.equal(Math.round(marks.at(-1).start*1000),21380);
+
   await frame(21300,[],1); t.mock.timers.tick(10000); await turn();
   assert.equal(probes.length,4);
 });
 
-test('a missed deadline affects only the late mark; an expired mark in a burst stays silent',()=>{
-  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock();
-  function send(at,type,offset) {
-    ctx.currentTime=at/1000;
-    rx.key(ctx,{tone:650,volume:65},{peer:'a',...key(type,offset),receiveBuffer:.025});
+test('a late legacy release cannot stretch a 40 ms dit or close the gap to the next mark',()=>{
+  const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), settings={tone:650,volume:65,wpm:30};
+  function send(at,edge,offset) {ctx.currentTime=at/1000;rx.key(ctx,settings,{peer:'a',...key(edge,offset)});}
+  send(0,'down',0); assert.equal(marks.length,0);
+  send(160,'up',40);
+  assert.equal(durationOf(marks[0]),40);
+  send(161,'down',80); send(205,'up',200);
+  assert.deepEqual(marks.map(durationOf),[40,120]);
+  assert.equal(Math.round((marks[1].start-marks[0].start)*1000),80);
+});
+
+test('a measured straight key spends capture time inside the buffer and preserves long hand-sent marks',()=>{
+  for (const duration of [35,95,181,730]) {
+    const rx=new LiveKeyReceiver(), {ctx,marks}=audioClock(), settings={tone:650,volume:65};
+    ctx.currentTime=duration/1000;
+    rx.key(ctx,settings,{peer:'a',...downMark(0,duration,20),measured:true});
+    assert.equal(Math.round(marks[0].start*1000),Math.max(180,duration+4));
+    assert.equal(durationOf(marks[0]),duration);
   }
-  send(0,'down',0); send(160,'up',40);
-  send(240,'down',240); send(280,'up',280);
-  send(450,'down',320); send(450,'up',360);
-  send(500,'down',500); send(540,'up',540);
-  assert.equal(Math.round(marks[0].start*1000),25);
-  assert.ok(marks[0].stop>.16);
-  assert.equal(Math.round(marks[1].start*1000),265);
-  assert.equal(marks[2].stop,marks[2].start);
-  assert.equal(Math.round(marks[3].start*1000),525);
+});
+
+test('a faster next transmission cannot overtake a note already buffered at the old speed',()=>{
+  const {ctx,marks}=audioClock(), rx=new LiveKeyReceiver(), settings={tone:650,volume:65};
+  rx.key(ctx,settings,{peer:'a',...downMark(0,240,5,'slow')});
+  ctx.currentTime=.3;
+  rx.key(ctx,settings,{peer:'a',...downMark(0,15,80,'fast'),previous:'slow',gap:60});
+  assert.deepEqual(marks.map(m=>Math.round(m.start*1000)),[720,1020]);
+  assert.deepEqual(marks.map(durationOf),[240,15]);
+});
+
+test('the relay rejects incomplete or inconsistent timed pairs without advancing the sequence',()=>{
+  const band=new ShackBand(), a=open(band,'TX1'), b=open(band,'RX1'), old=open(band,'OLD1',f,false);
+  const down={...downMark(0,40,30),sent:100};
+  const edges=list=>band.request('edges',{f,token:a.token,first:1,edges:list});
+  assert.throws(()=>edges([down]),/matching release/);
+  assert.throws(()=>edges([down,key('up',120)]),/matching release/);
+  assert.throws(()=>edges([{...down,wpm:0},key('up',40)]),/Invalid/);
+  assert.deepEqual(edges([down,key('up',40)]),{ack:2});
+  assert.deepEqual(edges([down,key('up',40)]),{ack:2});
+  const events=room=>band.request('poll',{token:room.token,f,cursor:0}).events;
+  assert.deepEqual(events(b).map(e=>[e.edge,e.offset,e.duration]),[['down',0,40],['up',40,undefined]]);
+  assert.deepEqual(events(old).map(e=>e.audio),[[[40,0]]]);
 });
 
 test('a long over keeps the same audio clock when sender offsets roll over on the wire',async()=>{
@@ -212,7 +249,7 @@ test('a long over keeps the same audio clock when sender offsets roll over on th
     const batch=band.request('poll',{token:b.token,f,cursor}); cursor=batch.cursor;
     for (const event of batch.events) {
       if (event.edge==='down') down.push(event);
-      rx.key(ctx,{tone:600,volume:65},{...event,receiveBuffer:now<115000 ? .05 : .15});
+      rx.key(ctx,{tone:600,volume:65},event);
     }
     return ack;
   },()=>assert.fail('disconnected'));
@@ -225,10 +262,10 @@ test('a long over keeps the same audio clock when sender offsets roll over on th
     assert.notEqual(down.at(-1).stream,down.at(-2).stream);
     assert.equal(down.at(-1).previous,down.at(-2).stream);
     assert.equal(down.at(-1).gap,4960);
-    assert.equal(Math.round(marks.at(-1).start*1000),120060);
+    assert.equal(Math.round(marks.at(-1).start*1000),120130);
     await edge(130000,true); await edge(130040,false);
     assert.equal(down.at(-1).gap,undefined);
-    assert.equal(Math.round(marks.at(-1).start*1000),130180);
+    assert.equal(Math.round(marks.at(-1).start*1000),130150);
   } finally {tx.close();}
 });
 

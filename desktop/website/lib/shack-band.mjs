@@ -155,18 +155,25 @@ export class ShackBand {
     if (!s.live || !Number.isSafeInteger(first) || first<1 || !Array.isArray(edges) || !edges.length || edges.length>96 ||
         !Number.isSafeInteger(first+edges.length) || edges.some(e=>!e || typeof e.stream!=='string' || !/^[\w-]{1,50}$/.test(e.stream) ||
           !Number.isInteger(e.offset) || e.offset<0 || e.offset>130000 || !['down','up','hold','cancel'].includes(e.edge) ||
-          (e.gap!==undefined && (e.edge!=='down' || e.offset!==0 || !Number.isInteger(e.gap) || e.gap<0 || e.gap>6000))))
+          (e.gap!==undefined && (e.edge!=='down' || e.offset!==0 || !Number.isInteger(e.gap) || e.gap<0 || e.gap>6000)) ||
+          (e.duration!==undefined && (e.edge!=='down' || !Number.isInteger(e.duration) || e.duration<1 || e.duration>10000 ||
+            !Number.isInteger(e.wpm) || e.wpm<5 || e.wpm>80 || !Number.isSafeInteger(e.sent) || e.sent<0 || typeof e.measured!=='boolean'))))
       fail(400,'Invalid live key timing.');
     if (first>s.keySeq+1) fail(409,'Missing key transition.');
     const fresh=edges.slice(Math.max(0,s.keySeq-first+1));
     if (!fresh.length) return {ack:s.keySeq};
     // Overlapping requests can beat an earlier POST. Validate the entire new suffix before publishing it once.
     let held=s.held, last=s.lastKey;
-    for (const e of fresh) {
+    for (const [i,e] of fresh.entries()) {
       if (e.edge==='down') {
         if (held || last?.stream===e.stream && e.offset<last.offset) fail(409,'Unexpected key down.');
         if (e.gap!==undefined && (last?.edge!=='up' || e.previous!==last.stream || e.stream===last.stream))
           fail(409,'Unexpected stream continuation.');
+        if (e.duration!==undefined) {
+          const up=fresh[i+1];
+          if (up?.edge!=='up' || up.stream!==e.stream || up.offset!==e.offset+e.duration)
+            fail(400,'A timed mark must include its matching release.');
+        }
         held=e;
       } else {
         if (!held || held.stream!==e.stream || (e.edge==='up' ? e.offset<held.offset || e.offset-held.offset>10000 : e.offset!==held.offset))
@@ -178,8 +185,9 @@ export class ShackBand {
     if (now-s.window>=1000) {s.window=now; s.count=0;}
     if (s.count+fresh.length>180) fail(429,'Too many key transitions.');
     s.count+=fresh.length;
-    for (const {edge,stream,offset,previous,gap} of fresh) {
-      this.event(s.f,{type:'key',peer:s.id,call:s.call,edge,stream,offset,...(gap===undefined ? {} : {previous,gap})},now);
+    for (const {edge,stream,offset,previous,gap,duration,wpm,sent,measured} of fresh) {
+      const timing=duration===undefined ? {} : {duration,wpm,sent,measured};
+      this.event(s.f,{type:'key',peer:s.id,call:s.call,edge,stream,offset,...timing,...(gap===undefined ? {} : {previous,gap})},now);
       if (edge==='down') s.held={stream,offset};
       if (edge==='up') {
         const audio=[[Math.max(8,offset-s.held.offset),0]];

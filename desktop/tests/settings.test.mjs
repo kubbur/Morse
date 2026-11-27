@@ -100,7 +100,8 @@ test('Mac and browser settings, course reset and recovery controls in an offline
       if (listing) Object.assign(state.profiles[0],{callsign:'TEST1',leaderboard:true});
       await writeFile(bootstrap,'window.fixture='+JSON.stringify({mode,state,listing})+';\n'+setup);
       const base=mode==='browser' ? root : staged;
-      execFileSync(binary,[join(base,'website/public'),bootstrap,join(fixtures,scenario)],{timeout:60000,stdio:'pipe'});
+      const viewport=mode==='browser' && scenario==='shack-scenario.js' ? ['390'] : [];
+      execFileSync(binary,[join(base,'website/public'),bootstrap,join(fixtures,scenario),...viewport],{timeout:60000,stdio:'pipe'});
     });
   } finally {await rm(dir,{recursive:true,force:true});}
 });

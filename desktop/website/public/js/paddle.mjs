@@ -38,7 +38,7 @@ export class PaddleKeyer {
     this.memory[symbol] = false;
     this.extra = '';
     this.last = symbol; this.phase = 'mark'; this.due = at + this.unit * (symbol === 'dit' ? 1 : 3);
-    this.onEdge({ down: true, at });
+    this.onEdge({ down: true, at }, this.due - at);
   }
   advance(to) {
     if (!Number.isFinite(to) || to < this.clock) return;

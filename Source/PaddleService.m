@@ -140,7 +140,7 @@ static void emit(NSDictionary *message) {
     ElementEvent e;
     while ([_engine takeElement:&e]) {
         if (e.epoch!=epoch || epoch!=_engine.elementEpoch) continue;
-        emit(@{@"type":@"element",@"epoch":@(epoch),@"seq":@(++_sequence),@"kind":@(e.kind),@"frame":@(e.frame),@"rate":@(e.rate)});
+        emit(@{@"type":@"element",@"epoch":@(epoch),@"seq":@(++_sequence),@"kind":@(e.kind),@"frame":@(e.frame),@"rate":@(e.rate),@"frames":@(e.frames)});
     }
     if (!_typingEnabled) return;
     if (![self canArm] || ![self hasTypingAccess]) { [self disarm]; [self status]; return; }

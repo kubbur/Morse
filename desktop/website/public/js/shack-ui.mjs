@@ -85,6 +85,7 @@ export class ShackUI {
   }
   leave() {
     this.active=false; if(this.checkDialog.open) this.checkDialog.close(); this.sender.setKeyTarget(null); this.clearCapture(); this.band.close();
+    this.sender.placePaddles();
     this.receiver.stop(); this.receiver.audio.release(); clearTimeout(this.beaconTimer);
     this.monitor=false; this.challenge=null; this.signing=null; this.hunting=false; this.note='';
   }
@@ -96,6 +97,7 @@ export class ShackUI {
   }
   render() {
     if (this.owner && this.owner!==this.p.id) {this.leave();this.f=7025;this.tab='air';}
+    this.sender.placePaddles();
     this.owner=this.p.id; this.active=true;
     this.award();
     const screen=this.tab==='air'?air(this):this.tab==='bench'?bench(this):this.tab==='shop'?shop(this):logbook(this);
@@ -112,7 +114,7 @@ export class ShackUI {
         else {this.challenge=null; this.checkDialog.close();}
       }
     } else if (this.tab==='log' && this.signing) {
-      detail=`<section class="card check"><h2>Sign your return QSL</h2><p class="panel-copy">Key <strong>${esc(this.call)}</strong> with your practice input.</p>
+      detail=`<section class="card check"><h2>Sign your return QSL</h2><p class="panel-copy">Key <strong>${esc(this.call)}</strong> with your practice input.</p><div data-paddle-slot></div>
         <div class="actions">${button('Save signature','save-sign')}${button('Start over','clear-sign','','textbtn')}${button('Cancel','cancel-sign','','textbtn')}</div></section>`;
     }
     this.root.innerHTML=heading(this)+screen+detail+'<p class="shack-status" data-status role="status"></p>';
@@ -131,6 +133,8 @@ export class ShackUI {
       else if (this.tab==='air' && !this.hunting) mode=this.transmit ? 'air' : this.needsCheck ? 'locked' : '';
     }
     this.sender.setKeyTarget(this.sinks[mode] || null);
+    const host=(this.checkDialog.open ? this.checkDialog : this.root).querySelector('[data-paddle-slot]');
+    this.sender.placePaddles(host,!host || !!mode);
     if (this.tab!=='air') return;
     const q=s=>this.root.querySelector(s), face=n=>q('[data-face="'+n+'"]');
     if (!face('frequency')) return;
@@ -215,7 +219,7 @@ export class ShackUI {
         if (!this.edges.length) this.captureOrigin=event.at;
         this.edges.push({down:true,at:event.at-this.captureOrigin});
       } else {
-        this.band.edge(true,event.at);
+        this.band.edge(true,event.at,this.sender.settings.wpm,event.duration);
         const lcd=this.root.querySelector('[data-face="mode"]'); if(lcd)lcd.textContent='TX';
       }
       return;

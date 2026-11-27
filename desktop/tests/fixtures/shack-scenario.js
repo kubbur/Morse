@@ -57,6 +57,43 @@
   go('lab');check(q('#send-continue-mode').getClientRects().length && q('#send-pause-control').hidden===(lessonSettings.continueMode!=='timed') && learner().sending.settings.pauseSeconds===lessonSettings.pauseSeconds,'Lesson settings after closing the Shack popup');
   go('journey');click('.shack-xp');
   tab('bench');click('[data-act="equip"][data-id="0-0"]');tab('air');
+  if (!mac) {
+    const {BandRadio}=await import('./js/shack-radio.mjs');
+    const marks=[], original=BandRadio.prototype.edge;
+    BandRadio.prototype.edge=function(down,at,wpm,duration) {
+      if (down) marks.push({wpm,duration});
+      return original.call(this,down,at,wpm,duration);
+    };
+    const setSource=value=>{choice.value=value;choice.dispatchEvent(new Event('change',{bubbles:true}));};
+    const closeInputs=async()=>{
+      click('[data-close="shack-input-dialog"]');
+      await wait(()=>q('#view-lab #send-source')===choice,'Input dialog did not close');
+    };
+    click('[data-act="settings"]');setSource('keyboard');
+    if (!q('#show-paddle-buttons').checked) q('#show-paddle-buttons').click();
+    await closeInputs();
+    const dit=q('.instrument #send-dit'),dah=q('.instrument #send-dah');
+    for (const button of [dit,dah]) {
+      const rect=button?.getBoundingClientRect();
+      check(rect && rect.width>=44 && rect.height>=44 && rect.left>=0 && rect.right<=390,'Touch paddles do not fit the phone');
+      button.setPointerCapture=()=>{}; // The offscreen host has no physical pointer.
+    }
+    const touch=(button,type,id)=>button.dispatchEvent(new PointerEvent(type,{pointerType:'touch',button:0,pointerId:id,bubbles:true,cancelable:true}));
+    touch(dit,'pointerdown',7);touch(dah,'pointerdown',8);
+    await wait(()=>marks.length>=3,'Two held touch paddles did not alternate');
+    touch(dit,'pointercancel',7);touch(dah,'pointerup',8);
+    const unit=1200/18;
+    check(marks.slice(0,3).every((m,i)=>m.wpm===18 && Math.abs(m.duration-unit*(i===1?3:1))<.01),'Wrong touch paddle duration or speed');
+    const count=marks.length;await new Promise(resolve=>setTimeout(resolve,280));
+    check(marks.length===count && q('[data-face="mode"]').textContent==='RX','Cancelled touch kept sending');
+    touch(dah,'pointerdown',9);touch(dah,'pointerup',9);
+    check(marks.length===count+1 && Math.abs(marks.at(-1).duration-3*unit)<.01,'Touch dash after cancellation');
+    click('[data-act="settings"]');q('#show-paddle-buttons').click();await closeInputs();
+    check(!dit.getClientRects().length && !dah.getClientRects().length,'Unchecked paddles are still visible');
+    go('send');check(q('#send-key-controls #send-dit')===dit,'Send lost its original touch controls');
+    go('shack');click('[data-act="settings"]');setSource('straight');await closeInputs();
+    BandRadio.prototype.edge=original;
+  }
   check(!/Hold to key|Call CQ/.test(q('.transmit').textContent),'Synthetic key controls');
   if(mac){
     await wait(()=>testPaddleMuted()===false,'Paddle remained muted in the Shack');

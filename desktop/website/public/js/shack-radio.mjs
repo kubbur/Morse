@@ -32,16 +32,15 @@ export class BandRadio {
       const opened=await this.exchange('open',{...station,live:true,probes:true});
       if (!opened.token) throw Error('Unavailable');
       if (epoch!==this.epoch) { void this.exchange('leave',{token:opened.token,f:station.f}).catch(()=>{}); return; }
-      const room=this.room={f:station.f,token:opened.token,cursor:opened.cursor,seq:0,id:opened.id,live:opened.live===true};
+      const room=this.room={f:station.f,token:opened.token,cursor:opened.cursor,seq:0,id:opened.id,live:opened.live===true,joined:performance.now()};
       if (room.live && opened.probes===true) {
         room.paths=new Map();
-        room.joined=performance.now();
         room.stations=0;
       }
       if (Number.isFinite(opened.serverTime)) room.serverOffset=performance.now()-opened.serverTime;
       if (room.live) this.transmitter=new LiveKeySender(
         packet=>this.exchange('edges',{...packet,token:room.token,f:room.f,replyTo:this.heard}),
-        ()=>{if (this.room===room) this.offline(station);});
+        ()=>{if (this.room===room) this.offline(station);}, ()=>performance.now()-room.joined);
       this.activity=opened.activity; this.state=room.live?'connecting':'live'; this.changed();
       if (room.live) void this.poll(epoch,station);
       else this.timer=setTimeout(()=>this.poll(epoch,station),250);
@@ -106,8 +105,8 @@ export class BandRadio {
           path.observe(arrived/1000,event.sent/1000);
         } else if (stale && (event.type==='key' || event.type==='signal')) {
           this.received({...event,type:'key',edge:'cancel'});
-        } else if (event.type==='key' && event.edge==='down' && room.paths?.has(event.peer)) {
-          this.received({...event,receiveBuffer:room.paths.get(event.peer).buffer(arrived/1000)});
+        } else if (event.type==='key' && event.edge==='down' && Number.isSafeInteger(event.sent) && room.paths?.has(event.peer)) {
+          this.received({...event,pathAge:room.paths.get(event.peer).age(arrived/1000,event.sent/1000)});
         } else this.received(event);
       }
       this.updateProbes(room,data.activity[room.f] || 0);
@@ -119,9 +118,9 @@ export class BandRadio {
       else this.timer=setTimeout(()=>this.poll(epoch,station), (data.activity[room.f] || 0)>1 ? 300 : 850);
     } catch { if (epoch===this.epoch) this.offline(station); }
   }
-  edge(down,at) {
+  edge(down,at,wpm,duration) {
     if (!this.room) return;
-    if (this.transmitter) {this.transmitter.edge(down,at); return;}
+    if (this.transmitter) {this.transmitter.edge(down,at,wpm,duration); return;}
     if (down) this.legacyDown=at;
     else {
       if (this.legacyDown!=null) this.mark(this.legacyDown,at);

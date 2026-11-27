@@ -37,7 +37,7 @@ export function air(ui) {
     <div class="scale"><input type="range" data-dial aria-label="Tune frequency in kilohertz" min="7020" max="7050" step="1" value="${ui.f}">
     <div class="scale-labels">${[7020,7025,7030,7035,7040,7045,7050].map(f=>`<span>${frequency(f)}</span>`).join('')}</div></div>
     <div class="transmit">${button('Listen','monitor','','btn')}${button('Input settings','settings','aria-haspopup="dialog"','textbtn')}${button('On-air check','open-check','aria-haspopup="dialog" hidden','textbtn')}</div>
-    <p class="radio-note" data-face="note" role="status"></p></section>
+    <div data-paddle-slot></div><p class="radio-note" data-face="note" role="status"></p></section>
     <aside class="card band"><div class="head"><h2>Band activity</h2><small class="tiny">Operators</small></div><div data-band>${activity(ui)}</div></aside></div>
     <div class="secondary-grid"><section class="card beacon-card"><span class="label">Beacon hunt</span><h2>Find Reykjavík</h2>
     <p class="panel-copy">Tune between 7.040–7.049 MHz. Copy RVK’s three-digit code to earn its QSL.</p>${button('Open hunt','hunt','','textbtn')}</section>
@@ -102,7 +102,7 @@ export function checkPanel(ui) {
     <p class="panel-copy">Finish the remaining letters and numbers in practice, or demonstrate them here to transmit on this frequency.</p>
     <div class="coverage">${['copied','sent'].map(k=>`<label>${k==='copied'?'Copied':'Sent'} · ${done[k].length} / ${alphabet.length}<progress max="36" value="${done[k].length}"></progress></label>`).join('')}</div>
     ${next ? next.dir==='copied' ? `<form data-check><label>What did you hear? <input name="copy" maxlength="1" autocomplete="off"></label>${button('Hear again','prompt','','mini')}<button class="btn" type="submit">Check</button></form>` :
-      `<p>Send <strong class="challenge-char">${next.ch}</strong> with your practice key.</p>` : ''}
+      `<p>Send <strong class="challenge-char">${next.ch}</strong> with your practice key.</p><div data-paddle-slot></div>` : ''}
     <div class="actions">${next ? button('Pause check','cancel-check','','textbtn') : missing.length ? button('Take on-air check','check','','quiet') : '<strong>Qualified for all station tiers</strong>'}
     ${button('Practise listening','listen-tab','','textbtn')}${button('Practise sending','send-tab','','textbtn')}</div></section>`;
 }

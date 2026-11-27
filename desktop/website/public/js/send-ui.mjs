@@ -78,6 +78,8 @@ export class SendingUI {
     this.edges = []; this.source = loadInput(); $('send-source').value = this.source; this.contacts = { dit: false, dah: false };
     this.keyboardPaddles = loadKeyboardPaddles();
     this.heldCodes = new Map();
+    this.pointerHolds = new Map();
+    this.screenPaddles = $('send-paddles');
     this.contactHolds = { dit: new Set(), dah: new Set() };
     this.wake = new ScreenWake({ onState: state => { this.wakeState = state; this.renderInput(); } });
     this.native = globalThis.morseMac;
@@ -203,15 +205,28 @@ export class SendingUI {
   }
 
   bindHold(button, callback) {
-    const held = new Set();
     button.addEventListener('pointerdown', e => {
-      if (e.button !== 0 || held.size) return;
-      e.preventDefault(); button.focus({ preventScroll: true }); button.setPointerCapture(e.pointerId); held.add(e.pointerId); callback(true, e.timeStamp);
+      if (e.button !== 0 || this.pointerHolds.has(button)) return;
+      e.preventDefault(); button.focus({ preventScroll: true }); button.setPointerCapture(e.pointerId);
+      this.pointerHolds.set(button,e.pointerId); callback(true, e.timeStamp);
     });
-    const release = e => { if (held.delete(e.pointerId)) callback(false, e.timeStamp); };
-    button.addEventListener('pointerup', release);
-    for (const name of ['pointercancel', 'lostpointercapture']) button.addEventListener(name, e => { if (held.delete(e.pointerId)) this.abort('Touch input paused. Try the answer again.'); });
+    button.addEventListener('pointerup', e => {
+      if (this.pointerHolds.get(button) !== e.pointerId) return;
+      this.pointerHolds.delete(button); callback(false, e.timeStamp);
+    });
+    for (const name of ['pointercancel', 'lostpointercapture']) button.addEventListener(name, e => {
+      if (this.pointerHolds.get(button) === e.pointerId) this.abort('Touch input paused. Try the answer again.');
+    });
     button.addEventListener('contextmenu', e => e.preventDefault());
+  }
+
+  placePaddles(host = null, enabled = true) {
+    const parent = host || $('send-key-controls');
+    if (this.screenPaddles.parentElement !== parent) {
+      if ([...this.pointerHolds.keys()].some(button => this.screenPaddles.contains(button))) this.abort();
+      parent.append(this.screenPaddles);
+    }
+    for (const button of this.screenPaddles.children) button.disabled = !enabled;
   }
 
   get stage() { return sendingStage(this.getProfile().sending.level); }
@@ -419,6 +434,7 @@ export class SendingUI {
     this.keyer?.reset(); this.keyer = null;
     this.down = false;
     if (!preservePaddles) {
+      this.pointerHolds.clear();
       if (this.vband?.cancel() && this.native && this.source === 'vband') void this.native.paddle('vband-release');
       this.contactHolds.dit.clear(); this.contactHolds.dah.clear();
       this.heldCodes.clear();
@@ -498,7 +514,8 @@ export class SendingUI {
     return true;
   }
 
-  edge({ down, at }, local = false) {
+  edge(event, local = false, duration) {
+    const {down, at} = event;
     if (!this.ready()) return;
     if (this.keyTarget) {
       if (down === this.down) return;
@@ -506,7 +523,7 @@ export class SendingUI {
       if (local) this.tone.set(down, this.settings);
       clearTimeout(this.holdTimer);
       if (down) this.holdTimer = setTimeout(() => this.abort(), 10000);
-      this.keyTarget.edge({ down, at });
+      this.keyTarget.edge(duration === undefined ? event : {...event, duration});
       return;
     }
     if (this.result) { this.edges = []; this.originAt = null; this.result = null; $('send-capture').removeAttribute('data-result'); }
@@ -590,7 +607,7 @@ export class SendingUI {
 
   makeKeyer(local) {
     return new PaddleKeyer({ wpm: this.settings.wpm, mode: this.settings.keyer,
-      onEdge: edge => this.edge(edge, local),
+      onEdge: (edge, duration) => this.edge(edge, local, duration),
       onReplay: local || this.keyTarget ? null : edges => this.replacePaddleCapture(edges),
     });
   }
