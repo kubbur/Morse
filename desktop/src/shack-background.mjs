@@ -14,8 +14,9 @@ export class ShackBackground {
   configure(state) {
     if (state && (typeof state.listening!=='boolean' || !Number.isSafeInteger(state.generation) ||
         state.keys!==null && (!state.listening || !validShackKeys(state.keys)))) return;
+    const wasListening=!!this.state?.listening;
     this.state=state;
-    this.throttle(!state?.listening);
+    if (wasListening!==!!state?.listening) this.throttle(!state?.listening);
     this.refresh();
   }
   refresh() {

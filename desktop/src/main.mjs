@@ -20,7 +20,7 @@ const shackBackground=new ShackBackground({
   command:(op,value)=>paddle?.command(op,value) ?? Promise.resolve({error:'Mac paddle input is unavailable.'}),
   notify:row=>publish('shack-contacts',row),
   throttle:allowed=>{
-    const wc=window?.webContents;
+    const wc=liveContents();
     if (wc && !wc.isDestroyed() && wc.getBackgroundThrottling()!==allowed) wc.setBackgroundThrottling(allowed);
   },
 });
@@ -51,8 +51,11 @@ if (profileDirectory) {
   app.setPath('userData', directory);
   app.setPath('sessionData', directory);
 }
+function liveContents() {
+  return window && !window.isDestroyed() ? window.webContents : null;
+}
 function publish(channel, data) {
-  const wc=window?.webContents;
+  const wc=liveContents();
   if (wc && !wc.isDestroyed() && appDocument(wc.getURL())) wc.send(channel,data);
 }
 function trusted(event) {
@@ -71,7 +74,7 @@ function registerIPC() {
     if (!trusted(e) || ['shack-keys','shack-key-access'].includes(op) || (op==='arm' || (op==='vband' && v?.mask)) && !window.isFocused()) return {error:'Morse must be focused.'};
     return paddle?.command(op,v) || {error:'Paddle unavailable.'};
   });
-  ipcMain.on('shack-radio',(e,state)=>{ if (trusted(e) && !stopping) shackBackground.configure(state); });
+  ipcMain.on('shack-radio',(e,state)=>{ if (!stopping && trusted(e)) shackBackground.configure(state); });
   ipcMain.handle('shack-key-access',e=>trusted(e) && window.isFocused() && paddle
     ? paddle.command('shack-key-access') : {error:'Open Input settings in the Morse window.'});
   ipcMain.handle('learner-exchange',(e,action,payload)=>trusted(e) ? exchange(action,payload).catch(()=>({status:503,error:'Saved locally. Waiting to reconnect.'})) : {status:403});
@@ -93,7 +96,7 @@ function registerIPC() {
   });
 }
 async function saveBeforeUpdate() {
-  const contents = window?.webContents;
+  const contents = liveContents();
   if (!contents || contents.isDestroyed()) return true;
   if (!appDocument(contents.getURL()) || contents.isLoadingMainFrame() || contents.isCrashed()) return false;
   let timeout;
@@ -142,7 +145,7 @@ function createWindow() {
     shackBackground.focused=false; shackBackground.refresh();
   });
   window.on('focus', () => { shackBackground.focused=true; shackBackground.refresh(); });
-  window.on('closed', () => { interruptSession(); window = null; });
+  window.on('closed', () => { window = null; interruptSession(); });
   contents.on('render-process-gone', () => {
     interruptSession();
     if (!closing) dialog.showMessageBox({ type: 'error', title: 'Morse', message: 'The practice window stopped.', detail: 'Your saved progress is kept. Reopen the window to continue.', buttons: ['Reopen', 'Quit'] }).then(({ response }) => { if (response === 0) { window?.reload(); showWindow(); } else app.quit(); });

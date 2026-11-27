@@ -113,6 +113,7 @@ export class ShackUI {
     const lcd=this.root.querySelector('[data-face="mode"]'); if(lcd?.textContent==='TX') lcd.textContent='RX';
   }
   leave() {
+    if (!this.active) return;
     this.active=false; this.sender.setShackRadio(false); if(this.checkDialog.open) this.checkDialog.close(); this.sender.setKeyTarget(null); this.clearCapture(); this.band.close();
     clearTimeout(this.qslTimer); this.qslVisit++;
     this.receiver.stop(); this.receiver.audio.setListening(false); void this.receiver.audio.release(); clearTimeout(this.beaconTimer);

@@ -70,6 +70,9 @@ test('background paddle keys arm only on air and release across focus, lock, hel
     notify:e=>notices.push(e),throttle:x=>throttling.push(x)});
   const keys={source:'keyboard',dit:'z',dah:'x'};
   radio.available=true;
+  radio.configure({listening:false,keys:null,generation:0});
+  radio.configure(null);
+  assert.deepEqual(throttling,[]);
   radio.configure({listening:true,keys:null,generation:1});
   radio.focused=false; radio.refresh();
   assert.deepEqual(commands,[]);

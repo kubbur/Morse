@@ -49,7 +49,7 @@
   "public/js/shack-live.mjs": "fe2e5e3f304a504922f0c5fef6a27957581caba2e87d56c1663912a45c51d752",
   "public/js/shack-model.mjs": "0db92d86ad0cc71e951ba36f84509a7992e1710acd86de4acac07a99c6e45a76",
   "public/js/shack-radio.mjs": "10a82b6ed3cf0772686daa89631789d75272a7ddc6d794bd76dcd4f7abbb826d",
-  "public/js/shack-ui.mjs": "659e09f5efcf29c550c19a4d284dbca6ee90cb8e0ea9f4cc208380d830b4852b",
+  "public/js/shack-ui.mjs": "6e78c99506265bad4393896c2e321de67d7b43edde7975665312a4a38604e7c6",
   "public/js/shack-views.mjs": "194141abacad74698371ef635e15bbdb799c6f416af06dc29578b2ae9922a9e3",
   "public/js/shared-sound.mjs": "fc503a450cb8e2ed01655b79cefbddab31de069a863f2f31a43bfe00d4e9db3f",
   "public/js/station.mjs": "29217a1d9aec2caa1f3011e0a1ff01b397d1fc906b7138f0321dcb95d9fdaab9",
