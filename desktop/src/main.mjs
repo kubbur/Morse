@@ -9,7 +9,7 @@ import { PaddleService } from './paddle-service.mjs';
 import { LearnerDB } from './learner-db.mjs';
 import { websiteClient } from './website-client.mjs';
 import { checkUpdate } from './updates.mjs';
-import { macInstaller, UpdateManager } from './update-manager.mjs';
+import { channelPreference, macInstaller, UpdateManager } from './update-manager.mjs';
 
 app.setName('Morse');
 process.umask(0o077);
@@ -56,6 +56,9 @@ function registerIPC() {
     if (action === 'state') return updates.state();
     if (!window.isFocused() || stopping) return updates.state();
     if (action === 'check') void updates.check();
+    if (action === 'channel' && await updates.setChannel(value) && window?.isFocused() && !stopping && updates.state().installable) {
+      await updates.install(saveBeforeUpdate);
+    }
     if (action === 'automatic') updates.setAutomatic(value);
     if (action === 'install') {
       if (updates.state().installable) await updates.install(saveBeforeUpdate);
@@ -181,9 +184,12 @@ else {
     const version = app.getVersion();
     const notes = await readFile(new URL('../assets/release-notes.json', import.meta.url), 'utf8').then(JSON.parse).catch(() => ({}));
     const updateEnabled = app.isPackaged && process.platform === 'darwin' && !isolated && !staged;
+    const preference = channelPreference(join(app.getPath('appData'), 'Morse'));
+    const defaultChannel = version.includes('-dev.') ? 'dev' : 'stable';
     updates = new UpdateManager({ version, installedNotes: notes?.[version] || '', enabled: updateEnabled,
       automatic: db.automaticUpdates, storeAutomatic: value => { db.automaticUpdates = value; },
-      lookup: () => checkUpdate(version, process.arch), installer: updateEnabled ? await macInstaller(process.resourcesPath).catch(() => null) : null,
+      channel: updateEnabled ? preference.read(defaultChannel) : defaultChannel, storeChannel: value => preference.write(value),
+      lookup: channel => checkUpdate(version, process.arch, fetch, channel), installer: updateEnabled ? await macInstaller(process.resourcesPath).catch(() => null) : null,
       changed: state => publish('update-state', state) });
     exchange=websiteClient(db.db,safeStorage,syncMode);
     const browserSession=session.fromPartition('persist:morse');

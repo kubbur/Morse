@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 import plistlib
 import posixpath
 import stat
@@ -125,8 +126,10 @@ with zipfile.ZipFile(archive_path) as archive:
         assert prefix + 'Resources/LICENSES.chromium.html' in names
         result = {'kind': 'app', 'architecture': architecture, 'minimumMacOS': info['LSMinimumSystemVersion'], 'files': len(names), 'frameworkSymlinks': len(symlinks), 'asarSha256': hashlib.sha256(archive.read(prefix + 'Resources/app.asar')).hexdigest(), 'asarHeader': info['ElectronAsarIntegrity']['Resources/app.asar']}
         parts = version.split('.')
-        if len(parts) == 3 and all(p.isdecimal() for p in parts) and tuple(map(int, parts)) >= (1, 1, 1):
-            key_path = Path(__file__).resolve().parents[1] / 'assets/sparkle-public-key.txt'
+        stable = len(parts) == 3 and all(p.isdecimal() for p in parts) and tuple(map(int, parts)) >= (1, 1, 1)
+        dev_key = os.environ.get('MORSE_UPDATE_PUBLIC_KEY_FILE') if '-dev.' in version else None
+        if stable or dev_key:
+            key_path = Path(dev_key) if dev_key else Path(__file__).resolve().parents[1] / 'assets/sparkle-public-key.txt'
             public = key_path.read_text().strip()
             assert info['SUPublicEDKey'] == public and len(base64.b64decode(public, validate=True)) == 32
             feed = 'https://github.com/kubbur/Morse/releases/latest/download/appcast-mac-' + architecture + '.xml'
